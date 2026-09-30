@@ -1,0 +1,1 @@
+ALTER TABLE "receipts" ADD COLUMN "content_type" text;
