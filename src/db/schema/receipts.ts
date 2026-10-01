@@ -25,7 +25,9 @@ export const receipts = pgTable('receipts', {
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
   merchantName: text('merchant_name'),
+  merchantAddress: text('merchant_address'), // the specific chain branch location/number
   receiptDate: date('receipt_date'),
+  paymentMethod: text('payment_method'),
   totalAmount: numeric('total_amount', { precision: 12, scale: 2 }),
   taxAmount: numeric('tax_amount', { precision: 12, scale: 2 }),
   currency: char('currency', { length: 3 }),
@@ -52,6 +54,7 @@ export const receiptItems = pgTable('receipt_items', {
     onDelete: 'set null',
   }),
   rawName: text('raw_name').notNull(),
+  rawSku: text('raw_sku'),
   quantity: numeric('quantity', { precision: 12, scale: 3 }),
   unitPrice: numeric('unit_price', { precision: 12, scale: 4 }),
   totalPrice: numeric('total_price', { precision: 12, scale: 2 }),
@@ -64,6 +67,9 @@ export const receiptItems = pgTable('receipt_items', {
     t.shopId,
     t.inventoryItemId,
   ),
+  shopSkuIdx: index('receipt_items_shop_id_raw_sku_idx')
+    .on(t.shopId, t.rawSku)
+    .where(sql`${t.rawSku} IS NOT NULL`),
 }));
 
 export type Receipt = typeof receipts.$inferSelect;
