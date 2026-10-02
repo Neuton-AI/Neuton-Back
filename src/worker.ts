@@ -1,7 +1,8 @@
+import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import pino from 'pino';
 import { and, eq, ilike } from 'drizzle-orm';
-import { db, sql as sqlClient } from './db/client.js';
+import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
   orderItems,
@@ -22,20 +23,47 @@ import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { applyWeightedAverage, calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
-import { env, isProduction } from './env.js';
+import { env, isDevelopment } from './env.js';
 
 const logger = pino({
-  level: isProduction ? 'info' : 'debug',
-  ...(isProduction
-    ? {}
-    : { transport: { target: 'pino-pretty', options: { colorize: true } } }),
+  // A test run should assert on output, not emit a wall of JSON between cases.
+  level: env.NODE_ENV === 'test' ? 'silent' : env.NODE_ENV === 'production' ? 'info' : 'debug',
+  // pino-pretty ships logs through a worker thread, so it is limited to
+  // development. Anywhere else (tests, CI) plain JSON is used, which keeps the
+  // process able to exit.
+  ...(isDevelopment ? { transport: { target: 'pino-pretty', options: { colorize: true } } } : {}),
 });
+
+/**
+ * Collaborators each job handler reaches for. Injected so the handlers can be
+ * exercised without a live Postgres, an R2 bucket or a Gemini key; production
+ * always passes `defaultWorkerDeps`.
+ */
+export interface WorkerDeps {
+  db: Database;
+  getObjectBytes: (key: string) => Promise<Uint8Array>;
+  extractReceipt: typeof extractReceipt;
+  extractRecipe: typeof extractRecipe;
+  extractOrder: typeof extractOrder;
+}
+
+export const defaultWorkerDeps: WorkerDeps = {
+  db,
+  getObjectBytes,
+  extractReceipt,
+  extractRecipe,
+  extractOrder,
+};
+
+const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const;
+type InventoryUnit = (typeof INVENTORY_UNITS)[number];
 
 function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
 }
 
-async function findOrCreateInventoryItem(
+export async function findOrCreateInventoryItem(
+  deps: WorkerDeps,
   shopId: string,
   rawName: string,
   unit: string | null,
@@ -43,29 +71,27 @@ async function findOrCreateInventoryItem(
   const name = rawName.trim();
   if (name.length === 0) return null;
 
-  const exact = await db
+  const exact = await deps.db
     .select({ id: inventoryItems.id })
     .from(inventoryItems)
     .where(and(eq(inventoryItems.shopId, shopId), eq(inventoryItems.name, name)))
     .limit(1);
   if (exact[0]) return exact[0].id;
 
-  const fuzzy = await db
+  const fuzzy = await deps.db
     .select({ id: inventoryItems.id })
     .from(inventoryItems)
     .where(and(eq(inventoryItems.shopId, shopId), ilike(inventoryItems.name, `%${name}%`)))
     .limit(1);
   if (fuzzy[0]) return fuzzy[0].id;
 
-  const created = await db
+  const created = await deps.db
     .insert(inventoryItems)
     .values({
       shopId,
       name,
-      unit: (['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const).includes(
-        (unit ?? '') as 'kg',
-      )
-        ? ((unit ?? 'unit') as 'kg' | 'g' | 'l' | 'ml' | 'unit' | 'pack')
+      unit: (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
+        ? (unit as InventoryUnit)
         : 'unit',
       currentQuantity: '0.000',
     })
@@ -78,12 +104,13 @@ async function findOrCreateInventoryItem(
  * Applies a purchased line to inventory: bumps stock and rolls the weighted
  * moving average unit cost forward.
  */
-async function applyPurchase(
+export async function applyPurchase(
+  deps: WorkerDeps,
   inventoryItemId: string,
   purchasedQuantity: number,
   unitPrice: number,
 ): Promise<void> {
-  const rows = await db
+  const rows = await deps.db
     .select({
       currentQuantity: inventoryItems.currentQuantity,
       averageUnitCost: inventoryItems.averageUnitCost,
@@ -100,7 +127,7 @@ async function applyPurchase(
     { quantity: purchasedQuantity, unitPrice },
   );
 
-  await db
+  await deps.db
     .update(inventoryItems)
     .set({
       currentQuantity: qty(next.currentQuantity),
@@ -111,9 +138,13 @@ async function applyPurchase(
     .where(eq(inventoryItems.id, inventoryItemId));
 }
 
-async function processReceipt(data: MediaJobData, job: Job<MediaJobData>) {
-  const bytes = await getObjectBytes(data.storagePath);
-  const extraction = await extractReceipt({
+export async function processReceipt(
+  deps: WorkerDeps,
+  data: MediaJobData,
+  job: Job<MediaJobData>,
+) {
+  const bytes = await deps.getObjectBytes(data.storagePath);
+  const extraction = await deps.extractReceipt({
     mimeType: data.contentType,
     data: toBase64(bytes),
   });
@@ -124,7 +155,7 @@ async function processReceipt(data: MediaJobData, job: Job<MediaJobData>) {
 
   const jobLogger = logger.child({ jobId: job.id, shopId: data.shopId });
 
-  await db.transaction(async (tx) => {
+  await deps.db.transaction(async (tx) => {
     const receiptRows = await tx
       .select({ id: receipts.id })
       .from(receipts)
@@ -143,13 +174,14 @@ async function processReceipt(data: MediaJobData, job: Job<MediaJobData>) {
     const itemRows = [];
     for (const item of extraction.items) {
       const inventoryItemId = await findOrCreateInventoryItem(
+        deps,
         data.shopId,
         item.rawName,
         item.unit,
       );
 
       if (inventoryItemId && item.quantity && item.unitPrice) {
-        await applyPurchase(inventoryItemId, item.quantity, item.unitPrice);
+        await applyPurchase(deps, inventoryItemId, item.quantity, item.unitPrice);
       }
 
       const inserted = await tx
@@ -197,9 +229,13 @@ async function processReceipt(data: MediaJobData, job: Job<MediaJobData>) {
   );
 }
 
-async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
-  const bytes = await getObjectBytes(data.storagePath);
-  const extraction = await extractRecipe({
+export async function processRecipe(
+  deps: WorkerDeps,
+  data: MediaJobData,
+  job: Job<MediaJobData>,
+) {
+  const bytes = await deps.getObjectBytes(data.storagePath);
+  const extraction = await deps.extractRecipe({
     mimeType: data.contentType,
     data: toBase64(bytes),
   });
@@ -219,7 +255,7 @@ async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
   } = extraction;
   const safeName = name;
 
-  const shopRows = await db
+  const shopRows = await deps.db
     .select({
       hourlyLaborCost: shops.hourlyLaborCost,
       targetProfitMargin: shops.targetProfitMargin,
@@ -232,6 +268,7 @@ async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
   const linkedIngredientIds = new Map<string, string>();
   for (const ingredient of extraction.ingredients) {
     const inventoryItemId = await findOrCreateInventoryItem(
+      deps,
       data.shopId,
       ingredient.rawName,
       ingredient.unit,
@@ -239,7 +276,7 @@ async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
     if (inventoryItemId) linkedIngredientIds.set(ingredient.rawName, inventoryItemId);
   }
 
-  const costed = await db.transaction(async (tx) => {
+  const costed = await deps.db.transaction(async (tx) => {
     const inserted = await tx
       .insert(recipes)
       .values({
@@ -247,9 +284,7 @@ async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
         name: safeName,
         description,
         prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
-        yieldQuantity: qty(
-          yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1,
-        ),
+        yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
         yieldUnit: yieldUnit ?? 'portion',
         allergens,
         instructions,
@@ -291,9 +326,13 @@ async function processRecipe(data: MediaJobData, job: Job<MediaJobData>) {
   );
 }
 
-async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) {
-  const bytes = await getObjectBytes(data.storagePath);
-  const extraction = await extractOrder({
+export async function processOrderDocument(
+  deps: WorkerDeps,
+  data: MediaJobData,
+  job: Job<MediaJobData>,
+) {
+  const bytes = await deps.getObjectBytes(data.storagePath);
+  const extraction = await deps.extractOrder({
     mimeType: data.contentType,
     data: toBase64(bytes),
   });
@@ -307,7 +346,7 @@ async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) 
     return;
   }
 
-  const orderRows = await db
+  const orderRows = await deps.db
     .select()
     .from(orders)
     .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId)))
@@ -318,13 +357,13 @@ async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) 
     return;
   }
 
-  const recipeRows = await db
+  const recipeRows = await deps.db
     .select()
     .from(recipes)
     .where(and(eq(recipes.shopId, data.shopId), eq(recipes.isActive, true)));
   const byName = new Map(recipeRows.map((recipe) => [recipe.name.toLowerCase(), recipe]));
 
-  const shopRows = await db
+  const shopRows = await deps.db
     .select({
       hourlyLaborCost: shops.hourlyLaborCost,
       targetProfitMargin: shops.targetProfitMargin,
@@ -348,7 +387,7 @@ async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) 
     return;
   }
 
-  const ingredientRows = await db
+  const ingredientRows = await deps.db
     .select({
       recipeId: recipeIngredients.recipeId,
       quantity: recipeIngredients.quantity,
@@ -385,7 +424,7 @@ async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) 
     };
   });
 
-  await db.transaction(async (tx) => {
+  await deps.db.transaction(async (tx) => {
     await tx.delete(orderItems).where(eq(orderItems.orderId, order.id));
     await tx.insert(orderItems).values(
       priced.map((row) => ({
@@ -425,7 +464,8 @@ async function processOrderDocument(data: MediaJobData, job: Job<MediaJobData>) 
  * Only fires once BullMQ has exhausted attempts, so transient failures stay
  * invisible to the shop.
  */
-async function recordTerminalFailure(
+export async function recordTerminalFailure(
+  deps: WorkerDeps,
   data: MediaJobData,
   error: unknown,
 ): Promise<void> {
@@ -433,7 +473,7 @@ async function recordTerminalFailure(
 
   const message = publicFailureMessage(error);
   try {
-    await db
+    await deps.db
       .update(receipts)
       .set({
         status: 'failed',
@@ -449,67 +489,93 @@ async function recordTerminalFailure(
   }
 }
 
-const worker = new Worker<MediaJobData>(
-  QUEUE_NAME,
-  async (job) => {
-    const data = job.data;
-    logger.info({ jobId: job.id, kind: data.kind, shopId: data.shopId }, 'job started');
+/**
+ * Routes a job to its handler and translates failures into BullMQ semantics.
+ * Permanent errors stop the retry schedule and surface a shop-safe message.
+ */
+export async function runJob(
+  data: MediaJobData,
+  job: Job<MediaJobData>,
+  deps: WorkerDeps = defaultWorkerDeps,
+): Promise<void> {
+  logger.info({ jobId: job.id, kind: data.kind, shopId: data.shopId }, 'job started');
 
-    try {
-      switch (data.kind) {
-        case 'receipt':
-          await processReceipt(data, job);
-          break;
-        case 'recipe':
-        case 'product':
-          await processRecipe(data, job);
-          break;
-        case 'order':
-          await processOrderDocument(data, job);
-          break;
-        default:
-          throw new Error(`Unsupported job kind: ${String(data.kind)}`);
-      }
-    } catch (error) {
-      // Billing/auth/malformed-payload errors will not resolve on retry, so
-      // drop them straight to failed instead of spending the backoff schedule.
-      if (isPermanentError(error)) {
-        await recordTerminalFailure(data, error);
-        throw new UnrecoverableError(publicFailureMessage(error));
-      }
-      throw error;
+  try {
+    switch (data.kind) {
+      case 'receipt':
+        await processReceipt(deps, data, job);
+        break;
+      case 'recipe':
+      case 'product':
+        await processRecipe(deps, data, job);
+        break;
+      case 'order':
+        await processOrderDocument(deps, data, job);
+        break;
+      default:
+        throw new Error(`Unsupported job kind: ${String(data.kind)}`);
     }
+  } catch (error) {
+    // Billing/auth/malformed-payload errors will not resolve on retry, so
+    // drop them straight to failed instead of spending the backoff schedule.
+    if (isPermanentError(error)) {
+      await recordTerminalFailure(deps, data, error);
+      throw new UnrecoverableError(publicFailureMessage(error));
+    }
+    throw error;
+  }
 
-    logger.info({ jobId: job.id, kind: data.kind }, 'job completed');
-  },
-  {
+  logger.info({ jobId: job.id, kind: data.kind }, 'job completed');
+}
+
+/**
+ * Importing this module must not boot a worker: the test suite imports it to
+ * exercise the handlers above, and a stray worker would hold a Redis
+ * connection and the event loop open.
+ */
+function isEntrypoint(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href;
+  } catch {
+    return false;
+  }
+}
+
+function startWorker(): void {
+  const worker = new Worker<MediaJobData>(QUEUE_NAME, (job) => runJob(job.data, job), {
     connection: createRedisConnection(),
     concurrency: env.RECEIPT_WORKER_CONCURRENCY,
-  },
-);
+  });
 
-worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
-worker.on('failed', (job, error) => {
-  logger.error({ jobId: job?.id, err: error }, 'job failed');
-  // Covers transient errors that ran out of attempts, so the receipt row does
-  // not stay on "processing" with no explanation.
-  if (job && error instanceof UnrecoverableError) return;
-  if (!job) return;
-  void recordTerminalFailure(job.data, error);
-});
-worker.on('error', (error) => logger.error({ err: error }, 'worker error'));
+  worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
+  worker.on('failed', (job, error) => {
+    logger.error({ jobId: job?.id, err: error }, 'job failed');
+    // Covers transient errors that ran out of attempts, so the receipt row does
+    // not stay on "processing" with no explanation.
+    if (job && error instanceof UnrecoverableError) return;
+    if (!job) return;
+    void recordTerminalFailure(defaultWorkerDeps, job.data, error);
+  });
+  worker.on('error', (error) => logger.error({ err: error }, 'worker error'));
 
-logger.info(
-  { queue: QUEUE_NAME, concurrency: env.RECEIPT_WORKER_CONCURRENCY },
-  'neuton vision worker ready',
-);
+  logger.info(
+    { queue: QUEUE_NAME, concurrency: env.RECEIPT_WORKER_CONCURRENCY },
+    'neuton vision worker ready',
+  );
 
-const shutdown = async (signal: string) => {
-  logger.info(`${signal} received, closing worker`);
-  await worker.close();
-  await sqlClient.end({ timeout: 5 }).catch(() => { });
-  process.exit(0);
-};
+  const shutdown = async (signal: string) => {
+    logger.info(`${signal} received, closing worker`);
+    await worker.close();
+    await sqlClient.end({ timeout: 5 }).catch(() => { });
+    process.exit(0);
+  };
 
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
-process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+if (isEntrypoint()) {
+  startWorker();
+}
