@@ -4,7 +4,7 @@
  */
 
 /** Gemini/Google API errors carry the HTTP status as `status`. */
-function httpStatus(error: unknown): number | null {
+export function httpStatus(error: unknown): number | null {
   if (typeof error !== 'object' || error === null) return null;
   const status = (error as { status?: unknown }).status;
   if (typeof status === 'number' && status >= 400 && status < 600) return status;

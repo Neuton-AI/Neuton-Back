@@ -33,22 +33,35 @@ const envSchema = z.object({
    */
   GEMINI_MODELS: z
     .string()
-    .default('gemini-2.0-flash,gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b'),
+    .default(
+      [
+        'gemini-3.8-flash',
+        'gemini-3.7-flash',
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.5-flash-lite',
+        'gemini-3.1-flash-lite-preview',
+        'gemini-3.1-pro-preview',
+        'gemini-3-flash-preview',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemma-4-26b-a4b-it',
+        'gemma-4-31b-it',
+      ].join(','),
+    ),
   /**
-   * Total in-process attempts per job attempt. Hard-capped at 4 so the ladder
-   * cannot outlive BullMQ's own retry budget.
+   * Distinct models tried per job attempt. Each failure sidelines that model,
+   * so these are picks from the un-flagged remainder rather than repeats.
    */
-  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(4),
+  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(3),
   /** Backoff before the first retry, in ms. Doubles up to GEMINI_RETRY_MAX_DELAY_MS. */
   GEMINI_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1000),
   GEMINI_RETRY_MAX_DELAY_MS: z.coerce.number().int().min(0).default(10_000),
   /**
-   * Retries on one model before rotating. 1 is the default because
-   * GEMINI_MAX_ATTEMPTS is capped at 4 and the ladder has 4 entries: any higher
-   * value stops the rotation before it reaches the last model. Raise it only
-   * alongside a longer GEMINI_MODELS list.
+   * How long a model that just failed is sidelined, in ms. Must exceed the
+   * Gemini capacity blip being waited out, or every pick is a re-pick.
    */
-  GEMINI_ATTEMPTS_PER_MODEL: z.coerce.number().int().min(1).max(4).default(1),
+  GEMINI_MODEL_FLAG_TTL_MS: z.coerce.number().int().min(1_000).default(120_000),
 
   /** Origins allowed to call the API with credentials. Comma separated. */
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),

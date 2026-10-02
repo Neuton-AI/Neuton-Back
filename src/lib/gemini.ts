@@ -1,7 +1,8 @@
 import { GoogleGenAI, type Part } from '@google/genai';
 import pino from 'pino';
 import { env, isProduction } from '../env.js';
-import { isPermanentError, isUnknownModelError } from './jobErrors.js';
+import { httpStatus, isPermanentError, isUnknownModelError } from './jobErrors.js';
+import { ModelLadder, type FlagReason } from './modelLadder.js';
 import type { MediaKind } from './queue.js';
 
 const logger = pino({
@@ -10,10 +11,12 @@ const logger = pino({
 });
 
 /**
- * Vision models tried in order. Google serves each model from its own capacity
- * pool, so a 503 on one frequently succeeds on the next — that rotation is the
- * whole point of the ladder. Order matters: the first entry is the default.
- * Configurable via GEMINI_MODELS so the ladder can be retuned without a redeploy.
+ * Vision models to draw from. Google serves each model from its own capacity
+ * pool, so a 503 on one frequently succeeds on another — that rotation is the
+ * whole point. Selection is random rather than in-order: every worker walking
+ * the same order in lockstep rediscovers the same outage in the same sequence,
+ * which keeps a just-recovered model saturated.
+ * Configurable via GEMINI_MODELS so the pool can be retuned without a redeploy.
  */
 const MODELS = env.GEMINI_MODELS.split(',')
   .map((m) => m.trim())
@@ -22,6 +25,16 @@ const MODELS = env.GEMINI_MODELS.split(',')
 if (MODELS.length === 0) {
   throw new Error('GEMINI_MODELS resolved to an empty model list');
 }
+
+/**
+ * Shared across every job in this process. A model one job found at capacity is
+ * very likely still at capacity for the next few seconds, and a per-call
+ * selection would make each job pay to rediscover that.
+ */
+const ladder = new ModelLadder({
+  models: MODELS,
+  flagTtlMs: env.GEMINI_MODEL_FLAG_TTL_MS,
+});
 
 export interface ExtractedLineItem {
   rawName: string;
@@ -194,16 +207,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Model for a given zero-based attempt: the same model for
- * GEMINI_ATTEMPTS_PER_MODEL attempts, then the next in the ladder, wrapping.
+ * Classifies a failure as the model's fault, so only those sideline a model.
  */
-function modelForAttempt(attempt: number): string {
-  const index = Math.floor(attempt / env.GEMINI_ATTEMPTS_PER_MODEL) % MODELS.length;
-  const model = MODELS[index];
-  if (model === undefined) {
-    throw new Error(`GEMINI_MODELS is empty; no model for attempt ${attempt}`);
-  }
-  return model;
+function shouldFlagModel(error: unknown): FlagReason | null {
+  if (error instanceof UnusableResponseError) return 'unusable-response';
+  if (isUnknownModelError(error)) return 'unknown-model';
+  const status = httpStatus(error);
+  // 429 and 5xx are the model's own capacity. Anything else (timeout, socket
+  // reset, DNS) is the path, not the model: flagging on those would sideline
+  // the entire pool during a network blip.
+  if (status === 429) return 'rate-limited';
+  if (status !== null && status >= 500) return 'unavailable';
+  return null;
 }
 
 /**
@@ -220,16 +235,22 @@ function backoffDelay(attempt: number): number {
 }
 
 /**
- * Walks the model ladder: retry a model in place, then rotate. The attempt
- * counter is local to this call, so concurrent jobs never inherit each other's
- * position. Returns null only when every model produced an unusable payload,
- * preserving the caller's existing contract.
+ * Picks models at random from the ones not recently sidelined, flagging each
+ * model whose failure was its own doing. The flag memory is shared across jobs
+ * on purpose: one worker discovering that a model is at capacity should spare
+ * every other worker from rediscovering it.
+ *
+ * Returns null only when models answered but produced nothing usable, which
+ * preserves the caller's existing contract.
  */
 async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> {
   const { instruction, schema } = PROMPTS[kind];
+  const attemptedModels = new Set<string>();
+  const unusableModels = new Set<string>();
 
   for (let attempt = 0; attempt < env.GEMINI_MAX_ATTEMPTS; attempt++) {
-    const model = modelForAttempt(attempt);
+    const model = ladder.pick();
+    attemptedModels.add(model);
 
     try {
       const response = await client.models.generateContent({
@@ -252,20 +273,42 @@ async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> 
       const fatal = isPermanentError(error) && !unusable;
       const exhausted = attempt === env.GEMINI_MAX_ATTEMPTS - 1;
 
-      if (fatal || exhausted) {
-        if (!fatal && unusable) return null;
+      // Sidelining happens on every model-attributable failure, including the
+      // last one: another job should not walk into the same dead model.
+      const reason = shouldFlagModel(error);
+      if (reason) ladder.flag(model, reason);
+
+      if (fatal) throw error;
+
+      if (exhausted) {
+        // Every attempt failed and the cause was an unusable model. If they
+        // were all *unknown* models, the ladder never got a single usable
+        // response, so say that instead of blaming the parse.
+        if (unusable) {
+          if (unusableModels.size === attemptedModels.size) {
+            throw new Error(
+              `No available vision model. Tried and rejected as unavailable: ${[...attemptedModels].join(', ')}. Update GEMINI_MODELS.`,
+            );
+          }
+          return null;
+        }
         throw error;
       }
+
+      if (unusable) unusableModels.add(model);
 
       logger.warn(
         {
           model,
           attempt: attempt + 1,
           maxAttempts: env.GEMINI_MAX_ATTEMPTS,
-          rotatingTo: modelForAttempt(attempt + 1),
+          flagged: reason,
+          nextPick: 'random from unflagged',
           err: error,
         },
-        unusable ? 'gemini model unusable, rotating' : 'gemini call failed, retrying',
+        reason
+          ? 'gemini model sidelined, picking another'
+          : 'gemini call failed, retrying another model',
       );
       await sleep(backoffDelay(attempt));
     }

@@ -507,7 +507,7 @@ logger.info(
 const shutdown = async (signal: string) => {
   logger.info(`${signal} received, closing worker`);
   await worker.close();
-  await sqlClient.end({ timeout: 5 }).catch(() => {});
+  await sqlClient.end({ timeout: 5 }).catch(() => { });
   process.exit(0);
 };
 
