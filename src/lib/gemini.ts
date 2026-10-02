@@ -1,8 +1,27 @@
 import { GoogleGenAI, type Part } from '@google/genai';
-import { env } from '../env.js';
+import pino from 'pino';
+import { env, isProduction } from '../env.js';
+import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import type { MediaKind } from './queue.js';
 
-const MODEL = 'gemini-flash-latest';
+const logger = pino({
+  level: isProduction ? 'info' : 'debug',
+  ...(isProduction ? {} : { transport: { target: 'pino-pretty', options: { colorize: true } } }),
+});
+
+/**
+ * Vision models tried in order. Google serves each model from its own capacity
+ * pool, so a 503 on one frequently succeeds on the next — that rotation is the
+ * whole point of the ladder. Order matters: the first entry is the default.
+ * Configurable via GEMINI_MODELS so the ladder can be retuned without a redeploy.
+ */
+const MODELS = env.GEMINI_MODELS.split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
+
+if (MODELS.length === 0) {
+  throw new Error('GEMINI_MODELS resolved to an empty model list');
+}
 
 export interface ExtractedLineItem {
   rawName: string;
@@ -154,29 +173,105 @@ function parseJson<T>(text: string): T {
   return JSON.parse(cleaned) as T;
 }
 
-async function runStructured<T>(
-  kind: MediaKind,
-  part: Part,
-): Promise<T | null> {
+/**
+ * Raised when a model answers but the payload is unusable (empty text, or JSON
+ * that will not parse). Distinct from an API error: nothing is wrong with the
+ * request, the model just did not honour the response schema. Worth another
+ * model, because older vision models often ignore `responseSchema` outright.
+ */
+class UnusableResponseError extends Error {
+  constructor(
+    readonly model: string,
+    readonly reason: string,
+  ) {
+    super(`model ${model} ${reason}`);
+    this.name = 'UnusableResponseError';
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Model for a given zero-based attempt: the same model for
+ * GEMINI_ATTEMPTS_PER_MODEL attempts, then the next in the ladder, wrapping.
+ */
+function modelForAttempt(attempt: number): string {
+  const index = Math.floor(attempt / env.GEMINI_ATTEMPTS_PER_MODEL) % MODELS.length;
+  const model = MODELS[index];
+  if (model === undefined) {
+    throw new Error(`GEMINI_MODELS is empty; no model for attempt ${attempt}`);
+  }
+  return model;
+}
+
+/**
+ * Exponential backoff with full jitter. Jitter matters here: several workers
+ * hit a capacity wall at the same moment, and without it they resync on every
+ * retry and stampede the model that just recovered.
+ */
+function backoffDelay(attempt: number): number {
+  const ceiling = Math.min(
+    env.GEMINI_RETRY_BASE_DELAY_MS * 2 ** attempt,
+    env.GEMINI_RETRY_MAX_DELAY_MS,
+  );
+  return Math.round(ceiling * (0.5 + Math.random() * 0.5));
+}
+
+/**
+ * Walks the model ladder: retry a model in place, then rotate. The attempt
+ * counter is local to this call, so concurrent jobs never inherit each other's
+ * position. Returns null only when every model produced an unusable payload,
+ * preserving the caller's existing contract.
+ */
+async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> {
   const { instruction, schema } = PROMPTS[kind];
 
-  const response = await client.models.generateContent({
-    model: MODEL,
-    contents: [{ role: 'user', parts: [part, { text: instruction }] }],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
-      temperature: 0.1,
-    },
-  });
+  for (let attempt = 0; attempt < env.GEMINI_MAX_ATTEMPTS; attempt++) {
+    const model = modelForAttempt(attempt);
 
-  const text = response.text;
-  if (!text) return null;
-  try {
-    return parseJson<T>(text);
-  } catch {
-    return null;
+    try {
+      const response = await client.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
+          temperature: 0.1,
+        },
+      });
+
+      const text = response.text;
+      if (!text) throw new UnusableResponseError(model, 'returned no text');
+      return parseJson<T>(text);
+    } catch (error) {
+      const unusable = error instanceof UnusableResponseError || isUnknownModelError(error);
+      // Auth, billing, malformed requests and oversize payloads will fail
+      // identically on every model, so they end the job immediately.
+      const fatal = isPermanentError(error) && !unusable;
+      const exhausted = attempt === env.GEMINI_MAX_ATTEMPTS - 1;
+
+      if (fatal || exhausted) {
+        if (!fatal && unusable) return null;
+        throw error;
+      }
+
+      logger.warn(
+        {
+          model,
+          attempt: attempt + 1,
+          maxAttempts: env.GEMINI_MAX_ATTEMPTS,
+          rotatingTo: modelForAttempt(attempt + 1),
+          err: error,
+        },
+        unusable ? 'gemini model unusable, rotating' : 'gemini call failed, retrying',
+      );
+      await sleep(backoffDelay(attempt));
+    }
   }
+
+  return null;
 }
 
 export async function extractReceipt(

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isPermanentError, publicFailureMessage } from '../src/lib/jobErrors.js';
+import { isPermanentError, isUnknownModelError, publicFailureMessage } from '../src/lib/jobErrors.js';
 
 test('Gemini 402 is permanent', () => {
   const error = Object.assign(new Error('depleted'), { status: 402 });
@@ -44,4 +44,36 @@ test('unknown errors fall back to the original message, truncated', () => {
 
 test('recognises missing R2 object', () => {
   assert.equal(publicFailureMessage(new Error('NoSuchKey: nope')), 'The uploaded document is no longer in storage.');
+});
+
+test('a retired model rotates instead of ending the ladder', () => {
+  // Google answers a retired model with 400 or 404 "not found". Permanent for
+  // that model, but the next one may be healthy, so the ladder must continue.
+  const notFound400 = Object.assign(
+    new Error('models/gemini-1.5-flash-8b is not found for API version v1beta, or is not supported for predict.'),
+    { status: 400 },
+  );
+  assert.equal(isUnknownModelError(notFound400), true);
+  assert.equal(isPermanentError(notFound400), false, 'must not abort the job');
+
+  const gone404 = Object.assign(new Error('{"error":{"code":404,"message":"models/x is not found"}}'), {});
+  assert.equal(isUnknownModelError(gone404), true);
+  assert.equal(isPermanentError(gone404), false);
+});
+
+test('a real 400 is still permanent', () => {
+  // A malformed request fails identically on every model: retrying is pointless.
+  const malformed = Object.assign(new Error('Invalid JSON payload received'), { status: 400 });
+  assert.equal(isUnknownModelError(malformed), false);
+  assert.equal(isPermanentError(malformed), true);
+});
+
+test('exhausted capacity is actionable and leaks no upstream internals', () => {
+  const raw = new Error(
+    '{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}',
+  );
+  const message = publicFailureMessage(raw);
+  assert.match(message, /busy right now/i);
+  assert.match(message, /reprocess/i);
+  assert.doesNotMatch(message, /UNAVAILABLE|projects|503|high demand/);
 });

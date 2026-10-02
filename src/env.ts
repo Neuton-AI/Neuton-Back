@@ -27,6 +27,29 @@ const envSchema = z.object({
 
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
 
+  /**
+   * Vision models tried in order when one is out of capacity. Comma separated;
+   * the first is the default and each retry rotates to the next.
+   */
+  GEMINI_MODELS: z
+    .string()
+    .default('gemini-2.0-flash,gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b'),
+  /**
+   * Total in-process attempts per job attempt. Hard-capped at 4 so the ladder
+   * cannot outlive BullMQ's own retry budget.
+   */
+  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(4),
+  /** Backoff before the first retry, in ms. Doubles up to GEMINI_RETRY_MAX_DELAY_MS. */
+  GEMINI_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1000),
+  GEMINI_RETRY_MAX_DELAY_MS: z.coerce.number().int().min(0).default(10_000),
+  /**
+   * Retries on one model before rotating. 1 is the default because
+   * GEMINI_MAX_ATTEMPTS is capped at 4 and the ladder has 4 entries: any higher
+   * value stops the rotation before it reaches the last model. Raise it only
+   * alongside a longer GEMINI_MODELS list.
+   */
+  GEMINI_ATTEMPTS_PER_MODEL: z.coerce.number().int().min(1).max(4).default(1),
+
   /** Origins allowed to call the API with credentials. Comma separated. */
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   /** Presigned R2 upload lifetime in seconds. */

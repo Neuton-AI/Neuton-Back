@@ -31,7 +31,7 @@ export interface MediaJobData {
 }
 
 const defaultJobOptions: JobsOptions = {
-  attempts: 3,
+  attempts: 4,
   backoff: { type: 'exponential', delay: 5_000 },
   removeOnComplete: { age: 60 * 60 * 24, count: 1_000 },
   removeOnFail: { age: 60 * 60 * 24 * 7 },
