@@ -41,32 +41,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     bodyLimit: env.MAX_UPLOAD_BYTES,
   });
 
-  await app.register(helmet, { contentSecurityPolicy: false });
-  await app.register(cors, {
-    origin: (origin, cb) => {
-      if (!origin || corsOrigins.includes(origin)) cb(null, true);
-      else cb(new Error('Origin not allowed by CORS'), false);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  });
-  await app.register(cookie);
-  await app.register(rateLimit, {
-    max: env.RATE_LIMIT_MAX,
-    timeWindow: env.RATE_LIMIT_WINDOW,
-  });
-
-  await app.register(requireAuth);
-  await app.register(requireShopContext);
-
-  app.get('/health', async () => ({ ok: true, service: 'neuton-api' }));
-
-  await app.register(shopRoutes, { prefix: '/api/v1' });
-  await app.register(catalogRoutes, { prefix: '/api/v1' });
-  await app.register(receiptRoutes, { prefix: '/api/v1' });
-  await app.register(orderRoutes, { prefix: '/api/v1' });
-  await app.register(analyticsRoutes, { prefix: '/api/v1' });
-
+  /**
+   * Error handling is registered before every plugin and route, and that order is
+   * load-bearing. Fastify resolves a route context's error handler when the route
+   * is added and keeps that reference on the context (`lib/context.js`:
+   * `this.errorHandler = errorHandler || server[kErrorHandler]`). A handler set
+   * afterwards never reaches routes that already exist.
+   *
+   * When these two calls sat below the route plugins, every route kept Fastify's
+   * built-in handler: each `AppError` 4xx/409/413 and each `z.parse()` failure
+   * answered 500 with the raw internal message, to unauthenticated callers.
+   *
+   * Registering ahead of `@fastify/cors` as well is deliberate: a rejected origin
+   * is raised from that plugin's `onRequest` hook, so it reaches this handler and
+   * gets the flat generic 500 instead of "Origin not allowed by CORS".
+   *
+   * `setNotFoundHandler` is resolved on the root router at request time, so it was
+   * never affected by the ordering bug. It lives here for cohesion.
+   *
+   * Covered by scripts/error-handler.test.ts.
+   */
   app.setErrorHandler((error: FastifyError, request, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({
@@ -95,6 +89,32 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       .code(404)
       .send({ error: { code: 'NOT_FOUND', message: `Route ${request.method} ${request.url} not found` } }),
   );
+
+  await app.register(helmet, { contentSecurityPolicy: false });
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      if (!origin || corsOrigins.includes(origin)) cb(null, true);
+      else cb(new Error('Origin not allowed by CORS'), false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  });
+  await app.register(cookie);
+  await app.register(rateLimit, {
+    max: env.RATE_LIMIT_MAX,
+    timeWindow: env.RATE_LIMIT_WINDOW,
+  });
+
+  await app.register(requireAuth);
+  await app.register(requireShopContext);
+
+  app.get('/health', async () => ({ ok: true, service: 'neuton-api' }));
+
+  await app.register(shopRoutes, { prefix: '/api/v1' });
+  await app.register(catalogRoutes, { prefix: '/api/v1' });
+  await app.register(receiptRoutes, { prefix: '/api/v1' });
+  await app.register(orderRoutes, { prefix: '/api/v1' });
+  await app.register(analyticsRoutes, { prefix: '/api/v1' });
 
   return app;
 }
