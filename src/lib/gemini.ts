@@ -13,11 +13,17 @@ const logger = pino({
 });
 
 /**
- * Creates an AbortSignal that aborts after the configured Gemini request timeout.
- * Uses AbortSignal.timeout() (Node 18+) for a clean, native timeout.
+ * Creates a promise that rejects after the configured Gemini request timeout.
+ * Used to enforce a hard deadline on the underlying HTTP call since the
+ * Google GenAI SDK does not yet accept an AbortSignal on generateContent.
  */
-function createGeminiAbortSignal(): AbortSignal {
-  return AbortSignal.timeout(env.GEMINI_REQUEST_TIMEOUT_MS);
+function createGeminiTimeout(): Promise<never> {
+  return new Promise((_, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Gemini request timed out after ${env.GEMINI_REQUEST_TIMEOUT_MS}ms`));
+    }, env.GEMINI_REQUEST_TIMEOUT_MS);
+    timer.unref(); // Don't prevent process exit while waiting
+  });
 }
 
 /**
@@ -263,16 +269,18 @@ async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> 
     attemptedModels.add(model);
 
     try {
-      const response = await client.models.generateContent({
-        model,
-        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
-          temperature: 0.1,
-        },
-        abortSignal: createGeminiAbortSignal(),
-      });
+      const response = await Promise.race([
+        client.models.generateContent({
+          model,
+          contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
+            temperature: 0.1,
+          },
+        }),
+        createGeminiTimeout(),
+      ]);
 
       const text = response.text;
       if (!text) throw new UnusableResponseError(model, 'returned no text');
