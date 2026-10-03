@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { db } from '../db/client.js';
+import { db, type Database } from '../db/client.js';
 import {
   inventoryItems,
   orderItems,
@@ -15,9 +15,32 @@ import { average, median } from '../lib/pricing.js';
 
 export type Period = '7d' | '30d' | '90d' | '12m';
 
-const PERIOD_DAYS: Record<Period, number> = { '7d': 7, '30d': 30, '90d': 90, '12m': 365 };
+export const PERIOD_DAYS: Record<Period, number> = { '7d': 7, '30d': 30, '90d': 90, '12m': 365 };
 
-function periodStart(period: Period, now = new Date()): Date {
+/**
+ * Collaborators the reporting queries run against. Injected so the aggregations
+ * can be tested against scripted rows instead of a live database; production
+ * always uses `defaultAnalyticsDeps`.
+ */
+export interface AnalyticsDeps {
+  db: Database;
+  /** Injected so a test can pin "now" instead of depending on the wall clock. */
+  now: () => Date;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * Per-request override of `defaultAnalyticsDeps`. Production never sets it;
+     * it exists so the aggregations can be tested against scripted rows.
+     */
+    analyticsDeps?: AnalyticsDeps;
+  }
+}
+
+export const defaultAnalyticsDeps: AnalyticsDeps = { db, now: () => new Date() };
+
+export function periodStart(period: Period, now: Date = new Date()): Date {
   const days = PERIOD_DAYS[period];
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
@@ -25,10 +48,21 @@ function periodStart(period: Period, now = new Date()): Date {
   return start;
 }
 
-function previousPeriodStart(period: Period, now = new Date()): Date {
+export function previousPeriodStart(period: Period, now: Date = new Date()): Date {
   const start = periodStart(period, now);
   start.setUTCDate(start.getUTCDate() - PERIOD_DAYS[period]);
   return start;
+}
+
+/** Share change as a percentage. A zero baseline reports 100% rather than Infinity. */
+export function trendPercent(current: number, previous: number): number {
+  if (previous === 0) return current === 0 ? 0 : 100;
+  return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+}
+
+/** Billed revenue − delivery payouts − production cost − recorded expenses. */
+export function netProfitOf(revenue: number, delivery: number, cost: number, expenses: number): number {
+  return revenue - delivery - cost - expenses;
 }
 
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
@@ -36,18 +70,19 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
 
   /** Everything the Dashboard needs in one round trip. */
   app.get('/analytics/dashboard', guards, async (request) => {
+    const deps = request.analyticsDeps ?? defaultAnalyticsDeps;
     const shop = currentShop(request);
     const { period } = z
       .object({ period: z.enum(['7d', '30d', '90d', '12m']).default('30d') })
       .parse(request.query);
 
-    const now = new Date();
+    const now = deps.now();
     const start = periodStart(period, now);
     const previousStart = previousPeriodStart(period, now);
 
     const [orderTotals, expenseTotals, previousOrderTotals, previousExpenseTotals] =
       await Promise.all([
-        db
+        deps.db
           .select({
             revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
             cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
@@ -56,7 +91,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           })
           .from(orders)
           .where(and(eq(orders.shopId, shop.id), sql`${orders.orderDate} >= ${start}`)),
-        db
+        deps.db
           .select({ expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)` })
           .from(receipts)
           .where(
@@ -66,7 +101,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
               sql`${receipts.receiptDate} is not null and ${receipts.receiptDate} >= ${start}`,
             ),
           ),
-        db
+        deps.db
           .select({
             revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
             delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
@@ -80,7 +115,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
               sql`${orders.orderDate} < ${start}`,
             ),
           ),
-        db
+        deps.db
           .select({ expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)` })
           .from(receipts)
           .where(
@@ -98,25 +133,21 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const productionCost = toNumber(orderTotals[0]?.cost);
     const expenses = toNumber(expenseTotals[0]?.expenses);
 
-    // Net profit = billed revenue − delivery payouts − production cost − recorded expenses.
-    const netProfit = revenue - delivery - productionCost - expenses;
+    const netProfit = netProfitOf(revenue, delivery, productionCost, expenses);
     const previousRevenue = toNumber(previousOrderTotals[0]?.revenue);
-    const previousProfit =
-      previousRevenue -
-      toNumber(previousOrderTotals[0]?.delivery) -
-      toNumber(previousOrderTotals[0]?.cost) -
-      toNumber(previousExpenseTotals[0]?.expenses);
-
-    const trendPercent = (current: number, previous: number) => {
-      if (previous === 0) return current === 0 ? 0 : 100;
-      return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
-    };
+    const previousProfit = netProfitOf(
+      previousRevenue,
+      toNumber(previousOrderTotals[0]?.delivery),
+      toNumber(previousOrderTotals[0]?.cost),
+      toNumber(previousExpenseTotals[0]?.expenses),
+    );
+    const previousExpenses = toNumber(previousExpenseTotals[0]?.expenses);
 
     const [topItem, orderStats, lowStock, graph] = await Promise.all([
-      topPerformingItem(shop.id, start),
-      orderProfitStats(shop.id, start),
-      lowStockItems(shop.id),
-      profitGraph(shop.id, period, now),
+      topPerformingItem(deps, shop.id, start),
+      orderProfitStats(deps, shop.id, start),
+      lowStockItems(deps, shop.id),
+      profitGraph(deps, shop.id, period, now),
     ]);
 
     return {
@@ -134,7 +165,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       trend: {
         revenuePercent: trendPercent(revenue, previousRevenue),
         profitPercent: trendPercent(netProfit, previousProfit),
-        expensesPercent: trendPercent(expenses, toNumber(previousExpenseTotals[0]?.expenses)),
+        expensesPercent: trendPercent(expenses, previousExpenses),
       },
       graph,
       topItem,
@@ -144,12 +175,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/analytics/recent-orders', guards, async (request) => {
+    const deps = request.analyticsDeps ?? defaultAnalyticsDeps;
     const shop = currentShop(request);
     const { limit } = z
       .object({ limit: z.coerce.number().int().min(1).max(20).default(5) })
       .parse(request.query);
 
-    const rows = await db
+    const rows = await deps.db
       .select()
       .from(orders)
       .where(eq(orders.shopId, shop.id))
@@ -159,17 +191,20 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     return {
       orders: rows.map((order) => ({
         ...order,
-        netProfit:
-          toNumber(order.totalAmount) -
-          toNumber(order.deliveryFee) -
+        netProfit: netProfitOf(
+          toNumber(order.totalAmount),
+          toNumber(order.deliveryFee),
           toNumber(order.totalCost),
+          0,
+        ),
       })),
     };
   });
 
   app.get('/analytics/inventory-value', guards, async (request) => {
+    const deps = request.analyticsDeps ?? defaultAnalyticsDeps;
     const shop = currentShop(request);
-    const rows = await db
+    const rows = await deps.db
       .select({
         value: sql<string>`coalesce(sum(${inventoryItems.currentQuantity} * ${inventoryItems.averageUnitCost}),0)`,
         units: sql<number>`count(*)::int`,
@@ -181,8 +216,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   });
 };
 
-async function topPerformingItem(shopId: string, start: Date) {
-  const rows = await db
+async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Date) {
+  const rows = await deps.db
     .select({
       recipeId: recipes.id,
       name: recipes.name,
@@ -214,8 +249,8 @@ async function topPerformingItem(shopId: string, start: Date) {
   };
 }
 
-async function orderProfitStats(shopId: string, start: Date) {
-  const rows = await db
+async function orderProfitStats(deps: AnalyticsDeps, shopId: string, start: Date) {
+  const rows = await deps.db
     .select({
       netProfit: sql<string>`${orders.totalAmount} - ${orders.deliveryFee} - ${orders.totalCost}`,
     })
@@ -230,8 +265,8 @@ async function orderProfitStats(shopId: string, start: Date) {
   };
 }
 
-async function lowStockItems(shopId: string) {
-  const rows = await db
+async function lowStockItems(deps: AnalyticsDeps, shopId: string) {
+  const rows = await deps.db
     .select({
       id: inventoryItems.id,
       name: inventoryItems.name,
@@ -260,10 +295,10 @@ async function lowStockItems(shopId: string) {
 }
 
 /** Daily net-profit series for the Dashboard graph. */
-async function profitGraph(shopId: string, period: Period, now: Date) {
+async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, now: Date) {
   const start = periodStart(period, now);
 
-  const rows = await db
+  const rows = await deps.db
     .select({
       day: sql<string>`to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD')`,
       revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
@@ -275,7 +310,7 @@ async function profitGraph(shopId: string, period: Period, now: Date) {
     .groupBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`)
     .orderBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`);
 
-  const expenses = await db
+  const expenses = await deps.db
     .select({
       day: sql<string>`to_char(${receipts.receiptDate}, 'YYYY-MM-DD')`,
       total: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
@@ -291,9 +326,7 @@ async function profitGraph(shopId: string, period: Period, now: Date) {
     .groupBy(receipts.receiptDate)
     .orderBy(receipts.receiptDate);
 
-  const expenseByDay = new Map(
-    expenses.map((row) => [row.day, toNumber(row.total)]),
-  );
+  const expenseByDay = new Map(expenses.map((row) => [row.day, toNumber(row.total)]));
 
   return rows.map((row) => {
     const revenue = toNumber(row.revenue);
@@ -304,7 +337,7 @@ async function profitGraph(shopId: string, period: Period, now: Date) {
       date: row.day,
       revenue,
       expenses: dayExpense,
-      netProfit: Math.round((revenue - delivery - cost - dayExpense) * 100) / 100,
+      netProfit: Math.round(netProfitOf(revenue, delivery, cost, dayExpense) * 100) / 100,
     };
   });
 }

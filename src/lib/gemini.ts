@@ -1,13 +1,15 @@
 import { GoogleGenAI, type Part } from '@google/genai';
 import pino from 'pino';
-import { env, isProduction } from '../env.js';
+import { env, isDevelopment } from '../env.js';
 import { httpStatus, isPermanentError, isUnknownModelError } from './jobErrors.js';
 import { ModelLadder, type FlagReason } from './modelLadder.js';
 import type { MediaKind } from './queue.js';
 
 const logger = pino({
-  level: isProduction ? 'info' : 'debug',
-  ...(isProduction ? {} : { transport: { target: 'pino-pretty', options: { colorize: true } } }),
+  level: env.NODE_ENV === 'production' ? 'info' : 'debug',
+  // pino-pretty logs through a worker thread, so it is limited to development;
+  // tests and CI use plain JSON and the process is free to exit.
+  ...(isDevelopment ? { transport: { target: 'pino-pretty', options: { colorize: true } } } : {}),
 });
 
 /**

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { isPlaceholder } from './support/testEnv.js';
 import { db } from '../src/db/client.js';
 import { receipts } from '../src/db/schema/index.js';
 import { createPresignedDownloadUrl } from '../src/lib/storage.js';
@@ -21,7 +22,17 @@ test('download-url rejects cross-tenant path', async () => {
   }, { message: /forbidden/i });
 });
 
-test('download-url rejects unknown path for tenant', async () => {
+/**
+ * The two cases below are database-backed. When no real `DATABASE_URL` is
+ * configured — CI, or a fresh clone — the suite placeholder fills one in, so
+ * they are skipped explicitly instead of hanging on a refused connection.
+ */
+const databaseBacked = !isPlaceholder('DATABASE_URL');
+const skip = databaseBacked
+  ? false
+  : 'no real DATABASE_URL configured (CI) — database-backed signed-download cases skipped';
+
+test('download-url rejects unknown path for tenant', { skip }, async () => {
   const shopId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
   const path = tenantPrefix(shopId, 'receipts/does-not-exist.png');
 
@@ -34,7 +45,7 @@ test('download-url rejects unknown path for tenant', async () => {
   assert.equal(rows.length, 0);
 });
 
-test('download-url returns signed URL for owned path', async () => {
+test('download-url returns signed URL for owned path', { skip }, async () => {
   const shopId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
   const path = tenantPrefix(shopId, 'receipts/owned.png');
 
