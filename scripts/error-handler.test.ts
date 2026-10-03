@@ -1,3 +1,4 @@
+import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
 import type { FastifyInstance } from 'fastify';
