@@ -573,6 +573,8 @@ function startWorker(): void {
   const worker = new Worker<MediaJobData>(QUEUE_NAME, (job) => runJob(job.data, job), {
     connection: createRedisConnection(),
     concurrency: env.RECEIPT_WORKER_CONCURRENCY,
+    /** Duration of the lock for the job in milliseconds. If the lock is lost, the job will be moved back to wait. */
+    lockDuration: env.JOB_LOCK_DURATION_MS,
   });
 
   worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
