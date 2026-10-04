@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import pino from 'pino';
-import { and, eq, ilike } from 'drizzle-orm';
+import { and, eq, ilike, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -25,6 +25,7 @@ import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { applyWeightedAverage, calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import { env, isDevelopment } from './env.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
+import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
 const logger = pino({
   // A test run should assert on output, not emit a wall of JSON between cases.
@@ -139,20 +140,67 @@ export async function applyPurchase(
     .where(eq(inventoryItems.id, inventoryItemId));
 }
 
+async function updateReceiptProgress(
+  deps: WorkerDeps,
+  data: MediaJobData,
+  stage: ReceiptProgressStage,
+  message: string,
+): Promise<void> {
+  await deps.db
+    .update(receipts)
+    .set({
+      progressStage: stage,
+      progressMessage: message,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+}
+
+function checkDeadline(deadline: Date | null): void {
+  if (deadline && new Date() > deadline) {
+    throw new Error('Processing deadline exceeded');
+  }
+}
+
 export async function processReceipt(
   deps: WorkerDeps,
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
+  const startedAt = new Date();
+  const deadline = new Date(startedAt.getTime() + env.RECEIPT_PROCESSING_TIMEOUT_MS);
+
+  // Initialize processing tracking
+  await deps.db
+    .update(receipts)
+    .set({
+      status: 'processing',
+      progressStage: 'extracting',
+      progressMessage: 'Downloading document from storage',
+      processingStartedAt: startedAt,
+      processingDeadline: deadline,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+
   const bytes = await deps.getObjectBytes(data.storagePath);
+  checkDeadline(deadline);
+
+  await updateReceiptProgress(deps, data, 'extracting', 'Extracting receipt data with AI');
+  await job.updateProgress(10);
+
   const extraction = await deps.extractReceipt({
     mimeType: data.contentType,
     data: toBase64(bytes),
   });
+  checkDeadline(deadline);
 
   if (!extraction) {
     throw new Error('Gemini returned no parsable receipt extraction');
   }
+
+  await updateReceiptProgress(deps, data, 'validating', 'Validating extracted data');
+  await job.updateProgress(30);
 
   const jobLogger = logger.child({ jobId: job.id, shopId: data.shopId });
 
@@ -170,10 +218,24 @@ export async function processReceipt(
       return;
     }
 
+    checkDeadline(deadline);
+    await updateReceiptProgress(deps, data, 'validating', 'Clearing previous line items');
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
+    await job.updateProgress(40);
 
     const itemRows = [];
-    for (const item of extraction.items) {
+    for (let i = 0; i < extraction.items.length; i++) {
+      checkDeadline(deadline);
+      const item = extraction.items[i]!;
+      const progress = 40 + Math.floor((i / extraction.items.length) * 40);
+      await updateReceiptProgress(
+        deps,
+        data,
+        'applying',
+        `Processing line item ${i + 1} of ${extraction.items.length}`,
+      );
+      await job.updateProgress(progress);
+
       const inventoryItemId = await findOrCreateInventoryItem(
         deps,
         data.shopId,
@@ -203,6 +265,10 @@ export async function processReceipt(
       itemRows.push(inserted[0]?.id);
     }
 
+    checkDeadline(deadline);
+    await updateReceiptProgress(deps, data, 'applying', 'Finalizing receipt');
+    await job.updateProgress(85);
+
     const derivedTotal =
       extraction.totalAmount ??
       extraction.items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
@@ -216,12 +282,15 @@ export async function processReceipt(
         taxAmount: extraction.taxAmount === null ? null : money(extraction.taxAmount),
         currency: extraction.currency,
         status: 'completed',
+        progressStage: 'completed',
+        progressMessage: 'Processing complete',
         rawExtraction: extraction as unknown as Record<string, unknown>,
         processedAt: new Date(),
         updatedAt: new Date(),
         errorMessage: null,
       })
       .where(eq(receipts.id, receiptId));
+    await job.updateProgress(100);
   });
 
   jobLogger.info(
@@ -350,7 +419,7 @@ export async function processOrderDocument(
   const orderRows = await deps.db
     .select()
     .from(orders)
-    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId)))
+    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId), isNull(orders.deletedAt)))
     .limit(1);
   const order = orderRows[0];
   if (!order) {
@@ -473,11 +542,14 @@ export async function recordTerminalFailure(
   if (data.kind !== 'receipt') return;
 
   const message = publicFailureMessage(error);
+  const isTimeout = error instanceof Error && error.message.includes('deadline exceeded');
   try {
     await deps.db
       .update(receipts)
       .set({
         status: 'failed',
+        progressStage: isTimeout ? 'failed' : undefined,
+        progressMessage: isTimeout ? 'Processing timed out' : undefined,
         errorMessage: message.slice(0, 1000),
         updatedAt: new Date(),
       })
@@ -545,6 +617,12 @@ export async function runJob(
     // Billing/auth/malformed-payload errors will not resolve on retry, so
     // drop them straight to failed instead of spending the backoff schedule.
     if (isPermanentError(error)) {
+      await recordTerminalFailure(deps, data, error);
+      throw new UnrecoverableError(publicFailureMessage(error));
+    }
+
+    // Processing deadline exceeded - treat as permanent failure to avoid retries
+    if (error instanceof Error && error.message.includes('deadline exceeded')) {
       await recordTerminalFailure(deps, data, error);
       throw new UnrecoverableError(publicFailureMessage(error));
     }
