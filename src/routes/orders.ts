@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../db/client.js';
 import { orderItems, orders, recipes } from '../db/schema/index.js';
@@ -96,6 +96,9 @@ async function priceOrderItems(
 
 export const orderRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
+  const mutationGuards = {
+    preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
+  };
 
   app.get('/orders', guards, async (request) => {
     const shop = currentShop(request);
@@ -109,7 +112,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(request.query);
 
-    const conditions = [eq(orders.shopId, shop.id)];
+    const conditions = [eq(orders.shopId, shop.id), isNull(orders.deletedAt)];
     if (query.from) conditions.push(sql`${orders.orderDate} >= ${query.from}`);
     if (query.to) conditions.push(sql`${orders.orderDate} <= ${query.to}`);
     if (query.search) {
@@ -145,7 +148,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     const rows = await db
       .select()
       .from(orders)
-      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)))
+      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
       .limit(1);
     const order = rows[0];
     if (!order) throw notFound('Order not found');
@@ -217,7 +220,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post('/orders', guards, async (request, reply) => {
+  app.post('/orders', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
     const body = createOrderSchema.parse(request.body);
@@ -294,7 +297,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ order: created, totals });
   });
 
-  app.delete('/orders/:id', guards, async (request) => {
+  app.delete('/orders/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await db

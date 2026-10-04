@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import pino from 'pino';
-import { and, eq, ilike } from 'drizzle-orm';
+import { and, eq, ilike, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -24,6 +24,8 @@ import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { applyWeightedAverage, calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import { env, isDevelopment } from './env.js';
+import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
+import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
 const logger = pino({
   // A test run should assert on output, not emit a wall of JSON between cases.
@@ -138,6 +140,29 @@ export async function applyPurchase(
     .where(eq(inventoryItems.id, inventoryItemId));
 }
 
+async function updateReceiptProgress(
+  deps: WorkerDeps,
+  shopId: string,
+  storagePath: string,
+  stage: ReceiptProgressStage,
+  message: string,
+): Promise<void> {
+  await deps.db
+    .update(receipts)
+    .set({
+      progressStage: stage,
+      progressMessage: message,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, storagePath)));
+}
+
+function checkDeadline(deadline: Date | null): void {
+  if (deadline && new Date() > deadline) {
+    throw new Error('Processing deadline exceeded');
+  }
+}
+
 export async function processReceipt(
   deps: WorkerDeps,
   data: MediaJobData,
@@ -147,15 +172,41 @@ export async function processReceipt(
   if (!storagePath) {
     throw new Error('Cannot process receipt without storagePath');
   }
+
+  const startedAt = new Date();
+  const deadline = new Date(startedAt.getTime() + env.RECEIPT_PROCESSING_TIMEOUT_MS);
+
+  // Initialize processing tracking
+  await deps.db
+    .update(receipts)
+    .set({
+      status: 'processing',
+      progressStage: 'extracting',
+      progressMessage: 'Downloading document from storage',
+      processingStartedAt: startedAt,
+      processingDeadline: deadline,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+
   const bytes = await deps.getObjectBytes(storagePath);
+  checkDeadline(deadline);
+
+  await updateReceiptProgress(deps, data.shopId, storagePath, 'extracting', 'Extracting receipt data with AI');
+  await job.updateProgress(10);
+
   const extraction = await deps.extractReceipt({
     mimeType: data.contentType,
     data: toBase64(bytes),
   });
+  checkDeadline(deadline);
 
   if (!extraction) {
     throw new Error('Gemini returned no parsable receipt extraction');
   }
+
+  await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
+  await job.updateProgress(30);
 
   const jobLogger = logger.child({ jobId: job.id, shopId: data.shopId });
 
@@ -173,10 +224,25 @@ export async function processReceipt(
       return;
     }
 
+    checkDeadline(deadline);
+    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Clearing previous line items');
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
+    await job.updateProgress(40);
 
     const itemRows = [];
-    for (const item of extraction.items) {
+    for (let i = 0; i < extraction.items.length; i++) {
+      checkDeadline(deadline);
+      const item = extraction.items[i]!;
+      const progress = 40 + Math.floor((i / extraction.items.length) * 40);
+      await updateReceiptProgress(
+        deps,
+        data.shopId,
+        storagePath,
+        'applying',
+        `Processing line item ${i + 1} of ${extraction.items.length}`,
+      );
+      await job.updateProgress(progress);
+
       const inventoryItemId = await findOrCreateInventoryItem(
         deps,
         data.shopId,
@@ -206,6 +272,10 @@ export async function processReceipt(
       itemRows.push(inserted[0]?.id);
     }
 
+    checkDeadline(deadline);
+    await updateReceiptProgress(deps, data.shopId, storagePath, 'applying', 'Finalizing receipt');
+    await job.updateProgress(85);
+
     const derivedTotal =
       extraction.totalAmount ??
       extraction.items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
@@ -219,12 +289,15 @@ export async function processReceipt(
         taxAmount: extraction.taxAmount === null ? null : money(extraction.taxAmount),
         currency: extraction.currency,
         status: 'completed',
+        progressStage: 'completed',
+        progressMessage: 'Processing complete',
         rawExtraction: extraction as unknown as Record<string, unknown>,
         processedAt: new Date(),
         updatedAt: new Date(),
         errorMessage: null,
       })
       .where(eq(receipts.id, receiptId));
+    await job.updateProgress(100);
   });
 
   jobLogger.info(
@@ -361,7 +434,7 @@ export async function processOrderDocument(
   const orderRows = await deps.db
     .select()
     .from(orders)
-    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId)))
+    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId), isNull(orders.deletedAt)))
     .limit(1);
   const order = orderRows[0];
   if (!order) {
@@ -486,11 +559,14 @@ export async function recordTerminalFailure(
   if (!storagePath) return;
 
   const message = publicFailureMessage(error);
+  const isTimeout = error instanceof Error && error.message.includes('deadline exceeded');
   try {
     await deps.db
       .update(receipts)
       .set({
         status: 'failed',
+        progressStage: isTimeout ? 'failed' : undefined,
+        progressMessage: isTimeout ? 'Processing timed out' : undefined,
         errorMessage: message.slice(0, 1000),
         updatedAt: new Date(),
       })
@@ -506,15 +582,33 @@ export async function recordTerminalFailure(
 /**
  * Routes a job to its handler and translates failures into BullMQ semantics.
  * Permanent errors stop the retry schedule and surface a shop-safe message.
+ * Also enforces an overall processing deadline and respects the circuit breaker.
  */
 export async function runJob(
   data: MediaJobData,
   job: Job<MediaJobData>,
   deps: WorkerDeps = defaultWorkerDeps,
 ): Promise<void> {
-  logger.info({ jobId: job.id, kind: data.kind, shopId: data.shopId }, 'job started');
+  const jobLogger = logger.child({ jobId: job.id, kind: data.kind, shopId: data.shopId });
+  jobLogger.info('job started');
+
+  // Check circuit breaker before starting
+  if (!geminiCircuitBreaker.canExecute()) {
+    const status = geminiCircuitBreaker.getStatus();
+    jobLogger.warn({ circuitState: status.state, failureCount: status.failureCount }, 'circuit breaker open, failing fast');
+    throw new CircuitOpenError(env.CIRCUIT_BREAKER_RESET_MS);
+  }
+
+  // Overall deadline for the entire job (including retries within the job)
+  const deadline = Date.now() + env.RECEIPT_PROCESSING_TIMEOUT_MS;
+  const checkDeadline = () => {
+    if (Date.now() > deadline) {
+      throw new Error(`Job exceeded overall processing deadline of ${env.RECEIPT_PROCESSING_TIMEOUT_MS}ms`);
+    }
+  };
 
   try {
+    checkDeadline();
     switch (data.kind) {
       case 'receipt':
         await processReceipt(deps, data, job);
@@ -529,17 +623,30 @@ export async function runJob(
       default:
         throw new Error(`Unsupported job kind: ${String(data.kind)}`);
     }
+    // Record success for circuit breaker
+    geminiCircuitBreaker.recordSuccess();
   } catch (error) {
+    // Record failure for circuit breaker (but not for permanent errors or circuit open)
+    if (!(error instanceof CircuitOpenError) && !isPermanentError(error)) {
+      geminiCircuitBreaker.recordFailure();
+    }
+
     // Billing/auth/malformed-payload errors will not resolve on retry, so
     // drop them straight to failed instead of spending the backoff schedule.
     if (isPermanentError(error)) {
       await recordTerminalFailure(deps, data, error);
       throw new UnrecoverableError(publicFailureMessage(error));
     }
+
+    // Processing deadline exceeded - treat as permanent failure to avoid retries
+    if (error instanceof Error && error.message.includes('deadline exceeded')) {
+      await recordTerminalFailure(deps, data, error);
+      throw new UnrecoverableError(publicFailureMessage(error));
+    }
     throw error;
   }
 
-  logger.info({ jobId: job.id, kind: data.kind }, 'job completed');
+  jobLogger.info('job completed');
 }
 
 /**
@@ -561,6 +668,8 @@ function startWorker(): void {
   const worker = new Worker<MediaJobData>(QUEUE_NAME, (job) => runJob(job.data, job), {
     connection: createRedisConnection(),
     concurrency: env.RECEIPT_WORKER_CONCURRENCY,
+    /** Duration of the lock for the job in milliseconds. If the lock is lost, the job will be moved back to wait. */
+    lockDuration: env.JOB_LOCK_DURATION_MS,
   });
 
   worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
@@ -568,7 +677,7 @@ function startWorker(): void {
     logger.error({ jobId: job?.id, err: error }, 'job failed');
     // Covers transient errors that ran out of attempts, so the receipt row does
     // not stay on "processing" with no explanation.
-    if (job && error instanceof UnrecoverableError) return;
+    if (job && (error instanceof UnrecoverableError || error instanceof CircuitOpenError)) return;
     if (!job) return;
     void recordTerminalFailure(defaultWorkerDeps, job.data, error);
   });
