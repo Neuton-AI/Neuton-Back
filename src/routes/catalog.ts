@@ -128,6 +128,9 @@ async function costRecipe(
 
 export const catalogRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
+  const mutationGuards = {
+    preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
+  };
 
   app.get('/categories', guards, async (request) => {
     const shop = currentShop(request);
@@ -139,7 +142,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { categories: rows };
   });
 
-  app.post('/categories', guards, async (request, reply) => {
+  app.post('/categories', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const body = z.object({ name: z.string().trim().min(1).max(80) }).parse(request.body);
     const rows = await db
@@ -178,7 +181,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post('/recipes', guards, async (request, reply) => {
+  app.post('/recipes', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const body = recipeSchema.parse(request.body);
 
@@ -251,7 +254,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { recipe: { ...recipe, costing } };
   });
 
-  app.patch('/recipes/:id', guards, async (request) => {
+  app.patch('/recipes/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = recipePatchSchema.parse(request.body);
@@ -314,7 +317,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { recipe: updated[0] };
   });
 
-  app.delete('/recipes/:id', guards, async (request) => {
+  app.delete('/recipes/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await db
@@ -361,7 +364,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post('/inventory', guards, async (request, reply) => {
+  app.post('/inventory', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const body = inventorySchema.parse(request.body);
 
@@ -400,7 +403,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ item: rows[0] });
   });
 
-  app.patch('/inventory/:id', guards, async (request) => {
+  app.patch('/inventory/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = inventoryPatchSchema.parse(request.body);
@@ -447,7 +450,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { item: updated[0] };
   });
 
-  app.delete('/inventory/:id', guards, async (request) => {
+  app.delete('/inventory/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await db
@@ -495,7 +498,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /** Bulk stock adjustment used by the Inventory grid after manual counts. */
-  app.post('/inventory/adjust', guards, async (request) => {
+  app.post('/inventory/adjust', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const body = z
       .object({

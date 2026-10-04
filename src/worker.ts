@@ -142,7 +142,8 @@ export async function applyPurchase(
 
 async function updateReceiptProgress(
   deps: WorkerDeps,
-  data: MediaJobData,
+  shopId: string,
+  storagePath: string,
   stage: ReceiptProgressStage,
   message: string,
 ): Promise<void> {
@@ -153,7 +154,7 @@ async function updateReceiptProgress(
       progressMessage: message,
       updatedAt: new Date(),
     })
-    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+    .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, storagePath)));
 }
 
 function checkDeadline(deadline: Date | null): void {
@@ -167,6 +168,11 @@ export async function processReceipt(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process receipt without storagePath');
+  }
+
   const startedAt = new Date();
   const deadline = new Date(startedAt.getTime() + env.RECEIPT_PROCESSING_TIMEOUT_MS);
 
@@ -181,12 +187,12 @@ export async function processReceipt(
       processingDeadline: deadline,
       updatedAt: new Date(),
     })
-    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
 
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const bytes = await deps.getObjectBytes(storagePath);
   checkDeadline(deadline);
 
-  await updateReceiptProgress(deps, data, 'extracting', 'Extracting receipt data with AI');
+  await updateReceiptProgress(deps, data.shopId, storagePath, 'extracting', 'Extracting receipt data with AI');
   await job.updateProgress(10);
 
   const extraction = await deps.extractReceipt({
@@ -199,7 +205,7 @@ export async function processReceipt(
     throw new Error('Gemini returned no parsable receipt extraction');
   }
 
-  await updateReceiptProgress(deps, data, 'validating', 'Validating extracted data');
+  await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
   await job.updateProgress(30);
 
   const jobLogger = logger.child({ jobId: job.id, shopId: data.shopId });
@@ -209,7 +215,7 @@ export async function processReceipt(
       .select({ id: receipts.id })
       .from(receipts)
       .where(
-        and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)),
+        and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)),
       )
       .limit(1);
     const receiptId = receiptRows[0]?.id;
@@ -219,7 +225,7 @@ export async function processReceipt(
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data, 'validating', 'Clearing previous line items');
+    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Clearing previous line items');
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
@@ -230,7 +236,8 @@ export async function processReceipt(
       const progress = 40 + Math.floor((i / extraction.items.length) * 40);
       await updateReceiptProgress(
         deps,
-        data,
+        data.shopId,
+        storagePath,
         'applying',
         `Processing line item ${i + 1} of ${extraction.items.length}`,
       );
@@ -266,7 +273,7 @@ export async function processReceipt(
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data, 'applying', 'Finalizing receipt');
+    await updateReceiptProgress(deps, data.shopId, storagePath, 'applying', 'Finalizing receipt');
     await job.updateProgress(85);
 
     const derivedTotal =
@@ -304,7 +311,11 @@ export async function processRecipe(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process recipe without storagePath');
+  }
+  const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractRecipe({
     mimeType: data.contentType,
     data: toBase64(bytes),
@@ -401,7 +412,11 @@ export async function processOrderDocument(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process order document without storagePath');
+  }
+  const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractOrder({
     mimeType: data.contentType,
     data: toBase64(bytes),
@@ -540,6 +555,8 @@ export async function recordTerminalFailure(
   error: unknown,
 ): Promise<void> {
   if (data.kind !== 'receipt') return;
+  const storagePath = data.storagePath;
+  if (!storagePath) return;
 
   const message = publicFailureMessage(error);
   const isTimeout = error instanceof Error && error.message.includes('deadline exceeded');
@@ -553,7 +570,7 @@ export async function recordTerminalFailure(
         errorMessage: message.slice(0, 1000),
         updatedAt: new Date(),
       })
-      .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+      .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
   } catch (updateError) {
     logger.error(
       { err: updateError, jobShopId: data.shopId },

@@ -32,12 +32,15 @@ const presignSchema = z.object({
 
 export const receiptRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
+  const mutationGuards = {
+    preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
+  };
 
   /**
    * Step 1 of the ingestion pipeline: hand the client a short-lived presigned
    * R2 URL so the browser uploads directly, bypassing the API.
    */
-  app.post('/uploads/presign', guards, async (request, reply) => {
+  app.post('/uploads/presign', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
     const body = presignSchema.parse(request.body);
@@ -86,7 +89,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
    * Step 3: the client confirms the upload landed, and we enqueue the
    * Gemini Flash vision job. Safe to call only after a successful PUT.
    */
-  app.post('/uploads/complete', guards, async (request, reply) => {
+  app.post('/uploads/complete', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
     const body = z
@@ -215,7 +218,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /** Manual re-run for a receipt whose AI extraction failed. */
-  app.post('/receipts/:id/reprocess', guards, async (request, reply) => {
+  app.post('/receipts/:id/reprocess', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
@@ -239,6 +242,10 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         updatedAt: new Date(),
       })
       .where(eq(receipts.id, id));
+
+    if (!receipt.storagePath) {
+      throw new Error('Cannot reprocess receipt without storagePath');
+    }
 
     const enqueued = await enqueueMediaJob({
       shopId: shop.id,

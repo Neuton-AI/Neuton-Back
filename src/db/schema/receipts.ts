@@ -30,7 +30,7 @@ export const receipts = pgTable('receipts', {
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
   uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
-  storagePath: text('storage_path').notNull(),
+  storagePath: text('storage_path'),
   /** MIME type actually stored in R2; reprocessing must not guess this. */
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
