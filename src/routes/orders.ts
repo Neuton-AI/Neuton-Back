@@ -96,6 +96,9 @@ async function priceOrderItems(
 
 export const orderRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
+  const mutationGuards = {
+    preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
+  };
 
   app.get('/orders', guards, async (request) => {
     const shop = currentShop(request);
@@ -217,7 +220,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post('/orders', guards, async (request, reply) => {
+  app.post('/orders', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
     const body = createOrderSchema.parse(request.body);
@@ -294,7 +297,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ order: created, totals });
   });
 
-  app.delete('/orders/:id', guards, async (request) => {
+  app.delete('/orders/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     await db
