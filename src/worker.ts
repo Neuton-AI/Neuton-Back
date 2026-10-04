@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import pino from 'pino';
-import { and, eq, ilike } from 'drizzle-orm';
+import { and, eq, ilike, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -349,7 +349,7 @@ export async function processOrderDocument(
   const orderRows = await deps.db
     .select()
     .from(orders)
-    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId)))
+    .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId), isNull(orders.deletedAt)))
     .limit(1);
   const order = orderRows[0];
   if (!order) {
