@@ -143,7 +143,11 @@ export async function processReceipt(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process receipt without storagePath');
+  }
+  const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractReceipt({
     mimeType: data.contentType,
     data: toBase64(bytes),
@@ -160,7 +164,7 @@ export async function processReceipt(
       .select({ id: receipts.id })
       .from(receipts)
       .where(
-        and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)),
+        and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)),
       )
       .limit(1);
     const receiptId = receiptRows[0]?.id;
@@ -234,7 +238,11 @@ export async function processRecipe(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process recipe without storagePath');
+  }
+  const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractRecipe({
     mimeType: data.contentType,
     data: toBase64(bytes),
@@ -331,7 +339,11 @@ export async function processOrderDocument(
   data: MediaJobData,
   job: Job<MediaJobData>,
 ) {
-  const bytes = await deps.getObjectBytes(data.storagePath);
+  const storagePath = data.storagePath;
+  if (!storagePath) {
+    throw new Error('Cannot process order document without storagePath');
+  }
+  const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractOrder({
     mimeType: data.contentType,
     data: toBase64(bytes),
@@ -470,6 +482,8 @@ export async function recordTerminalFailure(
   error: unknown,
 ): Promise<void> {
   if (data.kind !== 'receipt') return;
+  const storagePath = data.storagePath;
+  if (!storagePath) return;
 
   const message = publicFailureMessage(error);
   try {
@@ -480,7 +494,7 @@ export async function recordTerminalFailure(
         errorMessage: message.slice(0, 1000),
         updatedAt: new Date(),
       })
-      .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, data.storagePath)));
+      .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
   } catch (updateError) {
     logger.error(
       { err: updateError, jobShopId: data.shopId },

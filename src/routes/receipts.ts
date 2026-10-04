@@ -226,6 +226,10 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       .set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
       .where(eq(receipts.id, id));
 
+    if (!receipt.storagePath) {
+      throw new Error('Cannot reprocess receipt without storagePath');
+    }
+
     const enqueued = await enqueueMediaJob({
       shopId: shop.id,
       uploadedBy: currentUser(request).id,

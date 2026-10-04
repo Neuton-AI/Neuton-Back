@@ -35,7 +35,7 @@ interface Harness {
   job: Job<MediaJobData>;
   jobData: MediaJobData;
   /** Records the storage key and payload the handler handed to the extractors. */
-  extracted: { storagePath: string; mimeType: string; data: string }[];
+  extracted: { storagePath: string | null; mimeType: string; data: string }[];
 }
 
 function harness(options: {
@@ -367,6 +367,18 @@ test('receipt: an unusable model response fails the job', async () => {
   await assert.rejects(
     () => processReceipt(deps, jobData, job),
     /Gemini returned no parsable receipt extraction/,
+  );
+});
+
+test('receipt: throws when storagePath is missing', async () => {
+  const { deps, job, jobData } = harness({
+    data: { storagePath: null },
+    extractions: { receipt: receipt() },
+  });
+
+  await assert.rejects(
+    () => processReceipt(deps, jobData, job),
+    /Cannot process receipt without storagePath/,
   );
 });
 

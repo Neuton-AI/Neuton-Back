@@ -23,7 +23,7 @@ export interface MediaJobData {
   shopId: string;
   uploadedBy: string | null;
   kind: MediaKind;
-  storagePath: string;
+  storagePath: string | null;
   contentType: string;
   originalFilename: string | null;
   /** Present for `kind === 'order'`: the order row being auto-filled. */
