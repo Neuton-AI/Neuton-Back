@@ -15,6 +15,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { FakeDb, type FakeResponses } from './support/fakeDb.js';
 import { buildAnalyticsApp, NOW, SHOP_ID } from './support/testApp.js';
 import {
@@ -22,6 +23,8 @@ import {
   netProfitOf,
   periodStart,
   previousPeriodStart,
+  receiptSpendDay,
+  spentSince,
   trendPercent,
 } from '../src/routes/analytics.js';
 
@@ -74,6 +77,88 @@ test('netProfitOf deducts delivery, production cost and recorded expenses', () =
   assert.equal(netProfitOf(300, 20, 120, 45), 115);
   assert.equal(netProfitOf(100, 0, 0, 0), 100);
   assert.equal(netProfitOf(0, 5, 10, 1), -16, 'a loss stays negative');
+});
+
+/* ------------------------------------------------- undated receipts (N-7) */
+
+test('spentSince books undated spend instead of filtering it out', () => {
+  const dialect = new PgDialect();
+  const start = new Date('2026-05-17T00:00:00.000Z');
+  const before = new Date('2026-06-16T00:00:00.000Z');
+
+  const open = dialect.sqlToQuery(spentSince(start)).sql;
+  assert.match(
+    open,
+    /coalesce\("receipts"\."receipt_date", \("receipts"\."created_at" at time zone 'UTC'\)::date\) >= \$1/,
+    `unexpected window predicate: ${open}`,
+  );
+  assert.doesNotMatch(open, /is not null/i, 'a null date must never be filtered out again');
+
+  const bounded = dialect.sqlToQuery(spentSince(start, before)).sql;
+  assert.match(bounded, />= \$1 and .+ < \$2/);
+  assert.equal(dialect.sqlToQuery(spentSince(start, before)).params.length, 2);
+  assert.match(dialect.sqlToQuery(receiptSpendDay).sql, /coalesce\("receipts"\."receipt_date"/);
+});
+
+test('dashboard: undated spend still reduces profit and is counted', async () => {
+  const h = await harness({
+    'select:orders': [
+      // current window totals, comparison window totals, per-order profit sample, graph series
+      [{ revenue: '500.00', cost: '200.00', delivery: '20.00', count: 1 }],
+      [{ revenue: '0', cost: '0', delivery: '0' }],
+      [{ netProfit: '280.00' }],
+      [{ day: '2026-06-10', revenue: '500.00', delivery: '20.00', cost: '200.00' }],
+    ],
+    // 100 dated + 250 undated, all completed, all inside the window.
+    'select:receipts': [
+      [{ expenses: '350.00', undatedCount: 1, undatedAmount: '250.00' }],
+      [{ expenses: '0', undatedCount: 0, undatedAmount: '0' }],
+      [{ day: '2026-06-10', total: '100.00' }, { day: '2026-06-12', total: '250.00' }],
+    ],
+  });
+
+  try {
+    const { status, body } = await h.get('/api/v1/analytics/dashboard');
+    assert.equal(status, 200);
+
+    assert.equal(body.summary.expenses, 350, 'the undated receipt is inside the total');
+    assert.equal(body.summary.netProfit, -70, 'and it still reduces net profit');
+    assert.deepEqual(
+      body.summary.undatedExpenses,
+      { count: 1, amount: 250 },
+      'and the dashboard can say how much of the total had no date',
+    );
+
+    assert.deepEqual(body.graph, [
+      { date: '2026-06-10', revenue: 500, expenses: 100, netProfit: 180 },
+      // The upload day of the undated receipt, a day with no sales at all.
+      { date: '2026-06-12', revenue: 0, expenses: 250, netProfit: -250 },
+    ]);
+    assert.equal(
+      body.graph.reduce((sum: number, day: any) => sum + day.expenses, 0),
+      body.summary.expenses,
+      'the series accounts for exactly the reported expenses',
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('dashboard: a missing undated counter reads as zero rather than undefined', async () => {
+  const h = await harness({
+    'select:receipts': [
+      [{ expenses: '45.00' }],
+      [{ expenses: '30.00' }],
+      [{ day: '2026-06-10', total: '45.00' }],
+    ],
+  });
+
+  try {
+    const { body } = await h.get('/api/v1/analytics/dashboard');
+    assert.deepEqual(body.summary.undatedExpenses, { count: 0, amount: 0 });
+  } finally {
+    await h.close();
+  }
 });
 
 /* ---------------------------------------------------------------- dashboard */
@@ -133,13 +218,16 @@ test('dashboard: totals, trends, graph, top item, order stats and low stock', as
       netProfit: 115,
       orderCount: 3,
       profitMarginPercent: 38.3,
+      undatedExpenses: { count: 0, amount: 0 },
     });
 
     assert.deepEqual(body.trend, { revenuePercent: 50, profitPercent: 64.3, expensesPercent: 50 });
 
     assert.deepEqual(body.graph, [
       { date: '2026-06-10', revenue: 150, expenses: 25, netProfit: 55 },
-      // 2026-06-12 has an expense row but no sales, so it never reaches the graph.
+      // 2026-06-12 has spend but no sales: it still moves net profit, so it is
+      // still a point on the graph rather than a hole in the series.
+      { date: '2026-06-12', revenue: 0, expenses: 20, netProfit: -20 },
       { date: '2026-06-14', revenue: 150, expenses: 0, netProfit: 80 },
     ]);
 
@@ -177,6 +265,7 @@ test('dashboard: a shop with no activity reports zeroes, not nulls', async () =>
       netProfit: 0,
       orderCount: 0,
       profitMarginPercent: 0,
+      undatedExpenses: { count: 0, amount: 0 },
     });
     assert.deepEqual(body.trend, { revenuePercent: 0, profitPercent: 0, expensesPercent: 0 });
     assert.deepEqual(body.graph, []);

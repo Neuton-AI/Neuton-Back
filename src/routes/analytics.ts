@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
 import {
@@ -65,6 +65,34 @@ export function netProfitOf(revenue: number, delivery: number, cost: number, exp
   return revenue - delivery - cost - expenses;
 }
 
+/**
+ * The day a receipt's spend is booked against.
+ *
+ * `receipt_date` is nullable — the vision model often cannot read a date off the
+ * document — and a window filter of `receipt_date >= $from` then drops the row
+ * silently, because `null >= $from` is null rather than true. Undated spend is
+ * booked on the day the shop recorded the receipt instead: deterministic, inside a
+ * real window, and still counted against net profit.
+ */
+export const receiptSpendDay = sql`coalesce(${receipts.receiptDate}, (${receipts.createdAt} at time zone 'UTC')::date)`;
+
+/**
+ * Window filter for receipt spend. Never mention `receipt_date is not null`: an
+ * undated receipt belongs in the totals, not in a bucket nobody can see.
+ */
+export function spentSince(start: Date, before?: Date): SQL {
+  return before === undefined
+    ? sql`${receiptSpendDay} >= ${start}`
+    : sql`${receiptSpendDay} >= ${start} and ${receiptSpendDay} < ${before}`;
+}
+
+/** Expense total for a window, plus how much of it had no date on the receipt. */
+const expenseTotalsFields = {
+  expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
+  undatedCount: sql<number>`count(*) filter (where ${receipts.receiptDate} is null)::int`,
+  undatedAmount: sql<string>`coalesce(sum(${receipts.totalAmount}) filter (where ${receipts.receiptDate} is null),0)`,
+};
+
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
 
@@ -92,13 +120,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .from(orders)
           .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`)),
         deps.db
-          .select({ expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)` })
+          .select(expenseTotalsFields)
           .from(receipts)
           .where(
             and(
               eq(receipts.shopId, shop.id),
               eq(receipts.status, 'completed'),
-              sql`${receipts.receiptDate} is not null and ${receipts.receiptDate} >= ${start}`,
+              spentSince(start),
             ),
           ),
         deps.db
@@ -117,14 +145,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             ),
           ),
         deps.db
-          .select({ expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)` })
+          .select(expenseTotalsFields)
           .from(receipts)
           .where(
             and(
               eq(receipts.shopId, shop.id),
               eq(receipts.status, 'completed'),
-              sql`${receipts.receiptDate} is not null and ${receipts.receiptDate} >= ${previousStart}`,
-              sql`${receipts.receiptDate} < ${start}`,
+              spentSince(previousStart, start),
             ),
           ),
       ]);
@@ -162,6 +189,15 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         netProfit,
         orderCount: orderTotals[0]?.count ?? 0,
         profitMarginPercent: revenue > 0 ? Math.round((netProfit / revenue) * 1000) / 10 : 0,
+        /**
+         * Spend that is inside the totals above but had no date on the document,
+         * so it was booked on its upload day. Surfaced so the UI can say so
+         * instead of the total quietly disagreeing with the receipts list.
+         */
+        undatedExpenses: {
+          count: expenseTotals[0]?.undatedCount ?? 0,
+          amount: toNumber(expenseTotals[0]?.undatedAmount),
+        },
       },
       trend: {
         revenuePercent: trendPercent(revenue, previousRevenue),
@@ -313,32 +349,39 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
 
   const expenses = await deps.db
     .select({
-      day: sql<string>`to_char(${receipts.receiptDate}, 'YYYY-MM-DD')`,
+      day: sql<string>`to_char(${receiptSpendDay}, 'YYYY-MM-DD')`,
       total: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
     })
     .from(receipts)
-    .where(
-      and(
-        eq(receipts.shopId, shopId),
-        eq(receipts.status, 'completed'),
-        sql`${receipts.receiptDate} is not null and ${receipts.receiptDate} >= ${start}`,
-      ),
-    )
-    .groupBy(receipts.receiptDate)
-    .orderBy(receipts.receiptDate);
+    .where(and(eq(receipts.shopId, shopId), eq(receipts.status, 'completed'), spentSince(start)))
+    .groupBy(receiptSpendDay)
+    .orderBy(receiptSpendDay);
 
-  const expenseByDay = new Map(expenses.map((row) => [row.day, toNumber(row.total)]));
+  /**
+   * Every day with money in it, not only the days with sales: an expense day with
+   * no orders — including the upload day of an undated receipt — still moves net
+   * profit, so dropping it would leave the series short of `summary.expenses`.
+   */
+  const byDay = new Map<string, { revenue: number; delivery: number; cost: number; expenses: number }>();
+  for (const row of rows) {
+    byDay.set(row.day, {
+      revenue: toNumber(row.revenue),
+      delivery: toNumber(row.delivery),
+      cost: toNumber(row.cost),
+      expenses: 0,
+    });
+  }
+  for (const row of expenses) {
+    const day = byDay.get(row.day) ?? { revenue: 0, delivery: 0, cost: 0, expenses: 0 };
+    byDay.set(row.day, { ...day, expenses: day.expenses + toNumber(row.total) });
+  }
 
-  return rows.map((row) => {
-    const revenue = toNumber(row.revenue);
-    const delivery = toNumber(row.delivery);
-    const cost = toNumber(row.cost);
-    const dayExpense = expenseByDay.get(row.day) ?? 0;
-    return {
-      date: row.day,
-      revenue,
-      expenses: dayExpense,
-      netProfit: Math.round(netProfitOf(revenue, delivery, cost, dayExpense) * 100) / 100,
-    };
-  });
+  return [...byDay.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([date, day]) => ({
+      date,
+      revenue: day.revenue,
+      expenses: day.expenses,
+      netProfit: Math.round(netProfitOf(day.revenue, day.delivery, day.cost, day.expenses) * 100) / 100,
+    }));
 }
