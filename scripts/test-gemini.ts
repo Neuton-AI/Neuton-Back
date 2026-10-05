@@ -1,5 +1,6 @@
 import { extractReceipt } from '../src/lib/gemini.js';
 import { httpStatus, isPermanentError } from '../src/lib/jobErrors.js';
+import { DEFAULT_JOB_OPTIONS } from '../src/lib/queue.js';
 
 /**
  * Integration smoke test for the vision call. One call to `extractReceipt` is
@@ -19,9 +20,16 @@ const RECEIPT_PNG = Buffer.from(
   'base64',
 );
 
-/** BullMQ's schedule in `src/lib/queue.ts`: attempts: 4, exponential from 5s. */
-const JOB_ATTEMPTS = 4;
-const JOB_BACKOFF_BASE_MS = 5_000;
+/**
+ * Read from `DEFAULT_JOB_OPTIONS` rather than restated here: this script exists
+ * to mirror the real job schedule, so a copy of the numbers would drift the
+ * moment the queue changes and would keep passing while lying.
+ */
+const JOB_ATTEMPTS = DEFAULT_JOB_OPTIONS.attempts ?? 1;
+const JOB_BACKOFF_BASE_MS =
+  typeof DEFAULT_JOB_OPTIONS.backoff === 'object'
+    ? (DEFAULT_JOB_OPTIONS.backoff?.delay ?? 0)
+    : 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

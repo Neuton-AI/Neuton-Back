@@ -12,6 +12,12 @@ import { isPermanentError } from '../src/lib/jobErrors.js';
  * this proves the three external services work, not that auth works.
  */
 
+/**
+ * This is the *script's* retry around its own R2/Gemini/Redis calls, not the
+ * BullMQ job schedule — `DEFAULT_JOB_OPTIONS` governs jobs, not this harness.
+ * Deliberately independent so a transient R2 error here cannot be masked by, or
+ * mask, the job budget. Asserted separately against a real enqueued job below.
+ */
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 5_000;
 
