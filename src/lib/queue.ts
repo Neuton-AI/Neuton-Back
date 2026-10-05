@@ -30,9 +30,9 @@ export interface MediaJobData {
   orderId?: string;
 }
 
-const defaultJobOptions: JobsOptions = {
-  attempts: 4,
-  backoff: { type: 'exponential', delay: 5_000 },
+export const DEFAULT_JOB_OPTIONS: JobsOptions = {
+  attempts: 2,
+  backoff: { type: 'exponential', delay: 3_000 },
   removeOnComplete: { age: 60 * 60 * 24, count: 1_000 },
   removeOnFail: { age: 60 * 60 * 24 * 7 },
 };
@@ -44,7 +44,7 @@ export function getMediaQueue(): Queue<MediaJobData> {
   if (!queue) {
     queue = new Queue<MediaJobData>(QUEUE_NAME, {
       connection: createRedisConnection(),
-      defaultJobOptions: defaultJobOptions,
+      defaultJobOptions: DEFAULT_JOB_OPTIONS,
     });
   }
   return queue;
