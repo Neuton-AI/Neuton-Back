@@ -18,7 +18,7 @@ export function httpStatus(error: unknown): number | null {
 /**
  * Google answers a retired or misspelt model with 400 or 404 ("models/x is not
  * found for API version v1beta"). That is permanent for *that model* but not
- * for the ladder, so it must rotate instead of ending the job.
+ * for the list, so it must advance instead of ending the job.
  */
 export function isUnknownModelError(error: unknown): boolean {
   const status = httpStatus(error);
@@ -60,7 +60,7 @@ export function publicFailureMessage(error: unknown): string {
   if (status === 413) {
     return 'The uploaded document is too large for the vision service.';
   }
-  // Every model in the ladder was out of capacity. Plain language only: the raw
+  // Every model in the list was out of capacity. Plain language only: the raw
   // payload names the project and leaks upstream internals.
   if (status !== null && status >= 500) {
     return 'The AI vision service is busy right now and every model was out of capacity. Reprocess in a few minutes.';

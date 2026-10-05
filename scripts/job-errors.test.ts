@@ -46,9 +46,9 @@ test('recognises missing R2 object', () => {
   assert.equal(publicFailureMessage(new Error('NoSuchKey: nope')), 'The uploaded document is no longer in storage.');
 });
 
-test('a retired model rotates instead of ending the ladder', () => {
+test('a retired model advances instead of ending the job', () => {
   // Google answers a retired model with 400 or 404 "not found". Permanent for
-  // that model, but the next one may be healthy, so the ladder must continue.
+  // that model, but the next one may be healthy, so the walk must continue.
   const notFound400 = Object.assign(
     new Error('models/gemini-1.5-flash-8b is not found for API version v1beta, or is not supported for predict.'),
     { status: 400 },
