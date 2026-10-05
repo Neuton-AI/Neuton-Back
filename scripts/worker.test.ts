@@ -805,7 +805,7 @@ test('runJob: a transient failure is rethrown untouched and records nothing', as
   assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'failed').length, 0);
 });
 
-test('runJob: a model-not-found 404 rotates the ladder instead of killing the job', async () => {
+test('runJob: a model-not-found 404 advances to the next model instead of killing the job', async () => {
   const error = Object.assign(new Error('models/x is not found for API version v1beta'), { status: 404 });
   const { db, deps, job, jobData } = harness();
   deps.extractReceipt = async () => {
