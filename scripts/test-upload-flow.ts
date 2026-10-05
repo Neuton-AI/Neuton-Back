@@ -117,7 +117,15 @@ async function main() {
   const job = await getMediaQueue().getJob(queued.jobId!);
   if (!job) throw new Error(`job ${queued.jobId} is not retrievable from Redis`);
   const state = await job.getState();
-  console.log(`ok   job ${job.id} name="${job.name}" state="${state}" waiting=${job.opts.attempts ?? 1} attempt(s)`);
+  const attempts = job.opts.attempts ?? 1;
+  if (attempts !== 2) {
+    throw new Error(`enqueued job carries opts.attempts=${attempts}, expected 2`);
+  }
+  const backoffDelay = typeof job.opts.backoff === 'object' ? job.opts.backoff?.delay : undefined;
+  if (backoffDelay !== 3_000) {
+    throw new Error(`enqueued job carries backoff.delay=${String(backoffDelay)}, expected 3000`);
+  }
+  console.log(`ok   job ${job.id} name="${job.name}" state="${state}" attempts=${attempts} backoff=${String(backoffDelay)}ms`);
 
   await job.remove();
   console.log(`ok   job removed (bucket "${QUEUE_NAME}" otherwise clean)`);
