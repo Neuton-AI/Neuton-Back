@@ -1,12 +1,13 @@
 import { GoogleGenAI, type Part } from '@google/genai';
 import pino from 'pino';
 import { env, isDevelopment } from '../env.js';
-import { httpStatus, isPermanentError, isUnknownModelError } from './jobErrors.js';
-import { ModelLadder, type FlagReason } from './modelLadder.js';
+import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import type { MediaKind } from './queue.js';
 
 const logger = pino({
-  level: env.NODE_ENV === 'production' ? 'info' : 'debug',
+  // Silent in tests: the model walk warns once per failure, which would bury
+  // the assertion output. Same reason worker.ts silences itself under NODE_ENV=test.
+  level: env.NODE_ENV === 'test' ? 'silent' : env.NODE_ENV === 'production' ? 'info' : 'debug',
   // pino-pretty logs through a worker thread, so it is limited to development;
   // tests and CI use plain JSON and the process is free to exit.
   ...(isDevelopment ? { transport: { target: 'pino-pretty', options: { colorize: true } } } : {}),
@@ -27,12 +28,12 @@ function createGeminiTimeout(): Promise<never> {
 }
 
 /**
- * Vision models to draw from. Google serves each model from its own capacity
- * pool, so a 503 on one frequently succeeds on another — that rotation is the
- * whole point. Selection is random rather than in-order: every worker walking
- * the same order in lockstep rediscovers the same outage in the same sequence,
- * which keeps a just-recovered model saturated.
- * Configurable via GEMINI_MODELS so the pool can be retuned without a redeploy.
+ * Vision models in fallback order. Google serves each model from its own
+ * capacity pool, so a 503 on one frequently succeeds on another — that rotation
+ * is the whole point. The walk is strictly in declared order: on failure the
+ * next model is tried immediately, and the job-level retry budget belongs to
+ * BullMQ, not to this loop.
+ * Configurable via GEMINI_MODELS so the list can be retuned without a redeploy.
  */
 const MODELS = env.GEMINI_MODELS.split(',')
   .map((m) => m.trim())
@@ -41,16 +42,6 @@ const MODELS = env.GEMINI_MODELS.split(',')
 if (MODELS.length === 0) {
   throw new Error('GEMINI_MODELS resolved to an empty model list');
 }
-
-/**
- * Shared across every job in this process. A model one job found at capacity is
- * very likely still at capacity for the next few seconds, and a per-call
- * selection would make each job pay to rediscover that.
- */
-const ladder = new ModelLadder({
-  models: MODELS,
-  flagTtlMs: env.GEMINI_MODEL_FLAG_TTL_MS,
-});
 
 export interface ExtractedLineItem {
   rawName: string;
@@ -218,122 +209,80 @@ class UnusableResponseError extends Error {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Classifies a failure as the model's fault, so only those sideline a model.
- */
-function shouldFlagModel(error: unknown): FlagReason | null {
-  if (error instanceof UnusableResponseError) return 'unusable-response';
-  if (isUnknownModelError(error)) return 'unknown-model';
-  const status = httpStatus(error);
-  // 429 and 5xx are the model's own capacity. Anything else (timeout, socket
-  // reset, DNS) is the path, not the model: flagging on those would sideline
-  // the entire pool during a network blip.
-  if (status === 429) return 'rate-limited';
-  if (status !== null && status >= 500) return 'unavailable';
-  return null;
-}
-
-/**
- * Exponential backoff with full jitter. Jitter matters here: several workers
- * hit a capacity wall at the same moment, and without it they resync on every
- * retry and stampede the model that just recovered.
- */
-function backoffDelay(attempt: number): number {
-  const ceiling = Math.min(
-    env.GEMINI_RETRY_BASE_DELAY_MS * 2 ** attempt,
-    env.GEMINI_RETRY_MAX_DELAY_MS,
-  );
-  return Math.round(ceiling * (0.5 + Math.random() * 0.5));
-}
-
-/**
- * Picks models at random from the ones not recently sidelined, flagging each
- * model whose failure was its own doing. The flag memory is shared across jobs
- * on purpose: one worker discovering that a model is at capacity should spare
- * every other worker from rediscovering it.
+ * Walks `models` in declared order, first to last, advancing to the next model
+ * on every non-permanent failure. There is no randomness, no shared memory of
+ * which models recently failed, and no sleep between models: a model that just
+ * 429'd hands over to the next one immediately.
  *
- * Returns null only when models answered but produced nothing usable, which
- * preserves the caller's existing contract.
+ * Exhaustion always throws. The retry budget belongs to BullMQ, so the throw
+ * ends this attempt and the next job attempt restarts the walk from the first
+ * model.
+ *
+ * `call` is injected so the policy is unit-testable without a Gemini key or a
+ * network, which is why this lives beside the client rather than around it.
  */
-async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> {
-  const { instruction, schema } = PROMPTS[kind];
-  const attemptedModels = new Set<string>();
-  const unusableModels = new Set<string>();
+export async function walkModels<T>(
+  models: readonly string[],
+  call: (model: string) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+  // A walk where *every* model answered "not found" never got a single usable
+  // response, so the list itself is misconfigured rather than the parse failing.
+  let everyFailureWasUnknownModel = true;
 
-  for (let attempt = 0; attempt < env.GEMINI_MAX_ATTEMPTS; attempt++) {
-    const model = ladder.pick();
-    attemptedModels.add(model);
-
+  for (const model of models) {
     try {
-      const response = await Promise.race([
-        client.models.generateContent({
-          model,
-          contents: [{ role: 'user', parts: [part, { text: instruction }] }],
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
-            temperature: 0.1,
-          },
-        }),
-        createGeminiTimeout(),
-      ]);
-
-      const text = response.text;
-      if (!text) throw new UnusableResponseError(model, 'returned no text');
-      return parseJson<T>(text);
+      return await call(model);
     } catch (error) {
-      const unusable = error instanceof UnusableResponseError || isUnknownModelError(error);
-      // Auth, billing, malformed requests and oversize payloads will fail
-      // identically on every model, so they end the job immediately.
-      const fatal = isPermanentError(error) && !unusable;
-      const exhausted = attempt === env.GEMINI_MAX_ATTEMPTS - 1;
-
-      // Sidelining happens on every model-attributable failure, including the
-      // last one: another job should not walk into the same dead model.
-      const reason = shouldFlagModel(error);
-      if (reason) ladder.flag(model, reason);
-
+      // Auth, billing, malformed requests and oversize payloads fail
+      // identically on every model, so they end the job immediately instead of
+      // burning the rest of the list.
+      const fatal = isPermanentError(error);
       if (fatal) throw error;
 
-      if (exhausted) {
-        // Every attempt failed and the cause was an unusable model. If they
-        // were all *unknown* models, the ladder never got a single usable
-        // response, so say that instead of blaming the parse.
-        if (unusable) {
-          if (unusableModels.size === attemptedModels.size) {
-            throw new Error(
-              `No available vision model. Tried and rejected as unavailable: ${[...attemptedModels].join(', ')}. Update GEMINI_MODELS.`,
-            );
-          }
-          return null;
-        }
-        throw error;
-      }
+      lastError = error;
+      if (!isUnknownModelError(error)) everyFailureWasUnknownModel = false;
 
-      if (unusable) unusableModels.add(model);
-
-      logger.warn(
-        {
-          model,
-          attempt: attempt + 1,
-          maxAttempts: env.GEMINI_MAX_ATTEMPTS,
-          flagged: reason,
-          nextPick: 'random from unflagged',
-          err: error,
-        },
-        reason
-          ? 'gemini model sidelined, picking another'
-          : 'gemini call failed, retrying another model',
-      );
-      await sleep(backoffDelay(attempt));
+      logger.warn({ model, err: error }, 'gemini model failed, trying the next model');
     }
   }
 
-  return null;
+  if (everyFailureWasUnknownModel) {
+    // Plain language: the raw upstream payload names the project and leaks
+    // account internals, and the actionable part is the list, not the parse.
+    throw new Error(
+      `No available vision model. Tried and rejected as unavailable: ${[...models].join(', ')}. Update GEMINI_MODELS.`,
+    );
+  }
+  throw lastError;
+}
+
+/**
+ * Calls one model with the shared structured-extraction contract, or throws:
+ * an unusable answer is just another reason to advance to the next model.
+ */
+async function runStructured<T>(kind: MediaKind, part: Part): Promise<T> {
+  const { instruction, schema } = PROMPTS[kind];
+
+  return walkModels(MODELS, async (model) => {
+    const response = await Promise.race([
+      client.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
+          temperature: 0.1,
+        },
+      }),
+      createGeminiTimeout(),
+    ]);
+
+    const text = response.text;
+    if (!text) throw new UnusableResponseError(model, 'returned no text');
+    return parseJson<T>(text);
+  });
 }
 
 export async function extractReceipt(
@@ -342,7 +291,6 @@ export async function extractReceipt(
   const raw = await runStructured<Record<string, unknown>>('receipt', {
     inlineData,
   });
-  if (!raw) return null;
 
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {
@@ -369,7 +317,6 @@ export async function extractRecipe(
   inlineData: { mimeType: string; data: string },
 ): Promise<RecipeExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData });
-  if (!raw) return null;
 
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
@@ -397,7 +344,6 @@ export async function extractOrder(
   inlineData: { mimeType: string; data: string },
 ): Promise<OrderExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('order', { inlineData });
-  if (!raw) return null;
 
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {

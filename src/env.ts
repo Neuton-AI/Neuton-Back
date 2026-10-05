@@ -28,8 +28,8 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
 
   /**
-   * Vision models tried in order when one is out of capacity. Comma separated;
-   * the first is the default and each retry rotates to the next.
+   * Vision models in fallback order. Comma separated; the first is the default
+   * and each failure advances to the next one.
    */
   GEMINI_MODELS: z
     .string()
@@ -45,19 +45,6 @@ const envSchema = z.object({
         'gemma-4-26b-a4b-it',
       ].join(','),
     ),
-  /**
-   * Distinct models tried per job attempt. Each failure sidelines that model,
-   * so these are picks from the un-flagged remainder rather than repeats.
-   */
-  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(3),
-  /** Backoff before the first retry, in ms. Doubles up to GEMINI_RETRY_MAX_DELAY_MS. */
-  GEMINI_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1000),
-  GEMINI_RETRY_MAX_DELAY_MS: z.coerce.number().int().min(0).default(10_000),
-  /**
-   * How long a model that just failed is sidelined, in ms. Must exceed the
-   * Gemini capacity blip being waited out, or every pick is a re-pick.
-   */
-  GEMINI_MODEL_FLAG_TTL_MS: z.coerce.number().int().min(1_000).default(120_000),
 
   /** Origins allowed to call the API with credentials. Comma separated. */
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
