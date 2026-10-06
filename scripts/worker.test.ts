@@ -673,8 +673,18 @@ test('terminal failure: the stored message is capped so it always fits the colum
   assert.match(stored, /\.\.\.$/);
 });
 
-test('terminal failure: a recipe or order job never touches a receipt row', async () => {
+test('terminal failure: a recipe job records failure on the recipe row', async () => {
   const { db, deps, jobData } = harness({ data: { kind: 'recipe' } });
+
+  await recordTerminalFailure(deps, jobData, new Error('boom'));
+
+  // Should update recipes table to status='failed'
+  const call = db.onlyCallTo('update', 'recipes');
+  assert.equal((call.set as Record<string, unknown>).status, 'failed');
+});
+
+test('terminal failure: an order job still touches no row (orders have no status workflow)', async () => {
+  const { db, deps, jobData } = harness({ data: { kind: 'order' } });
 
   await recordTerminalFailure(deps, jobData, new Error('boom'));
 
@@ -777,12 +787,14 @@ test('runJob: a model-not-found 404 advances to the next model instead of killin
   assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'failed').length, 0);
 });
 
-test('runJob: a permanent failure on a non-receipt job records no receipt', async () => {
-  const { db, deps, job, jobData } = harness({ data: { kind: 'recipe' } });
-  deps.extractRecipe = async () => {
-    throw Object.assign(new Error('unauthorized'), { status: 401 });
-  };
+test('runJob: a permanent failure on a recipe job records failure on the recipe row', async () => {
+    const { db, deps, job, jobData } = harness({ data: { kind: 'recipe' } });
+    deps.extractRecipe = async () => {
+      throw Object.assign(new Error('unauthorized'), { status: 401 });
+    };
 
-  await assert.rejects(() => runJob(jobData, job, deps), UnrecoverableError);
-  assert.equal(db.calls.length, 0);
-});
+    await assert.rejects(() => runJob(jobData, job, deps), UnrecoverableError);
+    // recordTerminalFailure is called and updates recipes table
+    assert.equal(db.callsTo('update', 'recipes').length, 1);
+    assert.equal((db.onlyCallTo('update', 'recipes').set as Record<string, unknown>).status, 'failed');
+  });

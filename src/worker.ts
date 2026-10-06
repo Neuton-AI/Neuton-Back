@@ -246,6 +246,22 @@ export async function processRecipe(
   if (!storagePath) {
     throw new Error('Cannot process recipe without storagePath');
   }
+
+  // Claim the row by (shopId, storagePath) and set to 'processing'
+  const claimRows = await deps.db
+    .select({ id: recipes.id })
+    .from(recipes)
+    .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)))
+    .limit(1);
+  const existingRecipe = claimRows[0];
+
+  if (existingRecipe) {
+    await deps.db
+      .update(recipes)
+      .set({ status: 'processing', updatedAt: new Date() })
+      .where(eq(recipes.id, existingRecipe.id));
+  }
+
   const bytes = await deps.getObjectBytes(storagePath);
   const extraction = await deps.extractRecipe({
     mimeType: data.contentType,
@@ -288,54 +304,108 @@ export async function processRecipe(
     if (inventoryItemId) linkedIngredientIds.set(ingredient.rawName, inventoryItemId);
   }
 
-  const costed = await deps.db.transaction(async (tx) => {
-    const inserted = await tx
-      .insert(recipes)
-      .values({
-        shopId: data.shopId,
+  if (existingRecipe) {
+    // Update existing row: replace extracted fields + ingredients + set unverified
+    await deps.db.transaction(async (tx) => {
+      await tx
+        .update(recipes)
+        .set({
+          name: safeName,
+          description,
+          prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
+          yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
+          yieldUnit: yieldUnit ?? 'portion',
+          allergens,
+          instructions,
+          status: 'unverified',
+          updatedAt: new Date(),
+        })
+        .where(eq(recipes.id, existingRecipe.id));
+
+      // Replace ingredients
+      await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, existingRecipe.id));
+
+      const bill = extraction.ingredients
+        .map((ingredient) => {
+          const inventoryItemId = linkedIngredientIds.get(ingredient.rawName);
+          if (!inventoryItemId || !ingredient.quantity) return null;
+          return {
+            shopId: data.shopId,
+            recipeId: existingRecipe.id,
+            inventoryItemId,
+            quantity: qty(ingredient.quantity),
+            unit: ingredient.unit ?? 'unit',
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+
+      if (bill.length > 0) {
+        await tx.insert(recipeIngredients).values(bill);
+      }
+    });
+
+    logger.info(
+      {
+        jobId: job.id,
+        recipeId: existingRecipe.id,
         name: safeName,
-        description,
-        prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
-        yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
-        yieldUnit: yieldUnit ?? 'portion',
-        allergens,
-        instructions,
-      })
-      .returning();
-
-    const recipe = inserted[0];
-    if (!recipe) throw new Error('recipe insert returned no row');
-
-    const bill = extraction.ingredients
-      .map((ingredient) => {
-        const inventoryItemId = linkedIngredientIds.get(ingredient.rawName);
-        if (!inventoryItemId || !ingredient.quantity) return null;
-        return {
+        hourlyLaborCost: shop?.hourlyLaborCost,
+      },
+      'recipe extracted and set to unverified',
+    );
+  } else {
+    // Legacy fallback: no row exists, insert directly as 'unverified' with storagePath
+    const inserted = await deps.db.transaction(async (tx) => {
+      const newRecipe = await tx
+        .insert(recipes)
+        .values({
           shopId: data.shopId,
-          recipeId: recipe.id,
-          inventoryItemId,
-          quantity: qty(ingredient.quantity),
-          unit: ingredient.unit ?? 'unit',
-        };
-      })
-      .filter((row): row is NonNullable<typeof row> => row !== null);
+          name: safeName,
+          description,
+          prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
+          yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
+          yieldUnit: yieldUnit ?? 'portion',
+          allergens,
+          instructions,
+          storagePath,
+          status: 'unverified',
+        })
+        .returning();
 
-    if (bill.length > 0) {
-      await tx.insert(recipeIngredients).values(bill);
-    }
+      const recipe = newRecipe[0];
+      if (!recipe) throw new Error('recipe insert returned no row');
 
-    return recipe;
-  });
+      const bill = extraction.ingredients
+        .map((ingredient) => {
+          const inventoryItemId = linkedIngredientIds.get(ingredient.rawName);
+          if (!inventoryItemId || !ingredient.quantity) return null;
+          return {
+            shopId: data.shopId,
+            recipeId: recipe.id,
+            inventoryItemId,
+            quantity: qty(ingredient.quantity),
+            unit: ingredient.unit ?? 'unit',
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
 
-  logger.info(
-    {
-      jobId: job.id,
-      recipeId: costed.id,
-      name: costed.name,
-      hourlyLaborCost: shop?.hourlyLaborCost,
-    },
-    'recipe drafted from document',
-  );
+      if (bill.length > 0) {
+        await tx.insert(recipeIngredients).values(bill);
+      }
+
+      return recipe;
+    });
+
+    logger.info(
+      {
+        jobId: job.id,
+        recipeId: inserted.id,
+        name: inserted.name,
+        hourlyLaborCost: shop?.hourlyLaborCost,
+      },
+      'recipe drafted from document (legacy fallback)',
+    );
+  }
 }
 
 export async function processOrderDocument(
@@ -475,8 +545,8 @@ export async function processOrderDocument(
 }
 
 /**
- * Records the terminal failure on the receipt row. Without this the UI polls
- * `/receipts/:id/status` forever on "processing" with no error to show.
+ * Records the terminal failure on the receipt/recipe row. Without this the UI polls
+ * `/receipts/:id/status` or `/recipes/:id` forever on "processing" with no error to show.
  * Only fires once BullMQ has exhausted attempts, so transient failures stay
  * invisible to the shop.
  */
@@ -485,27 +555,36 @@ export async function recordTerminalFailure(
   data: MediaJobData,
   error: unknown,
 ): Promise<void> {
-  if (data.kind !== 'receipt') return;
   const storagePath = data.storagePath;
   if (!storagePath) return;
 
   const message = publicFailureMessage(error);
   const isTimeout = error instanceof Error && error.message.includes('deadline exceeded');
   try {
-    await deps.db
-      .update(receipts)
-      .set({
-        status: 'failed',
-        progressStage: isTimeout ? 'failed' : undefined,
-        progressMessage: isTimeout ? 'Processing timed out' : undefined,
-        errorMessage: message.slice(0, 1000),
-        updatedAt: new Date(),
-      })
-      .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+    if (data.kind === 'receipt') {
+      await deps.db
+        .update(receipts)
+        .set({
+          status: 'failed',
+          progressStage: isTimeout ? 'failed' : undefined,
+          progressMessage: isTimeout ? 'Processing timed out' : undefined,
+          errorMessage: message.slice(0, 1000),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+    } else if (data.kind === 'recipe' || data.kind === 'product') {
+      await deps.db
+        .update(recipes)
+        .set({
+          status: 'failed',
+          updatedAt: new Date(),
+        })
+        .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)));
+    }
   } catch (updateError) {
     logger.error(
-      { err: updateError, jobShopId: data.shopId },
-      'could not record terminal receipt failure',
+      { err: updateError, jobShopId: data.shopId, kind: data.kind },
+      'could not record terminal failure',
     );
   }
 }

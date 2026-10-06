@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { db } from '../db/client.js';
+import { db, type Database } from '../db/client.js';
 import {
   categories,
   inventoryItems,
@@ -10,12 +10,15 @@ import {
 } from '../db/schema/index.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { notFound } from '../lib/errors.js';
-import { quantity as qty, toNumber, unitCost } from '../lib/money.js';import {
+import { notFound, conflict, forbidden } from '../lib/errors.js';
+import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
+import {
   calculateRetailPrice,
   calculateUnitCost,
   checkBatchStock,
 } from '../lib/pricing.js';
+import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js';
+import { defaultReceiptsDeps } from './receipts.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid(),
@@ -155,11 +158,16 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
   app.get('/recipes', guards, async (request) => {
     const shop = currentShop(request);
     const query = z
-      .object({ search: z.string().trim().max(120).optional(), includeInactive: z.coerce.boolean().default(false) })
+      .object({
+        search: z.string().trim().max(120).optional(),
+        includeInactive: z.coerce.boolean().default(false),
+        includeUnverified: z.coerce.boolean().default(false),
+      })
       .parse(request.query);
 
     const conditions = [eq(recipes.shopId, shop.id)];
     if (!query.includeInactive) conditions.push(eq(recipes.isActive, true));
+    if (!query.includeUnverified) conditions.push(eq(recipes.status, 'verified'));
     if (query.search) {
       conditions.push(sql`${recipes.name} ilike ${`%${query.search}%`}`);
     }
@@ -203,6 +211,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               : body.targetMarginPct.toFixed(2),
           allergens: body.allergens,
           instructions: body.instructions ?? null,
+          status: 'pending',
         })
         .returning();
 
@@ -460,6 +469,121 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  /**
+   * Unified verification endpoint for receipts and recipes.
+   * Single transaction with row lock, audit trail, and proper error codes.
+   */
+  app.post('/catalog/:type/:id/verify', mutationGuards, async (request, reply) => {
+    const shop = currentShop(request);
+    const user = currentUser(request);
+    const { type, id } = z
+      .object({
+        type: z.enum(['receipt', 'recipe']),
+        id: z.string().uuid(),
+      })
+      .parse(request.params);
+
+    // Per-request DB override for tests (same seam as receipts routes)
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+
+    if (type === 'receipt') {
+      const body = z
+        .object({
+          items: z.array(
+            z.object({
+              id: z.string().uuid(),
+              accepted: z.boolean(),
+              rawName: z.string().trim().min(1).max(200).optional(),
+              rawSku: z.string().trim().min(1).max(120).optional(),
+              unit: z.string().trim().min(1).max(20).optional(),
+              quantity: z.coerce.number().min(0).optional(),
+              unitPrice: z.coerce.number().min(0).optional(),
+              totalPrice: z.coerce.number().min(0).optional(),
+            }),
+          ).min(1).max(500),
+        })
+        .parse(request.body);
+
+      const outcome = await verifyReceipt({
+        db: deps.db,
+        shopId: shop.id,
+        userId: user.id,
+        receiptId: id,
+        items: body.items,
+      });
+
+      await recordAuditSafe(app, {
+        shopId: shop.id,
+        userId: user.id,
+        eventType: 'RECEIPT_PROCESSED',
+        resourceId: id,
+        ipAddress: request.ip,
+        metadata: { accepted: outcome.accepted, rejected: outcome.rejected },
+      });
+
+      return reply.code(200).send(outcome);
+    }
+
+    // Recipe verification
+    const body = z
+      .object({
+        ingredients: z.array(recipeIngredientSchema).min(1).optional(),
+      })
+      .parse(request.body);
+
+    const recipe = await deps.db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: recipes.id, status: recipes.status })
+        .from(recipes)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
+        .for('update')
+        .limit(1);
+      const existing = rows[0];
+      if (!existing) throw notFound('Recipe not found');
+      if (existing.status === 'verified') throw conflict('Recipe is already verified');
+
+      const patch: Partial<typeof recipes.$inferInsert> = {
+        status: 'verified',
+        updatedAt: new Date(),
+      };
+
+      const updated = await tx
+        .update(recipes)
+        .set(patch)
+        .where(eq(recipes.id, id))
+        .returning();
+      if (!updated[0]) throw notFound('Recipe not found');
+
+      if (body.ingredients) {
+        await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, id));
+        if (body.ingredients.length) {
+          await tx.insert(recipeIngredients).values(
+            body.ingredients.map((ingredient) => ({
+              shopId: shop.id,
+              recipeId: id,
+              inventoryItemId: ingredient.inventoryItemId,
+              quantity: qty(ingredient.quantity),
+              unit: ingredient.unit,
+            })),
+          );
+        }
+      }
+
+      return updated[0];
+    });
+
+    await recordAuditSafe(app, {
+      shopId: shop.id,
+      userId: user.id,
+      eventType: 'RECIPE_UPDATED',
+      resourceId: id,
+      ipAddress: request.ip,
+      metadata: { action: 'verify' },
+    });
+
+    return { recipe };
+  });
+
   /** Recipes that can currently be produced from stock — powers the order item picker. */
   app.get('/recipes/orderable', guards, async (request) => {
     const shop = currentShop(request);
@@ -472,7 +596,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         yieldUnit: recipes.yieldUnit,
       })
       .from(recipes)
-      .where(and(eq(recipes.shopId, shop.id), eq(recipes.isActive, true)))
+      .where(and(eq(recipes.shopId, shop.id), eq(recipes.isActive, true), eq(recipes.status, 'verified')))
       .orderBy(asc(recipes.name));
 
     const costed = await Promise.all(

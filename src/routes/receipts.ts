@@ -2,8 +2,8 @@ import { z } from 'zod';
 import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
-import { receipts, receiptItems } from '../db/schema/index.js';
-import { RECEIPT_STATUSES } from '../db/schema/enums.js';
+import { receipts, receiptItems, recipes } from '../db/schema/index.js';
+import { RECEIPT_STATUSES, RECIPE_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, forbidden, tooLarge } from '../lib/errors.js';
@@ -152,6 +152,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     }
 
     let receiptId = body.receiptId ?? null;
+    let recipeId: string | null = null;
+
     if (body.kind === 'receipt') {
       if (!receiptId) {
         const rows = await db
@@ -185,6 +187,28 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (body.kind === 'recipe' || body.kind === 'product') {
+      const originalFilename = body.originalFilename ?? 'recipe';
+      const filenameBase = originalFilename.replace(/\.[^.]+$/, '');
+      const storagePathParts = body.storagePath.split('/');
+      const uniqueSegment = storagePathParts[storagePathParts.length - 1]?.replace(/\.[^.]+$/, '') ?? '';
+      const placeholderName = `${filenameBase} (${uniqueSegment})`.slice(0, 200);
+
+      const rows = await db
+        .insert(recipes)
+        .values({
+          shopId: shop.id,
+          name: placeholderName,
+          storagePath: body.storagePath,
+          status: 'pending',
+          yieldQuantity: '1',
+          yieldUnit: 'portion',
+          allergens: [],
+        })
+        .returning({ id: recipes.id });
+      recipeId = rows[0]?.id ?? null;
+    }
+
     const enqueued = await enqueueMediaJob({
       shopId: shop.id,
       uploadedBy: user.id,
@@ -199,12 +223,12 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       shopId: shop.id,
       userId: user.id,
       eventType: 'RECEIPT_UPLOAD',
-      resourceId: receiptId,
+      resourceId: receiptId ?? recipeId,
       ipAddress: request.ip,
       metadata: { kind: body.kind, storagePath: body.storagePath, queued: enqueued.queued },
     });
 
-    return reply.code(202).send({ receiptId, ...enqueued });
+    return reply.code(202).send({ receiptId, recipeId, ...enqueued });
   });
 
   /**
@@ -214,6 +238,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
    * in `lib/verifyReceipt.ts`; this handler is the guard, the request shape and
    * the audit trail around it.
    */
+  // Keep legacy route for backward compatibility
   app.post('/receipts/:id/verify', mutationGuards, async (request, reply) => {
     const deps = request.receiptsDeps ?? defaultReceiptsDeps;
     const shop = currentShop(request);
@@ -229,8 +254,6 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       items: body.items,
     });
 
-    // `RECEIPT_PROCESSED` is declared in `lib/audit.ts` but has never been
-    // emitted, so nothing on record says who approved a receipt.
     await recordAuditSafe(app, {
       shopId: shop.id,
       userId: user.id,
