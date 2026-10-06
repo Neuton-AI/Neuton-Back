@@ -210,9 +210,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   /**
    * Applies a reviewer-approved receipt to inventory.
    *
-   * The transaction, the row locks and the delta arithmetic all live in
-   * `lib/verifyReceipt.ts`; this handler is the guard, the request shape and the
-   * audit trail around it.
+   * The transaction, the row locks and the weighted-average arithmetic all live
+   * in `lib/verifyReceipt.ts`; this handler is the guard, the request shape and
+   * the audit trail around it.
    */
   app.post('/receipts/:id/verify', mutationGuards, async (request, reply) => {
     const deps = request.receiptsDeps ?? defaultReceiptsDeps;

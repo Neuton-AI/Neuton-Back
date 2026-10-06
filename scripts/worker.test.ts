@@ -9,7 +9,6 @@ import type {
 } from '../src/lib/gemini.js';
 import type { MediaJobData } from '../src/lib/queue.js';
 import {
-  applyPurchase,
   findOrCreateInventoryItem,
   processOrderDocument,
   processRecipe,
@@ -110,10 +109,8 @@ function receipt(overrides: Partial<ReceiptExtraction> = {}): ReceiptExtraction 
   };
 }
 
-/** Scripted rows for one item that resolves to a fresh inventory row. */
-const ONE_ITEM_FOUND = {
-  'select:inventoryItems': [[], [], [{ currentQuantity: '0.000', averageUnitCost: '0.0000' }]],
-  'insert:inventoryItems': [[{ id: 'inv-1' }]],
+/** Scripted rows for one extracted item. No inventory rows: the worker never asks for any. */
+const ONE_ITEM_EXTRACTED = {
   'insert:receiptItems': [[{ id: 'ri-1' }]],
 } satisfies FakeResponses;
 
@@ -183,55 +180,12 @@ test('inventory lookup: only the six known units are stored, anything else becom
 });
 
 // ---------------------------------------------------------------------------
-// applyPurchase
-// ---------------------------------------------------------------------------
-
-test('purchase: rolls the weighted moving average forward and writes numeric strings', async () => {
-  const { db, deps } = harness({
-    responses: {
-      'select:inventoryItems': [[{ currentQuantity: '10.000', averageUnitCost: '4.0000' }]],
-    },
-  });
-
-  await applyPurchase(deps, 'inv-1', 10, 6);
-
-  const update = db.onlyCallTo('update', 'inventoryItems');
-  const patch = update.set as Record<string, unknown>;
-  assert.equal(patch.currentQuantity, '20.000');
-  assert.equal(patch.averageUnitCost, '5.0000');
-  assert.equal(patch.lastUnitCost, '6.0000');
-  assert.ok(patch.updatedAt instanceof Date, 'updatedAt must be stamped');
-});
-
-test('purchase: a missing inventory row is a no-op rather than a crash', async () => {
-  const { db, deps } = harness({ responses: { 'select:inventoryItems': [[]] } });
-
-  await applyPurchase(deps, 'inv-missing', 10, 6);
-
-  assert.equal(db.callsTo('update', 'inventoryItems').length, 0);
-});
-
-test('purchase: a zero-quantity line keeps the previous average instead of dividing by zero', async () => {
-  const { db, deps } = harness({
-    responses: {
-      'select:inventoryItems': [[{ currentQuantity: '0.000', averageUnitCost: '7.5000' }]],
-    },
-  });
-
-  await applyPurchase(deps, 'inv-1', 0, 3);
-
-  const patch = db.onlyCallTo('update', 'inventoryItems').set as Record<string, unknown>;
-  assert.equal(patch.currentQuantity, '0.000');
-  assert.equal(patch.averageUnitCost, '7.5000');
-});
-
-// ---------------------------------------------------------------------------
 // processReceipt
 // ---------------------------------------------------------------------------
 
-test('receipt: replaces the stored lines and stamps the receipt complete inside one transaction', async () => {
+test('receipt: replaces the stored lines and hands a receipt to review inside one transaction', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_FOUND },
+    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_EXTRACTED },
     extractions: { receipt: receipt() },
   });
 
@@ -247,7 +201,9 @@ test('receipt: replaces the stored lines and stamps the receipt complete inside 
   assert.deepEqual(line.values, {
     shopId: SHOP_ID,
     receiptId: 'rcpt-1',
-    inventoryItemId: 'inv-1',
+    // The worker only extracts. A null link is the durable "not yet accepted"
+    // marker `POST /receipts/:id/verify` reads.
+    inventoryItemId: null,
     rawName: 'Flour',
     quantity: '2.000',
     unitPrice: '3.5000',
@@ -256,9 +212,11 @@ test('receipt: replaces the stored lines and stamps the receipt complete inside 
     confidence: '0.912',
   });
 
-  const header = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!;
+  const header = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!;
   const patch = header.set as Record<string, unknown>;
-  assert.equal(patch.status, 'completed');
+  assert.equal(patch.status, 'unverified');
+  assert.equal(patch.progressStage, 'completed', 'the worker is done even though the receipt is not');
+  assert.equal(patch.progressMessage, 'Ready for verification');
   assert.equal(patch.totalAmount, '7.00');
   assert.equal(patch.taxAmount, '12.30');
   assert.equal(patch.currency, 'ILS');
@@ -269,7 +227,7 @@ test('receipt: replaces the stored lines and stamps the receipt complete inside 
 
 test('receipt: the header total falls back to the sum of the line totals', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_FOUND },
+    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_EXTRACTED },
     extractions: {
       receipt: receipt({
         items: [
@@ -282,19 +240,19 @@ test('receipt: the header total falls back to the sum of the line totals', async
 
   await processReceipt(deps, jobData, job);
 
-  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!.set as Record<string, unknown>;
   assert.equal(patch.totalAmount, '7.00');
 });
 
 test('receipt: a total reported by the model wins over the derived sum', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_FOUND },
+    responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_EXTRACTED },
     extractions: { receipt: receipt({ totalAmount: 42.5 }) },
   });
 
   await processReceipt(deps, jobData, job);
 
-  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!.set as Record<string, unknown>;
   assert.equal(patch.totalAmount, '42.50');
 });
 
@@ -309,16 +267,14 @@ test('receipt: a missing receipt row writes nothing at all', async () => {
   // Progress tracking updates happen before the early return
   assert.ok(db.callsTo('update', 'receipts').length >= 1);
   assert.equal(db.callsTo('insert', 'receiptItems').length, 0);
-  // No completed status update
-  assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'completed').length, 0);
+  // No review-ready status update for a receipt row that does not exist
+  assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'unverified').length, 0);
 });
 
 test('receipt: unreadable fields are stored as null rather than as placeholders', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
       'select:receipts': [[{ id: 'rcpt-1' }]],
-      'select:inventoryItems': [[], []],
-      'insert:inventoryItems': [[{ id: 'inv-1' }]],
       'insert:receiptItems': [[{ id: 'ri-1' }]],
     },
     extractions: {
@@ -340,23 +296,22 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
   assert.equal(line.confidence, null);
   assert.equal(line.unit, null);
 
-  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!.set as Record<string, unknown>;
   assert.equal(patch.taxAmount, null);
   assert.equal(patch.totalAmount, '0.00');
 });
 
-test('receipt: a line with no usable quantity or price never moves inventory', async () => {
+test('receipt: extraction never touches inventory, however well-formed the line is', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
       'select:receipts': [[{ id: 'rcpt-1' }]],
-      'select:inventoryItems': [[{ id: 'inv-1' }]],
       'insert:receiptItems': [[{ id: 'ri-1' }]],
     },
     extractions: {
       receipt: receipt({
         totalAmount: 7,
         items: [
-          { rawName: 'Flour', quantity: null, unit: 'kg', unitPrice: 3.5, totalPrice: 7, confidence: 1 },
+          { rawName: 'Flour', quantity: 2, unit: 'kg', unitPrice: 3.5, totalPrice: 7, confidence: 1 },
         ],
       }),
     },
@@ -364,7 +319,12 @@ test('receipt: a line with no usable quantity or price never moves inventory', a
 
   await processReceipt(deps, jobData, job);
 
-  assert.equal(db.callsTo('update', 'inventoryItems').length, 0);
+  // A fully-priced line with a quantity and a unit is exactly the case that
+  // used to move stock. Since N-28 nothing does, so a wrong AI reading can only
+  // cost a reviewer's time — never the on-hand count.
+  assert.equal(db.callsTo('select', 'inventoryItems').length, 0, 'no SKU lookup');
+  assert.equal(db.callsTo('insert', 'inventoryItems').length, 0, 'no SKU created');
+  assert.equal(db.callsTo('update', 'inventoryItems').length, 0, 'no stock moved');
 });
 
 test('receipt: an unusable model response fails the job', async () => {

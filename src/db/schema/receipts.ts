@@ -14,11 +14,22 @@ import { RECEIPT_REVIEW_STATUSES, RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
 import { profiles, shops } from './identity.js';
 
+/**
+ * Where the *worker* is up to, not where the receipt is in its lifecycle.
+ *
+ * `progress_stage: 'completed'` means "the extraction job finished" — it says
+ * nothing about whether a human has approved the receipt. `receipts.status` is
+ * the single source of truth for verification, so read `progress_stage` only
+ * while `status` is `pending` or `processing` and ignore it after.
+ *
+ * `applying` was dropped in N-28 along with the worker's inventory writes;
+ * `validating` now covers reading the lines back in. Anything reading a stored
+ * value from before that change must expect it.
+ */
 export const RECEIPT_PROGRESS_STAGES = [
   'pending',
   'extracting',
   'validating',
-  'applying',
   'completed',
   'failed',
 ] as const;
@@ -48,6 +59,11 @@ export const receipts = pgTable('receipts', {
   processingDeadline: timestamp('processing_deadline', { withTimezone: true }),
   rawExtraction: jsonb('raw_extraction'),
   errorMessage: text('error_message'),
+  /**
+   * When extraction finished — not when the receipt was applied. Since N-28 the
+   * worker stops here and never touches inventory, so the moment a human
+   * approved the receipt lives on `verified_at` instead.
+   */
   processedAt: timestamp('processed_at', { withTimezone: true }),
   /** The user who approved the receipt's lines; null until verified. */
   verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
@@ -67,6 +83,12 @@ export const receiptItems = pgTable('receipt_items', {
   receiptId: uuid('receipt_id')
     .notNull()
     .references(() => receipts.id, { onDelete: 'cascade' }),
+  /**
+   * The inventory row this line resolved to, written by the *verification*
+   * pass, never by the worker. `NULL` therefore means "not yet applied": as of
+   * N-28 the worker saves lines and stops, so a freshly extracted receipt has
+   * every line null here until someone approves it.
+   */
   inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
     onDelete: 'set null',
   }),
@@ -75,6 +97,12 @@ export const receiptItems = pgTable('receipt_items', {
   quantity: numeric('quantity', { precision: 12, scale: 3 }),
   unitPrice: numeric('unit_price', { precision: 12, scale: 4 }),
   totalPrice: numeric('total_price', { precision: 12, scale: 2 }),
+  /**
+   * The unit exactly as the model read it, in whatever spelling it used. The
+   * worker used to coerce this into `INVENTORY_UNITS` on the way in, which
+   * destroyed the value the reviewer needed to see in order to correct it; the
+   * map to a known inventory unit now happens when the line is applied.
+   */
   unit: text('unit'),
   confidence: numeric('confidence', { precision: 4, scale: 3 }),
   /**
