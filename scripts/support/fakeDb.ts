@@ -68,6 +68,15 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
     return this;
   }
 
+  /**
+   * `select … for update` is a row-lock hint, not a different result set, so the
+   * double records the statement and answers from the same scripted queue. A test
+   * that needs to assert on locking asserts on the code that issues it.
+   */
+  for(): this {
+    return this;
+  }
+
   groupBy(): this {
     return this;
   }
