@@ -413,6 +413,13 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       unit: 'kg',
     },
   ]);
+
+  const created = db.onlyCallTo('insert', 'inventoryItems');
+  assert.equal(
+    created.inTransaction,
+    true,
+    'SKU creation must run inside the transaction — otherwise a job that fails later leaves zero-cost orphan rows behind',
+  );
 });
 
 test('recipe: a missing or non-positive yield falls back to a single portion', async () => {
@@ -472,6 +479,63 @@ test('recipe: a recipe row that never comes back fails the job rather than costi
 
   await assert.rejects(() => processRecipe(deps, jobData, job), /recipe insert returned no row/);
   assert.equal(db.callsTo('insert', 'recipeIngredients').length, 0);
+});
+
+test('recipe: a job that fails its transaction leaves no orphan inventory rows', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
+      'select:inventoryItems': [[], []],
+      'insert:inventoryItems': [[{ id: 'inv-flour' }]],
+      'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
+    },
+    extractions: { recipe: RECIPE },
+  });
+  // The duplicate-key insert from the issue repro: two extracted lines resolving
+  // to the same SKU trips recipe_ingredients_recipe_id_inventory_item_id_unique.
+  db.failOn(
+    'insert',
+    'recipeIngredients',
+    new Error('duplicate key value violates unique constraint "recipe_ingredients_recipe_id_inventory_item_id_unique"'),
+  );
+
+  await assert.rejects(() => processRecipe(deps, jobData, job), /duplicate key/);
+
+  const created = db.callsTo('insert', 'inventoryItems');
+  assert.ok(created.length > 0, 'the job created SKUs before the insert died');
+  for (const call of created) {
+    assert.equal(
+      call.inTransaction,
+      true,
+      'SKU creation must run inside the transaction, so the rollback discards it',
+    );
+  }
+});
+
+test('recipe: retrying over an existing row clears a stale failure and resolves inventory in-transaction', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:recipes': [[{ id: 'rec-1' }]],
+      'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
+      'select:inventoryItems': [[], []],
+      'insert:inventoryItems': [[{ id: 'inv-flour' }]],
+    },
+    extractions: { recipe: RECIPE },
+  });
+
+  await processRecipe(deps, jobData, job);
+
+  const claim = db.callsTo('update', 'recipes').find((c) => c.set?.status === 'processing')!;
+  assert.equal((claim.set as Record<string, unknown>).errorMessage, null, 'a retry must clear the previous failure');
+
+  const created = db.callsTo('insert', 'inventoryItems');
+  assert.ok(created.length >= 1, 'the update path attempted SKU creation');
+  for (const call of created) {
+    assert.equal(call.inTransaction, true, 'resolution on the update path must run inside the transaction too');
+  }
+
+  const done = db.callsTo('update', 'recipes').find((c) => c.set?.status === 'unverified')!;
+  assert.equal((done.set as Record<string, unknown>).errorMessage, null, 'a successful re-extraction clears the failure');
 });
 
 // ---------------------------------------------------------------------------
@@ -678,9 +742,20 @@ test('terminal failure: a recipe job records failure on the recipe row', async (
 
   await recordTerminalFailure(deps, jobData, new Error('boom'));
 
-  // Should update recipes table to status='failed'
   const call = db.onlyCallTo('update', 'recipes');
   assert.equal((call.set as Record<string, unknown>).status, 'failed');
+  assert.equal((call.set as Record<string, unknown>).errorMessage, 'boom');
+});
+
+test('terminal failure: the recipe failure reason is capped so it always fits the column', async () => {
+  const { db, deps, jobData } = harness({ data: { kind: 'recipe' } });
+
+  await recordTerminalFailure(deps, jobData, new Error('x'.repeat(5000)));
+
+  const stored = String((db.onlyCallTo('update', 'recipes').set as Record<string, unknown>).errorMessage);
+  assert.ok(stored.length <= 1000, `stored message was ${stored.length} chars`);
+  assert.ok(stored.length < 5000, 'the raw upstream text must not be stored verbatim');
+  assert.match(stored, /\.\.\.$/);
 });
 
 test('terminal failure: an order job still touches no row (orders have no status workflow)', async () => {

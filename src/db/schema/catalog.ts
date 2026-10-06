@@ -66,6 +66,7 @@ export const recipes = pgTable('recipes', {
   isActive: boolean('is_active').notNull().default(true),
   status: text('status', { enum: RECIPE_STATUSES }).notNull().default('pending'),
   storagePath: text('storage_path'),
+  errorMessage: text('error_message'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

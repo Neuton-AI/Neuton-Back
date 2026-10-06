@@ -23,7 +23,10 @@ import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
-import { findOrCreateInventoryItem as findOrCreateInventoryItemOn } from './lib/inventory.js';
+import {
+  findOrCreateInventoryItem as findOrCreateInventoryItemOn,
+  type InventoryDb,
+} from './lib/inventory.js';
 import { env, isDevelopment } from './env.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
@@ -258,7 +261,7 @@ export async function processRecipe(
   if (existingRecipe) {
     await deps.db
       .update(recipes)
-      .set({ status: 'processing', updatedAt: new Date() })
+      .set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
       .where(eq(recipes.id, existingRecipe.id));
   }
 
@@ -293,20 +296,28 @@ export async function processRecipe(
     .limit(1);
   const shop = shopRows[0];
 
-  const linkedIngredientIds = new Map<string, string>();
-  for (const ingredient of extraction.ingredients) {
-    const inventoryItemId = await findOrCreateInventoryItemOn(
-      deps.db,
-      data.shopId,
-      ingredient.rawName,
-      ingredient.unit,
-    );
-    if (inventoryItemId) linkedIngredientIds.set(ingredient.rawName, inventoryItemId);
-  }
+  // Resolution must run on the same handle the rest of the write runs on: a job
+  // that fails its transaction rolls the recipe back, and any SKU created
+  // outside it would survive as a zero-cost orphan (N-28's rule — writes go
+  // through `tx`, never the shared client).
+  const resolveLinkedIngredientIds = async (handle: InventoryDb): Promise<Map<string, string>> => {
+    const linked = new Map<string, string>();
+    for (const ingredient of extraction.ingredients) {
+      const inventoryItemId = await findOrCreateInventoryItemOn(
+        handle,
+        data.shopId,
+        ingredient.rawName,
+        ingredient.unit,
+      );
+      if (inventoryItemId) linked.set(ingredient.rawName, inventoryItemId);
+    }
+    return linked;
+  };
 
   if (existingRecipe) {
     // Update existing row: replace extracted fields + ingredients + set unverified
     await deps.db.transaction(async (tx) => {
+      const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
       await tx
         .update(recipes)
         .set({
@@ -318,6 +329,7 @@ export async function processRecipe(
           allergens,
           instructions,
           status: 'unverified',
+          errorMessage: null,
           updatedAt: new Date(),
         })
         .where(eq(recipes.id, existingRecipe.id));
@@ -356,6 +368,7 @@ export async function processRecipe(
   } else {
     // Legacy fallback: no row exists, insert directly as 'unverified' with storagePath
     const inserted = await deps.db.transaction(async (tx) => {
+      const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
       const newRecipe = await tx
         .insert(recipes)
         .values({
@@ -577,6 +590,7 @@ export async function recordTerminalFailure(
         .update(recipes)
         .set({
           status: 'failed',
+          errorMessage: message.slice(0, 1000),
           updatedAt: new Date(),
         })
         .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)));
