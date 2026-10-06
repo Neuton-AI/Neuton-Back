@@ -79,11 +79,22 @@ export const receiptSpendDay = sql`coalesce(${receipts.receiptDate}, (${receipts
 /**
  * Window filter for receipt spend. Never mention `receipt_date is not null`: an
  * undated receipt belongs in the totals, not in a bucket nobody can see.
+ *
+ * The bounds are bound as ISO strings and cast, never as `Date` objects: the
+ * `postgres` driver refuses to serialize a `Date` for the parameter type the
+ * server infers here, so a real dashboard request crashed with
+ * `ERR_INVALID_ARG_TYPE` on every window predicate. The cast reproduces the
+ * exact UTC-midnight semantics `periodStart` already computes.
  */
 export function spentSince(start: Date, before?: Date): SQL {
   return before === undefined
-    ? sql`${receiptSpendDay} >= ${start}`
-    : sql`${receiptSpendDay} >= ${start} and ${receiptSpendDay} < ${before}`;
+    ? sql`${receiptSpendDay} >= ${start.toISOString()}::date`
+    : sql`${receiptSpendDay} >= ${start.toISOString()}::date and ${receiptSpendDay} < ${utcInstant(before)}::date`;
+}
+
+/** ISO instant for a window bound; see the note on `spentSince`. */
+function utcInstant(date: Date): string {
+  return date.toISOString();
 }
 
 /** Expense total for a window, plus how much of it had no date on the receipt. */
@@ -92,6 +103,23 @@ const expenseTotalsFields = {
   undatedCount: sql<number>`count(*) filter (where ${receipts.receiptDate} is null)::int`,
   undatedAmount: sql<string>`coalesce(sum(${receipts.totalAmount}) filter (where ${receipts.receiptDate} is null),0)`,
 };
+
+/**
+ * Receipts that count as spend.
+ *
+ * As of N-28 the worker only extracts, so a receipt sits at `unverified` until a
+ * person approves it — and money spent but not yet approved is not money spent.
+ * An `unverified` receipt therefore contributes nothing to any total here.
+ *
+ * This is the one predicate that has to agree with the backfill in
+ * `0007_receipt_status_switchover.sql`: history was rewritten `completed` →
+ * `verified`, so filtering on `verified` reproduces exactly the rows the old
+ * `completed` filter matched. The two are asserted equal over real shop data in
+ * that migration's PR, because getting it wrong does not throw — it quietly
+ * reports plausible zeros. Exported so `scripts/analytics.test.ts` can pin the
+ * predicate itself, which is the only kind of failure this can produce.
+ */
+export const countedAsSpend = eq(receipts.status, 'verified');
 
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
@@ -118,14 +146,14 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             count: sql<number>`count(*)::int`,
           })
           .from(orders)
-          .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`)),
+          .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`)),
         deps.db
           .select(expenseTotalsFields)
           .from(receipts)
           .where(
             and(
               eq(receipts.shopId, shop.id),
-              eq(receipts.status, 'completed'),
+              countedAsSpend,
               spentSince(start),
             ),
           ),
@@ -140,8 +168,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             and(
               eq(orders.shopId, shop.id),
               isNull(orders.deletedAt),
-              sql`${orders.orderDate} >= ${previousStart}`,
-              sql`${orders.orderDate} < ${start}`,
+              sql`${orders.orderDate} >= ${utcInstant(previousStart)}::timestamptz`,
+              sql`${orders.orderDate} < ${utcInstant(start)}::timestamptz`,
             ),
           ),
         deps.db
@@ -150,7 +178,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .where(
             and(
               eq(receipts.shopId, shop.id),
-              eq(receipts.status, 'completed'),
+              countedAsSpend,
               spentSince(previousStart, start),
             ),
           ),
@@ -266,7 +294,7 @@ async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Dat
     .from(orderItems)
     .innerJoin(recipes, eq(recipes.id, orderItems.recipeId))
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
-    .where(and(eq(orderItems.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`))
+    .where(and(eq(orderItems.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
     .groupBy(recipes.id, recipes.name, recipes.imageUrl)
     .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}),0)`))
     .limit(1);
@@ -292,7 +320,7 @@ async function orderProfitStats(deps: AnalyticsDeps, shopId: string, start: Date
       netProfit: sql<string>`${orders.totalAmount} - ${orders.deliveryFee} - ${orders.totalCost}`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`));
+    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`));
 
   const profits = rows.map((row) => toNumber(row.netProfit));
   return {
@@ -343,7 +371,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`))
+    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
     .groupBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`)
     .orderBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`);
 
@@ -353,7 +381,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       total: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
     })
     .from(receipts)
-    .where(and(eq(receipts.shopId, shopId), eq(receipts.status, 'completed'), spentSince(start)))
+    .where(and(eq(receipts.shopId, shopId), countedAsSpend, spentSince(start)))
     .groupBy(receiptSpendDay)
     .orderBy(receiptSpendDay);
 

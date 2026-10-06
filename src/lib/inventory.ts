@@ -1,17 +1,16 @@
 /**
- * Inventory writes shared by the vision worker and the receipt verification
- * endpoint.
+ * Inventory writes used by the receipt verification endpoint.
  *
- * These live outside `worker.ts` so `POST /receipts/:id/verify` can apply an
- * approved receipt through the exact code the worker uses. Every function takes
- * the handle it writes through instead of reaching for a module-level client:
- * the worker passes its transaction handle, so its inventory writes land inside
- * the receipt transaction rather than escaping it.
+ * Since N-28 these belong to verification alone: the vision worker only
+ * extracts line data and saves it with `inventory_item_id` null, so stock
+ * never moves until a human accepts a line. Every function takes the handle it
+ * writes through instead of reaching for a module-level client, so the caller's
+ * whole receipt update stays inside one transaction.
  */
-import { and, asc, eq, ilike, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray } from 'drizzle-orm';
 import { inventoryItems } from '../db/schema/index.js';
 import { INVENTORY_UNITS, type InventoryUnit } from '../db/schema/enums.js';
-import { quantity as qty, toNumber, unitCost } from './money.js';
+import { quantity as qty, unitCost } from './money.js';
 import { applyWeightedAverage, type InventoryCostUpdate } from './pricing.js';
 
 /** The quantity and average cost one weighted-average step is computed from. */
@@ -64,38 +63,6 @@ export async function findOrCreateInventoryItem(
     .returning({ id: inventoryItems.id });
 
   return created[0]?.id ?? null;
-}
-
-/**
- * Reads one inventory row under a row lock.
- *
- * A transaction on its own does not stop two purchases of the same SKU from both
- * reading the same starting quantity, computing from it, and letting the second
- * write discard the first's contribution — a lost update that raises no error.
- * `POST /inventory/adjust` is immune because it does its arithmetic inside a
- * single statement, but the weighted-average formula needs the old quantity
- * *and* the old average together, so it cannot be collapsed that way.
- *
- * Returns `undefined` when the row is gone, which callers treat as a no-op.
- */
-export async function lockInventoryRow(
-  db: InventoryDb,
-  inventoryItemId: string,
-): Promise<InventorySnapshot | undefined> {
-  const rows = await db
-    .select({
-      currentQuantity: inventoryItems.currentQuantity,
-      averageUnitCost: inventoryItems.averageUnitCost,
-    })
-    .from(inventoryItems)
-    .where(eq(inventoryItems.id, inventoryItemId))
-    .limit(1)
-    .for('update');
-
-  const row = rows[0];
-  return row
-    ? { currentQuantity: row.currentQuantity, averageUnitCost: row.averageUnitCost }
-    : undefined;
 }
 
 /**
@@ -154,33 +121,9 @@ export async function writeInventoryState(
 }
 
 /**
- * Rolls the weighted moving average forward over a purchase.
- *
- * `applyWeightedAverage` is the tested pure function in `pricing.ts`; this is
- * only the read-lock-write wrapper around it, kept here so both the worker and
- * the verify endpoint go through one implementation.
- */
-export async function applyPurchase(
-  db: InventoryDb,
-  inventoryItemId: string,
-  purchasedQuantity: number,
-  unitPrice: number,
-): Promise<void> {
-  const snapshot = await lockInventoryRow(db, inventoryItemId);
-  if (!snapshot) return;
-
-  await writeInventoryState(
-    db,
-    inventoryItemId,
-    applyWeightedAverage(snapshot, { quantity: purchasedQuantity, unitPrice }),
-  );
-}
-
-/**
- * Applies `applyPurchase` off a snapshot the caller already holds the lock for,
- * so a receipt referencing one SKU from several lines locks it once instead of
- * once per line. A missing snapshot is a silent no-op, unchanged from when this
- * lived in `worker.ts`.
+ * Applies a purchase off a snapshot the caller already holds the lock for, so a
+ * receipt referencing one SKU from several lines locks it once instead of once
+ * per line. A missing snapshot is a silent no-op.
  *
  * Returns the state it wrote so a caller applying several lines to one SKU can
  * thread it forward. Without that, every line would compute from the same
@@ -201,37 +144,5 @@ export async function applyPurchaseFrom(
   return {
     currentQuantity: qty(next.currentQuantity),
     averageUnitCost: unitCost(next.averageUnitCost),
-  };
-}
-
-/**
- * Takes `amount` units back out of stock without touching the average cost.
- *
- * Stock leaving inventory leaves at the average cost it was carried at, so
- * `average_unit_cost` stays put and only the quantity moves — the same shape
- * `POST /inventory/adjust` uses. This is the negative-delta counterpart to
- * `applyPurchaseFrom`, which `applyWeightedAverage` cannot express because it
- * clamps a negative purchase to zero.
- */
-export async function reduceStock(
-  db: InventoryDb,
-  inventoryItemId: string,
-  amount: number,
-  snapshot: InventorySnapshot | undefined,
-): Promise<InventorySnapshot | undefined> {
-  if (!snapshot || amount <= 0) return undefined;
-
-  await db
-    .update(inventoryItems)
-    .set({
-      currentQuantity: sql`greatest(${inventoryItems.currentQuantity} - ${amount}, 0)`,
-      updatedAt: new Date(),
-    })
-    .where(eq(inventoryItems.id, inventoryItemId));
-
-  // Mirrors the `greatest(..., 0)` above so a caller can chain further lines.
-  return {
-    currentQuantity: qty(Math.max(toNumber(snapshot.currentQuantity) - amount, 0)),
-    averageUnitCost: snapshot.averageUnitCost,
   };
 }

@@ -1,13 +1,13 @@
 /**
- * `POST /receipts/:id/verify` tests for N-27.
+ * `POST /receipts/:id/verify` tests for N-27 and N-28.
  *
  * Two layers, because the guarantees split cleanly:
  *
  * 1. Route-level cases drive the real handler over a Fastify instance whose auth
  *    guards are stubbed (`scripts/support/receiptsApp.ts`) and whose database is
- *    a `FakeDb`. These pin the decisions: which lines create inventory, what
- *    delta gets applied, what gets written to `receipt_items`, the 409, and that
- *    a mid-transaction failure rolls the whole thing back.
+ *    a `FakeDb`. These pin the decisions: which lines create inventory, how much
+ *    stock a verdict moves, what gets written to `receipt_items`, the 409, and
+ *    that a mid-transaction failure rolls the whole thing back.
  *
  * 2. Concurrency cases need real Postgres row locks, which no double can model.
  *    They run against the configured `DATABASE_URL` and skip themselves when only
@@ -57,7 +57,8 @@ function storedLine(overrides: Partial<StoredLine> = {}): StoredLine {
     id: LINE_A,
     shopId: SHOP_ID,
     receiptId: RECEIPT_ID,
-    inventoryItemId: 'inv-flour',
+    // Exactly what the worker writes since N-28: extracted, not linked.
+    inventoryItemId: null,
     rawName: 'Flour',
     rawSku: null,
     quantity: '2.000',
@@ -76,7 +77,7 @@ function storedLine(overrides: Partial<StoredLine> = {}): StoredLine {
  * reads.
  */
 const ONE_ACCEPTED: FakeResponses = {
-  'select:receipts': [[{ id: RECEIPT_ID, status: 'completed', errorMessage: 'boom' }]],
+  'select:receipts': [[{ id: RECEIPT_ID, status: 'unverified', errorMessage: 'boom' }]],
   'select:receiptItems': [[storedLine()]],
   // First read is `findOrCreateInventoryItem`'s exact hit, second is the row the
   // apply step holds the lock on. `lockInventoryRows` keys its snapshots by id,
@@ -106,14 +107,14 @@ async function harness(responses: FakeResponses = {}) {
   };
 }
 
-/** A correction of +3 kg on a line the worker already applied 2 kg of. */
+/** The reviewer accepts 5 kg of a line whose extraction read 2 kg. */
 const CORRECT_UP = { id: LINE_A, accepted: true, quantity: 5 };
 
 // ---------------------------------------------------------------------------
 // Decisions: what creates inventory, what moves stock
 // ---------------------------------------------------------------------------
 
-test('verify: an accepted line applies the delta, not the extracted quantity', async () => {
+test('verify: an accepted line applies the reviewer quantity in full', async () => {
   const { fake, post, close } = await harness(ONE_ACCEPTED);
 
   const response = await post({ items: [CORRECT_UP] });
@@ -126,52 +127,54 @@ test('verify: an accepted line applies the delta, not the extracted quantity', a
     rejected: 0,
   });
 
-  // The worker already moved 2 kg. Only the corrected 3 kg of difference is
-  // applied, so a full re-apply would have double-bought the original 2 kg.
+  // Nothing was in stock to net out against: the worker extracted these 2 kg but
+  // never applied them, so all 5 accepted kg go in. Netting out the extraction
+  // (the old delta) would have under-bought the receipt by the 2 kg on the paper.
   const update = fake.onlyCallTo('update', 'inventoryItems');
   const patch = update.set as Record<string, unknown>;
-  assert.equal(patch.currentQuantity, '13.000', '10 kg on hand + 3 kg correction');
-  assert.equal(patch.averageUnitCost, '2.3462', '(10 × 2.00 + 3 × 3.50) ÷ 13');
+  assert.equal(patch.currentQuantity, '15.000', '10 kg on hand + 5 kg accepted');
+  assert.equal(patch.averageUnitCost, '2.5000', '(10 × 2.00 + 5 × 3.50) ÷ 15');
   assert.ok(update.inTransaction, 'inventory writes must run inside the transaction');
 
   await close();
 });
 
-test('verify: accepting a line unchanged moves no stock at all', async () => {
+test('verify: accepting a line unchanged still buys exactly what the paper says', async () => {
   const { fake, post, close } = await harness(ONE_ACCEPTED);
 
   const response = await post({ items: [{ id: LINE_A, accepted: true }] });
 
   assert.equal(response.status, 200);
-  // The worker already applied 2 kg at 3.50. A delta of zero means nothing to do,
-  // which is the whole point of refusing to re-apply the original purchase.
-  assert.equal(fake.callsTo('update', 'inventoryItems').length, 0);
+  // Omitting a quantity means "the extraction was right", so the 2 kg read off
+  // the document is what lands. Since the worker applied none of it, doing
+  // nothing here would be the same bug in the opposite direction.
+  const update = fake.onlyCallTo('update', 'inventoryItems');
+  const patch = update.set as Record<string, unknown>;
+  assert.equal(patch.currentQuantity, '12.000', '10 kg on hand + 2 kg extracted');
+  assert.equal(patch.averageUnitCost, '2.2500', '(10 × 2.00 + 2 × 3.50) ÷ 12');
 
   await close();
 });
 
-test('verify: a correction downwards takes the difference back out of stock', async () => {
+test('verify: a downward correction is a purchase of the smaller amount, not a removal', async () => {
   const { fake, post, close } = await harness(ONE_ACCEPTED);
 
   const response = await post({ items: [{ id: LINE_A, accepted: true, quantity: 1 }] });
 
   assert.equal(response.status, 200);
-  // 2 kg were extracted, the reviewer says 1. Only the 1 kg surplus comes back out.
+  // The extraction said 2 kg, the reviewer says 1 kg, and neither has ever been
+  // applied — so this is a 1 kg purchase arriving, not 1 kg walking back out.
   const update = fake.onlyCallTo('update', 'inventoryItems');
   const patch = update.set as Record<string, unknown>;
-  // An expression rather than a literal, so the statement reads the quantity it
-  // is decrementing instead of stamping a number computed before the write.
-  assert.notEqual(typeof patch.currentQuantity, 'string', 'a reduction must not write a literal');
-  assert.ok(patch.currentQuantity, 'current_quantity must be written');
-  // Stock leaving inventory leaves at its average cost, so the cost must not move.
-  assert.equal('averageUnitCost' in patch, false);
+  assert.equal(patch.currentQuantity, '11.000', '10 kg on hand + 1 kg accepted');
+  assert.equal(patch.averageUnitCost, '2.1364', '(10 × 2.00 + 1 × 3.50) ÷ 11');
 
   await close();
 });
 
 test('verify: a rejected line creates no inventory item and moves no stock', async () => {
   const { fake, post, close } = await harness({
-    'select:receipts': [[{ id: RECEIPT_ID, status: 'completed' }]],
+    'select:receipts': [[{ id: RECEIPT_ID, status: 'unverified' }]],
     'select:receiptItems': [[storedLine({ rawName: 'Mystery Herb' })]],
   });
 
@@ -182,7 +185,7 @@ test('verify: a rejected line creates no inventory item and moves no stock', asy
   assert.equal(fake.callsTo('insert', 'inventoryItems').length, 0, 'nothing phantom is created');
   assert.equal(fake.callsTo('update', 'inventoryItems').length, 0, 'no stock moves');
 
-  // The line records the verdict and unlinks the SKU the worker had guessed.
+  // The line records the verdict and is left unlinked — nobody bought this.
   const line = fake.onlyCallTo('update', 'receiptItems');
   assert.equal(line.set?.inventoryItemId, null);
   assert.equal(line.set?.reviewStatus, 'rejected');
@@ -195,7 +198,7 @@ test('verify: two accepted lines on one SKU both land', async () => {
   // both apply off the same snapshot. If the second computed from that snapshot
   // instead of from the first line's result, its write would discard line A.
   const bothOnFlour: FakeResponses = {
-    'select:receipts': [[{ id: RECEIPT_ID, status: 'completed' }]],
+    'select:receipts': [[{ id: RECEIPT_ID, status: 'unverified' }]],
     'select:receiptItems': [
       [
         storedLine({ id: LINE_A, quantity: '2.000', unitPrice: '3.0000' }),
@@ -221,12 +224,12 @@ test('verify: two accepted lines on one SKU both land', async () => {
   assert.equal(response.status, 200);
   const writes = fake.callsTo('update', 'inventoryItems');
   assert.equal(writes.length, 2);
-  // 10 kg at 2.00, then +2 kg at 3.00 → 12 kg at 2.1666...
-  assert.equal((writes[0]?.set as Record<string, unknown>).currentQuantity, '12.000');
-  assert.equal((writes[0]?.set as Record<string, unknown>).averageUnitCost, '2.1667');
+  // 10 kg at 2.00, then +4 kg at 3.00 → 14 kg at 2.2857…
+  assert.equal((writes[0]?.set as Record<string, unknown>).currentQuantity, '14.000');
+  assert.equal((writes[0]?.set as Record<string, unknown>).averageUnitCost, '2.2857');
   // …and that result, not the original snapshot, is what the second line builds on.
-  assert.equal((writes[1]?.set as Record<string, unknown>).currentQuantity, '18.000');
-  assert.equal((writes[1]?.set as Record<string, unknown>).averageUnitCost, '1.7778');
+  assert.equal((writes[1]?.set as Record<string, unknown>).currentQuantity, '20.000');
+  assert.equal((writes[1]?.set as Record<string, unknown>).averageUnitCost, '1.9000');
 
   await close();
 });
@@ -427,19 +430,20 @@ async function seedInventory(
 }
 
 /**
- * A receipt whose stored lines carry `storedQuantity`, which is what the vision
- * worker would already have applied. Verification must move only the difference
- * the reviewer asked for.
+ * A receipt whose stored lines carry `extractedQuantity` — the figure the vision
+ * worker read off the document. Since N-28 the worker saves that and moves
+ * nothing, so verification is the first and only thing to touch stock, and it
+ * must apply the reviewer's quantity in full.
  */
 async function seedReceipt(
   shopId: string,
-  lines: Array<{ inventoryItemId: string; name: string; quantity: string; unitPrice: string }>,
+  lines: Array<{ name: string; quantity: string; unitPrice: string }>,
 ) {
   const [receipt] = await liveDb
     .insert(receipts)
     .values({
       shopId,
-      status: 'completed',
+      status: 'unverified',
       progressStage: 'completed',
       // `receipts_scanned_or_manual_check` demands a storage path or a complete
       // manual header. Nothing else on the row matters to these tests.
@@ -453,7 +457,7 @@ async function seedReceipt(
       lines.map((line) => ({
         shopId,
         receiptId: receipt!.id,
-        inventoryItemId: line.inventoryItemId,
+        inventoryItemId: null,
         rawName: line.name,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
@@ -509,13 +513,13 @@ test('concurrency: two receipts sharing a SKU verify simultaneously and both cou
   const flourId = items.get(`${namespace}-flour`)!;
 
   try {
-    // Both receipts were extracted at zero, so each verification's delta is its
-    // whole approved quantity. Receipt A adds 5 kg at 3.00, B adds 20 kg at 1.00.
+    // Both receipts extracted quantities neither ever applied, so each verdict
+    // lands in full: A adds its accepted 5 kg at 3.00, B its 20 kg at 1.00.
     const a = await seedReceipt(shopId, [
-      { inventoryItemId: flourId, name: 'flour', quantity: '0.000', unitPrice: '3.0000' },
+      { name: 'flour', quantity: '2.000', unitPrice: '3.0000' },
     ]);
     const b = await seedReceipt(shopId, [
-      { inventoryItemId: flourId, name: 'flour', quantity: '0.000', unitPrice: '1.0000' },
+      { name: 'flour', quantity: '1.000', unitPrice: '1.0000' },
     ]);
 
     await Promise.all([
@@ -524,6 +528,8 @@ test('concurrency: two receipts sharing a SKU verify simultaneously and both cou
     ]);
 
     const row = await readQuantity(flourId);
+    // 10 + 5 + 20 = 35 kg: both verdicts counted, and each applied in full
+    // rather than as a gap against an extraction nobody had ever applied.
     // Without the row lock the second writer reads the pre-purchase quantity and
     // overwrites the first's contribution: 30 kg at 1.3333, five kg silently gone.
     assert.equal(row.currentQuantity, '35.000');
@@ -553,12 +559,12 @@ test('deadlock: two receipts sharing two SKUs in opposite order both succeed', {
     // Same two SKUs, submitted in opposite order. Locking in body order would
     // have A hold salt wanting oil while B holds oil wanting salt.
     const a = await seedReceipt(shopId, [
-      { inventoryItemId: saltId, name: 'salt', quantity: '0.000', unitPrice: '1.0000' },
-      { inventoryItemId: oilId, name: 'oil', quantity: '0.000', unitPrice: '2.0000' },
+      { name: 'salt', quantity: '1.000', unitPrice: '1.0000' },
+      { name: 'oil', quantity: '1.000', unitPrice: '2.0000' },
     ]);
     const b = await seedReceipt(shopId, [
-      { inventoryItemId: oilId, name: 'oil', quantity: '0.000', unitPrice: '2.0000' },
-      { inventoryItemId: saltId, name: 'salt', quantity: '0.000', unitPrice: '1.0000' },
+      { name: 'oil', quantity: '1.000', unitPrice: '2.0000' },
+      { name: 'salt', quantity: '1.000', unitPrice: '1.0000' },
     ]);
 
     const results = await Promise.allSettled([
@@ -598,7 +604,7 @@ test('database: a verified receipt records who approved it on the row', { skip }
 
   try {
     const seeded = await seedReceipt(shopId, [
-      { inventoryItemId: honeyId, name: 'honey', quantity: '0.000', unitPrice: '5.0000' },
+      { name: 'honey', quantity: '1.000', unitPrice: '5.0000' },
     ]);
 
     await verifyAgainstDatabase(shopId, seeded.receiptId, [
@@ -617,6 +623,10 @@ test('database: a verified receipt records who approved it on the row', { skip }
     assert.equal(row[0]?.status, 'verified');
     assert.equal(row[0]?.verifiedBy, VERIFIER_ID);
     assert.ok(row[0]?.verifiedAt instanceof Date);
+
+    // 0 on hand + the 2 accepted kg. The 1 kg the paper claimed was extracted,
+    // never applied, so there is nothing to net it out against.
+    assert.equal((await readQuantity(honeyId)).currentQuantity, '2.000');
 
     const lines = await liveDb
       .select({ reviewStatus: receiptItems.reviewStatus })

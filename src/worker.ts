@@ -23,10 +23,7 @@ import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
-import {
-  applyPurchase as applyPurchaseOn,
-  findOrCreateInventoryItem as findOrCreateInventoryItemOn,
-} from './lib/inventory.js';
+import { findOrCreateInventoryItem as findOrCreateInventoryItemOn } from './lib/inventory.js';
 import { env, isDevelopment } from './env.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
@@ -66,9 +63,9 @@ function toBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Thin `WorkerDeps` wrappers over the shared inventory helpers, kept so
- * `scripts/worker.test.ts` can still exercise them through the worker's own
- * signature. The handlers below deliberately do **not** use these: they pass a
+ * Thin `WorkerDeps` wrapper over the shared inventory helper, kept so
+ * `scripts/worker.test.ts` can still exercise it through the worker's own
+ * signature. The handlers below deliberately do **not** use it: they take a
  * transaction handle instead, so inventory writes commit or roll back with the
  * receipt they belong to.
  */
@@ -79,15 +76,6 @@ export async function findOrCreateInventoryItem(
   unit: string | null,
 ): Promise<string | null> {
   return findOrCreateInventoryItemOn(deps.db, shopId, rawName, unit);
-}
-
-export async function applyPurchase(
-  deps: WorkerDeps,
-  inventoryItemId: string,
-  purchasedQuantity: number,
-  unitPrice: number,
-): Promise<void> {
-  await applyPurchaseOn(deps.db, inventoryItemId, purchasedQuantity, unitPrice);
 }
 
 async function updateReceiptProgress(
@@ -179,7 +167,6 @@ export async function processReceipt(
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
-    const itemRows = [];
     for (let i = 0; i < extraction.items.length; i++) {
       checkDeadline(deadline);
       const item = extraction.items[i]!;
@@ -188,51 +175,42 @@ export async function processReceipt(
         deps,
         data.shopId,
         storagePath,
-        'applying',
-        `Processing line item ${i + 1} of ${extraction.items.length}`,
+        'validating',
+        `Saving line item ${i + 1} of ${extraction.items.length}`,
       );
       await job.updateProgress(progress);
 
-      // `tx`, not `deps.db`: these writes belong to the same unit of work as the
-      // receipt row below, and escaping the transaction means a failure after
-      // this point leaves inventory moved but the receipt unprocessed.
-      const inventoryItemId = await findOrCreateInventoryItemOn(
-        tx,
-        data.shopId,
-        item.rawName,
-        item.unit,
-      );
-
-      if (inventoryItemId && item.quantity && item.unitPrice) {
-        await applyPurchaseOn(tx, inventoryItemId, item.quantity, item.unitPrice);
-      }
-
-      const inserted = await tx
-        .insert(receiptItems)
-        .values({
-          shopId: data.shopId,
-          receiptId,
-          inventoryItemId,
-          rawName: item.rawName,
-          quantity: item.quantity === null ? null : qty(item.quantity),
-          unitPrice: item.unitPrice === null ? null : unitCost(item.unitPrice),
-          totalPrice: item.totalPrice === null ? null : money(item.totalPrice),
-          unit: item.unit,
-          confidence: item.confidence === null ? null : item.confidence.toFixed(3),
-        })
-        .returning({ id: receiptItems.id });
-
-      itemRows.push(inserted[0]?.id);
+      // No inventory resolution, on purpose: the worker only extracts. Leaving
+      // `inventoryItemId` null is the durable signal that nobody has approved
+      // this line yet, and it is what `POST /receipts/:id/verify` reads to tell
+      // an untouched receipt from one that has already been applied. Doing it
+      // here is also what stops a wrong AI reading from corrupting stock counts
+      // before a human has seen the numbers.
+      await tx.insert(receiptItems).values({
+        shopId: data.shopId,
+        receiptId,
+        inventoryItemId: null,
+        rawName: item.rawName,
+        quantity: item.quantity === null ? null : qty(item.quantity),
+        unitPrice: item.unitPrice === null ? null : unitCost(item.unitPrice),
+        totalPrice: item.totalPrice === null ? null : money(item.totalPrice),
+        unit: item.unit,
+        confidence: item.confidence === null ? null : item.confidence.toFixed(3),
+      });
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data.shopId, storagePath, 'applying', 'Finalizing receipt');
+    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Saving receipt');
     await job.updateProgress(85);
 
     const derivedTotal =
       extraction.totalAmount ??
       extraction.items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
 
+    // `status` and `progressStage` deliberately part ways here: the worker is
+    // finished (progress stage `completed`) but the receipt is only extracted,
+    // not accepted (`status` `unverified`). `verified_at` carries apply time
+    // now, so `processedAt` below means "extraction finished" and nothing more.
     await tx
       .update(receipts)
       .set({
@@ -241,9 +219,9 @@ export async function processReceipt(
         totalAmount: money(derivedTotal),
         taxAmount: extraction.taxAmount === null ? null : money(extraction.taxAmount),
         currency: extraction.currency,
-        status: 'completed',
+        status: 'unverified',
         progressStage: 'completed',
-        progressMessage: 'Processing complete',
+        progressMessage: 'Ready for verification',
         rawExtraction: extraction as unknown as Record<string, unknown>,
         processedAt: new Date(),
         updatedAt: new Date(),
@@ -255,7 +233,7 @@ export async function processReceipt(
 
   jobLogger.info(
     { items: extraction.items.length, merchant: extraction.merchantName },
-    'receipt processed',
+    'receipt extracted, awaiting verification',
   );
 }
 

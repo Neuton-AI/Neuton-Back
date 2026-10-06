@@ -2,17 +2,27 @@ export const SHOP_ROLES = ['owner', 'admin', 'member'] as const;
 export type ShopRole = (typeof SHOP_ROLES)[number];
 
 /**
- * `completed` is what the vision worker still emits today, so it stays in the
- * union: analytics filters on it, and removing it here would make every receipt
- * the worker produces vanish from revenue and expense totals. N-28 flips the
- * worker to `unverified` and analytics to `verified`, then drops `completed`.
+ * The receipt lifecycle as the *user* sees it:
+ *
+ * `pending` → `processing` → `unverified` → `verified`
+ *
+ * `unverified` is where the worker stops: the document has been read and the
+ * lines saved, but nobody has approved them and inventory has not moved.
+ * `verified` is only ever written by `POST /receipts/:id/verify`, and that same
+ * word is what analytics counts as spend, so `unverified` receipts are
+ * deliberately absent from revenue and expense totals.
+ *
+ * `completed` is retired as of N-28. Every historical `completed` row was
+ * rewritten to `verified` by `0007_receipt_status_switchover.sql`, which matters
+ * more than it sounds: there is no CHECK constraint on `receipts.status`, so
+ * nothing but that backfill stops a stray `completed` from surviving as a value
+ * no query in the codebase matches.
  */
 export const RECEIPT_STATUSES = [
   'pending',
   'processing',
   'unverified',
   'verified',
-  'completed',
   'failed',
 ] as const;
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];

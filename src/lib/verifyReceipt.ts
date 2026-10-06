@@ -12,12 +12,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { receipts, receiptItems } from '../db/schema/index.js';
 import { badRequest, conflict, notFound } from './errors.js';
-import {
-  applyPurchaseFrom,
-  findOrCreateInventoryItem,
-  lockInventoryRows,
-  reduceStock,
-} from './inventory.js';
+import { applyPurchaseFrom, findOrCreateInventoryItem, lockInventoryRows } from './inventory.js';
 import { money, quantity as qty, toNumber, unitCost } from './money.js';
 
 export interface VerifyLineInput {
@@ -52,10 +47,9 @@ interface Decision {
   inventoryItemId: string | null;
   rawName: string;
   unit: string | null;
+  /** Quantity to put into stock: the reviewer's figure, absent nothing applied. */
   quantity: number;
   unitPrice: number;
-  /** Signed stock movement: accepted minus what the worker already applied. */
-  delta: number;
 }
 
 export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyReceiptResult> {
@@ -113,7 +107,6 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
           unit,
           quantity,
           unitPrice,
-          delta: 0,
         });
         continue;
       }
@@ -121,10 +114,12 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       accepted += 1;
       const inventoryItemId = await findOrCreateInventoryItem(tx, shopId, rawName, unit);
 
-      // A delta, never the full amount. The vision worker already moved stock for
-      // every extracted line, so approval settles only the difference between
-      // what was read off the document and what the reviewer accepted. Applying
-      // the whole line again would double-count every receipt that reaches here.
+      // Nothing was applied before this moment, so the whole accepted quantity
+      // is what goes into stock — there is no earlier contribution to net out
+      // against. The vision worker only extracts; it has never moved a unit
+      // since N-28. The 409 on an already-verified receipt above is what keeps
+      // this running at most once per receipt, so there is no second full apply
+      // to worry about either.
       decisions.push({
         stored,
         submitted,
@@ -133,7 +128,6 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
         unit,
         quantity,
         unitPrice,
-        delta: quantity - toNumber(stored.quantity),
       });
     }
 
@@ -149,23 +143,20 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     );
 
     for (const decision of decisions) {
-      if (!decision.inventoryItemId || decision.delta === 0) continue;
+      if (!decision.inventoryItemId || decision.quantity <= 0) continue;
 
       // Thread the state forward within the loop. Two accepted lines naming the
       // same SKU both start from the locked snapshot; without carrying the result
       // of the first write into the second, the later write would silently drop
       // the earlier line's quantity and cost.
       const snapshot = snapshots.get(decision.inventoryItemId);
-      const next =
-        decision.delta > 0
-          ? await applyPurchaseFrom(
-              tx,
-              decision.inventoryItemId,
-              decision.delta,
-              decision.unitPrice,
-              snapshot,
-            )
-          : await reduceStock(tx, decision.inventoryItemId, -decision.delta, snapshot);
+      const next = await applyPurchaseFrom(
+        tx,
+        decision.inventoryItemId,
+        decision.quantity,
+        decision.unitPrice,
+        snapshot,
+      );
 
       if (next) snapshots.set(decision.inventoryItemId, next);
     }

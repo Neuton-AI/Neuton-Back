@@ -20,6 +20,7 @@ import { FakeDb, type FakeResponses } from './support/fakeDb.js';
 import { buildAnalyticsApp, NOW, SHOP_ID } from './support/testApp.js';
 import {
   PERIOD_DAYS,
+  countedAsSpend,
   netProfitOf,
   periodStart,
   previousPeriodStart,
@@ -89,15 +90,30 @@ test('spentSince books undated spend instead of filtering it out', () => {
   const open = dialect.sqlToQuery(spentSince(start)).sql;
   assert.match(
     open,
-    /coalesce\("receipts"\."receipt_date", \("receipts"\."created_at" at time zone 'UTC'\)::date\) >= \$1/,
+    /coalesce\("receipts"\."receipt_date", \("receipts"\."created_at" at time zone 'UTC'\)::date\) >= \$1::date/,
     `unexpected window predicate: ${open}`,
   );
   assert.doesNotMatch(open, /is not null/i, 'a null date must never be filtered out again');
 
   const bounded = dialect.sqlToQuery(spentSince(start, before)).sql;
-  assert.match(bounded, />= \$1 and .+ < \$2/);
+  assert.match(bounded, />= \$1::date and .+ < \$2::date/);
   assert.equal(dialect.sqlToQuery(spentSince(start, before)).params.length, 2);
+  assert.deepEqual(
+    dialect.sqlToQuery(spentSince(start, before)).params,
+    [start.toISOString(), before.toISOString()],
+    'the window bounds are bound as ISO strings, not Date objects',
+  );
   assert.match(dialect.sqlToQuery(receiptSpendDay).sql, /coalesce\("receipts"\."receipt_date"/);
+});
+
+test('expenses count `verified` receipts, and only them', () => {
+  // N-28 flipped the dashboard filter from `completed` to `verified`. A typo
+  // here throws nothing and fails nothing — it just reports zeros everyone
+  // believes. Pin the predicate itself so the shape has to be right.
+  const dialect = new PgDialect();
+  const query = dialect.sqlToQuery(countedAsSpend);
+  assert.match(query.sql, /"receipts"\."status" = \$\d/);
+  assert.deepEqual(query.params, ['verified']);
 });
 
 test('dashboard: undated spend still reduces profit and is counted', async () => {
@@ -109,7 +125,7 @@ test('dashboard: undated spend still reduces profit and is counted', async () =>
       [{ netProfit: '280.00' }],
       [{ day: '2026-06-10', revenue: '500.00', delivery: '20.00', cost: '200.00' }],
     ],
-    // 100 dated + 250 undated, all completed, all inside the window.
+    // 100 dated + 250 undated, all verified, all inside the window.
     'select:receipts': [
       [{ expenses: '350.00', undatedCount: 1, undatedAmount: '250.00' }],
       [{ expenses: '0', undatedCount: 0, undatedAmount: '0' }],
