@@ -29,7 +29,7 @@ test('billing message is actionable and leaks no project identifiers', () => {
   const error = Object.assign(new Error('Your prepayment credits are depleted.'), { status: 402 });
   const message = publicFailureMessage(error);
   assert.match(message, /no prepaid credit/i);
-  assert.match(message, /reprocess/i);
+  assert.match(message, /upload the receipt again/i);
   assert.doesNotMatch(message, /projects|depleted|prepay/i);
 });
 
@@ -74,6 +74,6 @@ test('exhausted capacity is actionable and leaks no upstream internals', () => {
   );
   const message = publicFailureMessage(raw);
   assert.match(message, /busy right now/i);
-  assert.match(message, /reprocess/i);
+  assert.match(message, /upload the document again/i);
   assert.doesNotMatch(message, /UNAVAILABLE|projects|503|high demand/);
 });
