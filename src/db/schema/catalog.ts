@@ -64,13 +64,17 @@ export const recipes = pgTable('recipes', {
   allergens: text('allergens').array(),
   instructions: text('instructions'),
   isActive: boolean('is_active').notNull().default(true),
-  status: text('status', { enum: RECIPE_STATUSES }).notNull().default('unverified'),
+  status: text('status', { enum: RECIPE_STATUSES }).notNull().default('pending'),
+  storagePath: text('storage_path'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopNameUnique: uniqueIndex('recipes_shop_id_name_unique').on(t.shopId, t.name),
   shopIdx: index('recipes_shop_id_idx').on(t.shopId),
   shopStatusIdx: index('recipes_shop_id_status_idx').on(t.shopId, t.status),
+  shopStoragePathUnique: uniqueIndex('recipes_shop_id_storage_path_unique')
+    .on(t.shopId, t.storagePath)
+    .where(sql`${t.storagePath} IS NOT NULL`),
 }));
 
 export const recipeIngredients = pgTable('recipe_ingredients', {
