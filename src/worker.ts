@@ -300,6 +300,7 @@ export async function processRecipe(
         yieldUnit: yieldUnit ?? 'portion',
         allergens,
         instructions,
+        status: 'processing',
       })
       .returning();
 
@@ -326,6 +327,12 @@ export async function processRecipe(
 
     return recipe;
   });
+
+  // Move to unverified after extraction
+  await deps.db
+    .update(recipes)
+    .set({ status: 'unverified', updatedAt: new Date() })
+    .where(eq(recipes.id, costed.id));
 
   logger.info(
     {

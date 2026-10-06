@@ -27,6 +27,15 @@ export const RECEIPT_STATUSES = [
 ] as const;
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 
+/**
+ * The recipe lifecycle mirrors receipts: pending while queued, processing while
+ * the vision worker extracts, unverified until a human approves, verified once
+ * accepted. Financial impact is live-read (costing), so status gates visibility
+ * only, not costing math.
+ */
+export const RECIPE_STATUSES = ['pending', 'processing', 'unverified', 'verified', 'failed'] as const;
+export type RecipeStatus = (typeof RECIPE_STATUSES)[number];
+
 /** Per-line outcome of the human review pass. Lines start at `pending`. */
 export const RECEIPT_REVIEW_STATUSES = ['pending', 'accepted', 'rejected'] as const;
 export type ReceiptReviewStatus = (typeof RECEIPT_REVIEW_STATUSES)[number];

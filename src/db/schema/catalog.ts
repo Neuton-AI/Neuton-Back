@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { INVENTORY_UNITS } from './enums.js';
+import { INVENTORY_UNITS, RECIPE_STATUSES } from './enums.js';
 import { shops } from './identity.js';
 
 export const categories = pgTable('categories', {
@@ -64,11 +64,13 @@ export const recipes = pgTable('recipes', {
   allergens: text('allergens').array(),
   instructions: text('instructions'),
   isActive: boolean('is_active').notNull().default(true),
+  status: text('status', { enum: RECIPE_STATUSES }).notNull().default('unverified'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopNameUnique: uniqueIndex('recipes_shop_id_name_unique').on(t.shopId, t.name),
   shopIdx: index('recipes_shop_id_idx').on(t.shopId),
+  shopStatusIdx: index('recipes_shop_id_status_idx').on(t.shopId, t.status),
 }));
 
 export const recipeIngredients = pgTable('recipe_ingredients', {

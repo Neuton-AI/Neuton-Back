@@ -214,6 +214,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
    * in `lib/verifyReceipt.ts`; this handler is the guard, the request shape and
    * the audit trail around it.
    */
+  // Keep legacy route for backward compatibility
   app.post('/receipts/:id/verify', mutationGuards, async (request, reply) => {
     const deps = request.receiptsDeps ?? defaultReceiptsDeps;
     const shop = currentShop(request);
@@ -229,8 +230,6 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       items: body.items,
     });
 
-    // `RECEIPT_PROCESSED` is declared in `lib/audit.ts` but has never been
-    // emitted, so nothing on record says who approved a receipt.
     await recordAuditSafe(app, {
       shopId: shop.id,
       userId: user.id,
