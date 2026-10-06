@@ -674,24 +674,22 @@ test('terminal failure: the stored message is capped so it always fits the colum
 });
 
 test('terminal failure: a recipe job records failure on the recipe row', async () => {
-    const { db, deps, jobData } = harness({ data: { kind: 'recipe' } });
+  const { db, deps, jobData } = harness({ data: { kind: 'recipe' } });
 
-    await recordTerminalFailure(deps, jobData, new Error('boom'));
+  await recordTerminalFailure(deps, jobData, new Error('boom'));
 
-    // Should update recipes table to status='failed'
-    assert.equal(db.calls.length, 1);
-    assert.equal(db.calls[0].op, 'update');
-    assert.equal(db.calls[0].table, 'recipes');
-    assert.equal((db.calls[0].set as Record<string, unknown>).status, 'failed');
-  });
+  // Should update recipes table to status='failed'
+  const call = db.onlyCallTo('update', 'recipes');
+  assert.equal((call.set as Record<string, unknown>).status, 'failed');
+});
 
-  test('terminal failure: an order job still touches no row (orders have no status workflow)', async () => {
-    const { db, deps, jobData } = harness({ data: { kind: 'order' } });
+test('terminal failure: an order job still touches no row (orders have no status workflow)', async () => {
+  const { db, deps, jobData } = harness({ data: { kind: 'order' } });
 
-    await recordTerminalFailure(deps, jobData, new Error('boom'));
+  await recordTerminalFailure(deps, jobData, new Error('boom'));
 
-    assert.equal(db.calls.length, 0);
-  });
+  assert.equal(db.calls.length, 0);
+});
 
 test('terminal failure: a failing update is swallowed so the job still reports its own error', async () => {
   const { db, deps, jobData } = harness();
