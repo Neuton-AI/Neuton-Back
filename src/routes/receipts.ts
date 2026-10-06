@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { db } from '../db/client.js';
+import { db, type Database } from '../db/client.js';
 import { receipts, receiptItems } from '../db/schema/index.js';
+import { RECEIPT_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, forbidden, tooLarge } from '../lib/errors.js';
+import { verifyReceipt } from '../lib/verifyReceipt.js';
 import { enqueueMediaJob, type MediaKind } from '../lib/queue.js';
 import {
   assertContentType,
@@ -29,6 +31,48 @@ const presignSchema = z.object({
   byteSize: z.coerce.number().int().positive().optional(),
   orderId: z.string().uuid().optional(),
 });
+
+/**
+ * One line's verdict, plus any corrections the reviewer made while reading it.
+ * Every field is optional: omitting a correction means "the extraction was
+ * right", which is what the common case looks like.
+ */
+const verifyItemSchema = z.object({
+  id: z.string().uuid(),
+  accepted: z.boolean(),
+  rawName: z.string().trim().min(1).max(200).optional(),
+  rawSku: z.string().trim().min(1).max(120).optional(),
+  unit: z.string().trim().min(1).max(20).optional(),
+  quantity: z.coerce.number().min(0).optional(),
+  unitPrice: z.coerce.number().min(0).optional(),
+  totalPrice: z.coerce.number().min(0).optional(),
+});
+
+const verifySchema = z.object({
+  items: z.array(verifyItemSchema).min(1).max(500),
+});
+
+/**
+ * Collaborators the receipt routes write through. Injected so the verification
+ * transaction can be exercised against a scripted database; production always
+ * uses `defaultReceiptsDeps`.
+ */
+export interface ReceiptsDeps {
+  db: Database;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * Per-request override of `defaultReceiptsDeps`. Production never sets it;
+     * it exists so the verification endpoint can be tested without a live
+     * Postgres.
+     */
+    receiptsDeps?: ReceiptsDeps;
+  }
+}
+
+export const defaultReceiptsDeps: ReceiptsDeps = { db };
 
 export const receiptRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
@@ -163,11 +207,49 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(202).send({ receiptId, ...enqueued });
   });
 
+  /**
+   * Applies a reviewer-approved receipt to inventory.
+   *
+   * The transaction, the row locks and the delta arithmetic all live in
+   * `lib/verifyReceipt.ts`; this handler is the guard, the request shape and the
+   * audit trail around it.
+   */
+  app.post('/receipts/:id/verify', mutationGuards, async (request, reply) => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+    const shop = currentShop(request);
+    const user = currentUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = verifySchema.parse(request.body);
+
+    const outcome = await verifyReceipt({
+      db: deps.db,
+      shopId: shop.id,
+      userId: user.id,
+      receiptId: id,
+      items: body.items,
+    });
+
+    // `RECEIPT_PROCESSED` is declared in `lib/audit.ts` but has never been
+    // emitted, so nothing on record says who approved a receipt.
+    await recordAuditSafe(app, {
+      shopId: shop.id,
+      userId: user.id,
+      eventType: 'RECEIPT_PROCESSED',
+      resourceId: id,
+      ipAddress: request.ip,
+      metadata: { accepted: outcome.accepted, rejected: outcome.rejected },
+    });
+
+    return reply.code(200).send(outcome);
+  });
+
   app.get('/receipts', guards, async (request) => {
     const shop = currentShop(request);
     const query = z
       .object({
-        status: z.enum(['pending', 'processing', 'completed', 'failed']).optional(),
+        // Derived from the schema so `unverified`/`verified` are filterable
+        // without a third hand-maintained copy drifting out of sync.
+        status: z.enum(RECEIPT_STATUSES).optional(),
         search: z.string().trim().max(120).optional(),
         limit: z.coerce.number().int().min(1).max(100).default(50),
         offset: z.coerce.number().int().min(0).default(0),
@@ -214,6 +296,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       )
       .orderBy(asc(receiptItems.id));
 
+    // `verifiedBy`/`verifiedAt` and each line's `reviewStatus` ride along on the
+    // `select()` above, so the review screen reads the whole verdict from here
+    // without a second request.
     return { receipt: { ...receipt, items } };
   });
 

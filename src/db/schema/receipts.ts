@@ -10,7 +10,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { RECEIPT_STATUSES } from './enums.js';
+import { RECEIPT_REVIEW_STATUSES, RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
 import { profiles, shops } from './identity.js';
 
@@ -49,6 +49,9 @@ export const receipts = pgTable('receipts', {
   rawExtraction: jsonb('raw_extraction'),
   errorMessage: text('error_message'),
   processedAt: timestamp('processed_at', { withTimezone: true }),
+  /** The user who approved the receipt's lines; null until verified. */
+  verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -74,6 +77,13 @@ export const receiptItems = pgTable('receipt_items', {
   totalPrice: numeric('total_price', { precision: 12, scale: 2 }),
   unit: text('unit'),
   confidence: numeric('confidence', { precision: 4, scale: 3 }),
+  /**
+   * Outcome of the human review pass. `pending` is the default and the only
+   * value the vision worker ever writes — it does not review anything.
+   */
+  reviewStatus: text('review_status', { enum: RECEIPT_REVIEW_STATUSES })
+    .notNull()
+    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   receiptIdx: index('receipt_items_receipt_id_idx').on(t.receiptId),

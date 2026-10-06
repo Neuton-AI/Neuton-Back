@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import pino from 'pino';
-import { and, eq, ilike, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -22,7 +22,11 @@ import { getObjectBytes } from './lib/storage.js';
 import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
-import { applyWeightedAverage, calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
+import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
+import {
+  applyPurchase as applyPurchaseOn,
+  findOrCreateInventoryItem as findOrCreateInventoryItemOn,
+} from './lib/inventory.js';
 import { env, isDevelopment } from './env.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
@@ -57,87 +61,33 @@ export const defaultWorkerDeps: WorkerDeps = {
   extractOrder,
 };
 
-const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const;
-type InventoryUnit = (typeof INVENTORY_UNITS)[number];
-
 function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
 }
 
+/**
+ * Thin `WorkerDeps` wrappers over the shared inventory helpers, kept so
+ * `scripts/worker.test.ts` can still exercise them through the worker's own
+ * signature. The handlers below deliberately do **not** use these: they pass a
+ * transaction handle instead, so inventory writes commit or roll back with the
+ * receipt they belong to.
+ */
 export async function findOrCreateInventoryItem(
   deps: WorkerDeps,
   shopId: string,
   rawName: string,
   unit: string | null,
 ): Promise<string | null> {
-  const name = rawName.trim();
-  if (name.length === 0) return null;
-
-  const exact = await deps.db
-    .select({ id: inventoryItems.id })
-    .from(inventoryItems)
-    .where(and(eq(inventoryItems.shopId, shopId), eq(inventoryItems.name, name)))
-    .limit(1);
-  if (exact[0]) return exact[0].id;
-
-  const fuzzy = await deps.db
-    .select({ id: inventoryItems.id })
-    .from(inventoryItems)
-    .where(and(eq(inventoryItems.shopId, shopId), ilike(inventoryItems.name, `%${name}%`)))
-    .limit(1);
-  if (fuzzy[0]) return fuzzy[0].id;
-
-  const created = await deps.db
-    .insert(inventoryItems)
-    .values({
-      shopId,
-      name,
-      unit: (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
-        ? (unit as InventoryUnit)
-        : 'unit',
-      currentQuantity: '0.000',
-    })
-    .returning({ id: inventoryItems.id });
-
-  return created[0]?.id ?? null;
+  return findOrCreateInventoryItemOn(deps.db, shopId, rawName, unit);
 }
 
-/**
- * Applies a purchased line to inventory: bumps stock and rolls the weighted
- * moving average unit cost forward.
- */
 export async function applyPurchase(
   deps: WorkerDeps,
   inventoryItemId: string,
   purchasedQuantity: number,
   unitPrice: number,
 ): Promise<void> {
-  const rows = await deps.db
-    .select({
-      currentQuantity: inventoryItems.currentQuantity,
-      averageUnitCost: inventoryItems.averageUnitCost,
-    })
-    .from(inventoryItems)
-    .where(eq(inventoryItems.id, inventoryItemId))
-    .limit(1);
-
-  const current = rows[0];
-  if (!current) return;
-
-  const next = applyWeightedAverage(
-    { currentQuantity: current.currentQuantity, averageUnitCost: current.averageUnitCost },
-    { quantity: purchasedQuantity, unitPrice },
-  );
-
-  await deps.db
-    .update(inventoryItems)
-    .set({
-      currentQuantity: qty(next.currentQuantity),
-      lastUnitCost: unitCost(next.lastUnitCost),
-      averageUnitCost: unitCost(next.averageUnitCost),
-      updatedAt: new Date(),
-    })
-    .where(eq(inventoryItems.id, inventoryItemId));
+  await applyPurchaseOn(deps.db, inventoryItemId, purchasedQuantity, unitPrice);
 }
 
 async function updateReceiptProgress(
@@ -243,15 +193,18 @@ export async function processReceipt(
       );
       await job.updateProgress(progress);
 
-      const inventoryItemId = await findOrCreateInventoryItem(
-        deps,
+      // `tx`, not `deps.db`: these writes belong to the same unit of work as the
+      // receipt row below, and escaping the transaction means a failure after
+      // this point leaves inventory moved but the receipt unprocessed.
+      const inventoryItemId = await findOrCreateInventoryItemOn(
+        tx,
         data.shopId,
         item.rawName,
         item.unit,
       );
 
       if (inventoryItemId && item.quantity && item.unitPrice) {
-        await applyPurchase(deps, inventoryItemId, item.quantity, item.unitPrice);
+        await applyPurchaseOn(tx, inventoryItemId, item.quantity, item.unitPrice);
       }
 
       const inserted = await tx
@@ -348,8 +301,8 @@ export async function processRecipe(
 
   const linkedIngredientIds = new Map<string, string>();
   for (const ingredient of extraction.ingredients) {
-    const inventoryItemId = await findOrCreateInventoryItem(
-      deps,
+    const inventoryItemId = await findOrCreateInventoryItemOn(
+      deps.db,
       data.shopId,
       ingredient.rawName,
       ingredient.unit,
