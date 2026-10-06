@@ -7,7 +7,6 @@ export type AuditEvent =
   | 'SHOP_UPDATED'
   | 'RECEIPT_UPLOAD'
   | 'RECEIPT_PROCESSED'
-  | 'RECEIPT_FAILED'
   | 'ORDER_CREATED'
   | 'RECIPE_CREATED'
   | 'RECIPE_UPDATED'

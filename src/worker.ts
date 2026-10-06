@@ -476,7 +476,7 @@ export async function processOrderDocument(
 
 /**
  * Records the terminal failure on the receipt row. Without this the UI polls
- * `/receipts/:id/status` forever on "processing" and never offers reprocess.
+ * `/receipts/:id/status` forever on "processing" with no error to show.
  * Only fires once BullMQ has exhausted attempts, so transient failures stay
  * invisible to the shop.
  */

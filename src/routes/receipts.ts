@@ -302,48 +302,6 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     return { receipt: { ...receipt, items } };
   });
 
-  /** Manual re-run for a receipt whose AI extraction failed. */
-  app.post('/receipts/:id/reprocess', mutationGuards, async (request, reply) => {
-    const shop = currentShop(request);
-    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-
-    const rows = await db
-      .select()
-      .from(receipts)
-      .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)))
-      .limit(1);
-    const receipt = rows[0];
-    if (!receipt) throw notFound('Receipt not found');
-
-    await db
-      .update(receipts)
-      .set({
-        status: 'processing',
-        errorMessage: null,
-        progressStage: 'pending',
-        progressMessage: null,
-        processingStartedAt: null,
-        processingDeadline: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(receipts.id, id));
-
-    if (!receipt.storagePath) {
-      throw new Error('Cannot reprocess receipt without storagePath');
-    }
-
-    const enqueued = await enqueueMediaJob({
-      shopId: shop.id,
-      uploadedBy: currentUser(request).id,
-      kind: 'receipt',
-      storagePath: receipt.storagePath,
-      contentType: receipt.contentType ?? 'image/jpeg',
-      originalFilename: receipt.originalFilename,
-    });
-
-    return reply.code(202).send({ receiptId: id, ...enqueued });
-  });
-
   /** Cheap polling endpoint for the "processing…" state on a receipt card. */
   app.get('/receipts/:id/status', guards, async (request) => {
     const shop = currentShop(request);

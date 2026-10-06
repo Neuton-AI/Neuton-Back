@@ -49,7 +49,7 @@ export function publicFailureMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
 
   if (status === 402) {
-    return 'The AI vision service has no prepaid credit left. Add credit in AI Studio, then reprocess.';
+    return 'The AI vision service has no prepaid credit left. Add credit in AI Studio, then upload the receipt again.';
   }
   if (status === 401 || status === 403) {
     return 'The AI vision service rejected its credentials. Check GEMINI_API_KEY.';
@@ -63,7 +63,7 @@ export function publicFailureMessage(error: unknown): string {
   // Every model in the list was out of capacity. Plain language only: the raw
   // payload names the project and leaks upstream internals.
   if (status !== null && status >= 500) {
-    return 'The AI vision service is busy right now and every model was out of capacity. Reprocess in a few minutes.';
+    return 'The AI vision service is busy right now and every model was out of capacity. Upload the document again in a few minutes.';
   }
   if (raw.includes('NoSuchKey')) return 'The uploaded document is no longer in storage.';
   if (raw.includes('exceeds MAX_UPLOAD_BYTES')) return 'The uploaded document is larger than the configured limit.';

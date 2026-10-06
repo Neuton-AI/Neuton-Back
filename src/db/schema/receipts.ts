@@ -42,7 +42,7 @@ export const receipts = pgTable('receipts', {
     .references(() => shops.id, { onDelete: 'cascade' }),
   uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
   storagePath: text('storage_path'),
-  /** MIME type actually stored in R2; reprocessing must not guess this. */
+  /** MIME type actually stored in R2; the detail sheet renders PDFs differently. */
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
   merchantName: text('merchant_name'),
