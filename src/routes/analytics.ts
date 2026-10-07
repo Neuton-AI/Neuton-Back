@@ -87,9 +87,11 @@ export const receiptSpendDay = sql`coalesce(${receipts.receiptDate}, (${receipts
  * exact UTC-midnight semantics `periodStart` already computes.
  */
 export function spentSince(start: Date, before?: Date): SQL {
+  const startStr = start.toISOString();
+  console.log('[spentSince] start:', start, 'startStr:', startStr, 'typeof:', typeof startStr);
   return before === undefined
-    ? sql`${receiptSpendDay} >= ${start.toISOString()}::date`
-    : sql`${receiptSpendDay} >= ${start.toISOString()}::date and ${receiptSpendDay} < ${utcInstant(before)}::date`;
+    ? sql`${receiptSpendDay} >= ${startStr}::date`
+    : sql`${receiptSpendDay} >= ${startStr}::date and ${receiptSpendDay} < ${utcInstant(before)}::date`;
 }
 
 /** ISO instant for a window bound; see the note on `spentSince`. */
