@@ -544,6 +544,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
 
       const patch: Partial<typeof recipes.$inferInsert> = {
         status: 'verified',
+        errorMessage: null,
         updatedAt: new Date(),
       };
 
