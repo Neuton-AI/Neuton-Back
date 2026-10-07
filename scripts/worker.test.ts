@@ -126,7 +126,7 @@ test('inventory lookup: a blank name is rejected without touching the database',
 });
 
 test('inventory lookup: an exact name match short-circuits the fuzzy search', async () => {
-  const { db, deps } = harness({ responses: { 'select:inventoryItems': [[{ id: 'inv-1' }]] } });
+  const { db, deps } = harness({ responses: { 'select:inventoryItems': [[{ id: 'inv-1', name: 'Flour' }]] } });
 
   assert.equal(await findOrCreateInventoryItem(deps, SHOP_ID, ' Flour ', 'kg'), 'inv-1');
   assert.equal(db.callsTo('select', 'inventoryItems').length, 1);
@@ -135,17 +135,17 @@ test('inventory lookup: an exact name match short-circuits the fuzzy search', as
 
 test('inventory lookup: a substring match reuses the row instead of inserting', async () => {
   const { db, deps } = harness({
-    responses: { 'select:inventoryItems': [[], [{ id: 'inv-2' }]] },
+    responses: { 'select:inventoryItems': [[{ id: 'inv-2', name: 'Flour' }]] },
   });
 
   assert.equal(await findOrCreateInventoryItem(deps, SHOP_ID, 'flour', 'kg'), 'inv-2');
-  assert.equal(db.callsTo('select', 'inventoryItems').length, 2);
+  assert.equal(db.callsTo('select', 'inventoryItems').length, 1);
   assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
 });
 
 test('inventory lookup: an unknown name is created at zero stock', async () => {
   const { db, deps } = harness({
-    responses: { 'select:inventoryItems': [[], []], 'insert:inventoryItems': [[{ id: 'inv-3' }]] },
+    responses: { 'select:inventoryItems': [[]], 'insert:inventoryItems': [[{ id: 'inv-3' }]] },
   });
 
   assert.equal(await findOrCreateInventoryItem(deps, SHOP_ID, '  Tahini ', 'kg'), 'inv-3');
@@ -171,7 +171,7 @@ test('inventory lookup: only the six known units are stored, anything else becom
 
   for (const [supplied, expected] of cases) {
     const { db, deps } = harness({
-      responses: { 'select:inventoryItems': [[], []], 'insert:inventoryItems': [[{ id: 'inv-4' }]] },
+      responses: { 'select:inventoryItems': [[]], 'insert:inventoryItems': [[{ id: 'inv-4' }]] },
     });
     await findOrCreateInventoryItem(deps, SHOP_ID, 'Saffron', supplied);
     const created = db.onlyCallTo('insert', 'inventoryItems').values as { unit: string };
@@ -408,18 +408,24 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
     {
       shopId: SHOP_ID,
       recipeId: 'rec-1',
-      inventoryItemId: 'inv-flour',
+      inventoryItemId: null,
       quantity: '2.000',
       unit: 'kg',
+      rawName: 'Flour',
+    },
+    {
+      shopId: SHOP_ID,
+      recipeId: 'rec-1',
+      inventoryItemId: null,
+      quantity: '1.000',
+      unit: 'kg',
+      rawName: 'Salt',
     },
   ]);
 
-  const created = db.onlyCallTo('insert', 'inventoryItems');
-  assert.equal(
-    created.inTransaction,
-    true,
-    'SKU creation must run inside the transaction — otherwise a job that fails later leaves zero-cost orphan rows behind',
-  );
+  const createdCalls = db.callsTo('insert', 'inventoryItems');
+  assert.ok(createdCalls.length === 0, 'SKU creation must not happen for recipe path');
+
 });
 
 test('recipe: a missing or non-positive yield falls back to a single portion', async () => {
@@ -485,8 +491,8 @@ test('recipe: a job that fails its transaction leaves no orphan inventory rows',
   const { db, deps, job, jobData } = harness({
     responses: {
       'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
-      'select:inventoryItems': [[], []],
-      'insert:inventoryItems': [[{ id: 'inv-flour' }]],
+      'select:inventoryItems': [[{ id: 'inv-flour', name: 'Flour' }]],
+      'insert:inventoryItems': [],
       'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
     },
     extractions: { recipe: RECIPE },
@@ -502,14 +508,8 @@ test('recipe: a job that fails its transaction leaves no orphan inventory rows',
   await assert.rejects(() => processRecipe(deps, jobData, job), /duplicate key/);
 
   const created = db.callsTo('insert', 'inventoryItems');
-  assert.ok(created.length > 0, 'the job created SKUs before the insert died');
-  for (const call of created) {
-    assert.equal(
-      call.inTransaction,
-      true,
-      'SKU creation must run inside the transaction, so the rollback discards it',
-    );
-  }
+  assert.ok(created.length === 0, 'recipe path should not create inventory items on miss');
+
 });
 
 test('recipe: retrying over an existing row clears a stale failure and resolves inventory in-transaction', async () => {
@@ -517,8 +517,8 @@ test('recipe: retrying over an existing row clears a stale failure and resolves 
     responses: {
       'select:recipes': [[{ id: 'rec-1' }]],
       'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
-      'select:inventoryItems': [[], []],
-      'insert:inventoryItems': [[{ id: 'inv-flour' }]],
+      'select:inventoryItems': [[{ id: 'inv-flour', name: 'Flour' }]],
+      'insert:inventoryItems': [],
     },
     extractions: { recipe: RECIPE },
   });
@@ -529,10 +529,8 @@ test('recipe: retrying over an existing row clears a stale failure and resolves 
   assert.equal((claim.set as Record<string, unknown>).errorMessage, null, 'a retry must clear the previous failure');
 
   const created = db.callsTo('insert', 'inventoryItems');
-  assert.ok(created.length >= 1, 'the update path attempted SKU creation');
-  for (const call of created) {
-    assert.equal(call.inTransaction, true, 'resolution on the update path must run inside the transaction too');
-  }
+  assert.ok(created.length === 0, 'the update path should not create inventory items on miss');
+
 
   const done = db.callsTo('update', 'recipes').find((c) => c.set?.status === 'unverified')!;
   assert.equal((done.set as Record<string, unknown>).errorMessage, null, 'a successful re-extraction clears the failure');

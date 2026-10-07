@@ -27,28 +27,50 @@ export interface InventorySnapshot {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type InventoryDb = any;
 
+function normalizeName(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+export async function findInventoryItem(
+  db: InventoryDb,
+  shopId: string,
+  rawName: string,
+): Promise<string | null> {
+  const name = rawName.trim();
+  if (name.length === 0) return null;
+  const normalized = normalizeName(name);
+
+  const candidates = await db
+    .select({ id: inventoryItems.id, name: inventoryItems.name })
+    .from(inventoryItems)
+    .where(and(eq(inventoryItems.shopId, shopId)));
+
+  for (const candidate of candidates) {
+    if (normalizeName(candidate.name) === normalized) {
+      return candidate.id;
+    }
+  }
+  return null;
+}
+
 export async function findOrCreateInventoryItem(
   db: InventoryDb,
   shopId: string,
   rawName: string,
   unit: string | null,
+  context?: 'receipt' | 'recipe' | 'generic',
 ): Promise<string | null> {
+  const found = await findInventoryItem(db, shopId, rawName);
+  if (found) return found;
+  if (context === 'recipe') {
+    return null;
+  }
+
   const name = rawName.trim();
   if (name.length === 0) return null;
-
-  const exact = await db
-    .select({ id: inventoryItems.id })
-    .from(inventoryItems)
-    .where(and(eq(inventoryItems.shopId, shopId), eq(inventoryItems.name, name)))
-    .limit(1);
-  if (exact[0]) return exact[0].id;
-
-  const fuzzy = await db
-    .select({ id: inventoryItems.id })
-    .from(inventoryItems)
-    .where(and(eq(inventoryItems.shopId, shopId), ilike(inventoryItems.name, `%${name}%`)))
-    .limit(1);
-  if (fuzzy[0]) return fuzzy[0].id;
 
   const created = await db
     .insert(inventoryItems)

@@ -1,6 +1,6 @@
 {
-  "id": "a7b60188-965a-490a-ba78-9edc378eb8bd",
-  "prevId": "37b4c3d5-562e-49cb-8a95-e27e91e2d86c",
+  "id": "1dc045f8-f758-48be-a2bd-b81147e7121c",
+  "prevId": "a7b60188-965a-490a-ba78-9edc378eb8bd",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -654,6 +654,12 @@
         "inventory_item_id": {
           "name": "inventory_item_id",
           "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "raw_name": {
+          "name": "raw_name",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },

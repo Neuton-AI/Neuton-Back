@@ -22,6 +22,20 @@
       "when": 1790801316418,
       "tag": "0002_receipts_content_type",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791332482404,
+      "tag": "0003_recipe_ingredient_unlinked",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791332593761,
+      "tag": "0004_recipe_ingredient_unlinked_fix",
+      "breakpoints": true
     }
   ]
 }

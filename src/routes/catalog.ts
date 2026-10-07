@@ -21,7 +21,8 @@ import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js'
 import { defaultReceiptsDeps } from './receipts.js';
 
 const recipeIngredientSchema = z.object({
-  inventoryItemId: z.string().uuid(),
+  inventoryItemId: z.string().uuid().nullable().optional(),
+  rawName: z.string().trim().min(1).max(160),
   quantity: z.coerce.number().positive(),
   unit: z.string().trim().min(1).max(24),
 });
@@ -62,16 +63,18 @@ async function costRecipe(
   shopMargin: string,
   hourlyLaborCost: string,
 ) {
-  const ingredients = await db
+  const ingredientRows = await db
     .select({
-      name: inventoryItems.name,
+      inventoryItemId: recipeIngredients.inventoryItemId,
+      rawName: recipeIngredients.rawName,
       unit: recipeIngredients.unit,
       quantity: recipeIngredients.quantity,
+      name: inventoryItems.name,
       currentQuantity: inventoryItems.currentQuantity,
       averageUnitCost: inventoryItems.averageUnitCost,
     })
     .from(recipeIngredients)
-    .innerJoin(
+    .leftJoin(
       inventoryItems,
       eq(inventoryItems.id, recipeIngredients.inventoryItemId),
     )
@@ -83,48 +86,65 @@ async function costRecipe(
     )
     .orderBy(asc(recipeIngredients.id));
 
+  const linkedIngredients = ingredientRows.filter((i) => i.inventoryItemId !== null);
+  const totalCount = ingredientRows.length;
+  const linkedCount = linkedIngredients.length;
+
   const breakdown = calculateUnitCost({
-    ingredients: ingredients.map((i) => ({
+    ingredients: linkedIngredients.map((i) => ({
       quantity: i.quantity,
-      averageUnitCost: i.averageUnitCost,
+      averageUnitCost: i.averageUnitCost ?? '0',
     })),
     prepTimeMinutes: recipe.prepTimeMinutes,
     hourlyLaborCost,
     yieldQuantity: recipe.yieldQuantity,
   });
 
+  const baseMargin = linkedCount === totalCount ? shopMargin : shopMargin;
+  const marginToUse = linkedCount === totalCount ? shopMargin : '0';
+
   const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
     breakdown.unitCost,
-    shopMargin,
-    recipe.targetMarginPct,
+    linkedCount === totalCount ? shopMargin : shopMargin,
+    linkedCount === totalCount ? recipe.targetMarginPct : null,
   );
 
-  const batchAvailable = ingredients.every((ingredient) => {
-    const stock = checkBatchStock({
-      requiredQuantity: toNumber(ingredient.quantity),
-      currentQuantity: toNumber(ingredient.currentQuantity),
+  const retailPriceAdjusted = linkedCount === totalCount ? retailPrice : '0.0000';
+
+  const batchAvailable =
+    linkedCount === totalCount &&
+    linkedIngredients.every((ingredient) => {
+      const stock = checkBatchStock({
+        requiredQuantity: toNumber(ingredient.quantity),
+        currentQuantity: toNumber(ingredient.currentQuantity ?? '0'),
+      });
+      return stock.inStock;
     });
-    return stock.inStock;
-  });
 
   return {
     unitCost: breakdown.unitCost,
     ingredientsCost: breakdown.ingredientsCost,
     laborCost: breakdown.laborCost,
     batchCost: breakdown.batchCost,
-    retailPrice,
-    appliedMarginPercent,
+    retailPrice: retailPriceAdjusted,
+    appliedMarginPercent: linkedCount === totalCount ? appliedMarginPercent : '0.00',
     yieldQuantity: toNumber(recipe.yieldQuantity),
     inStock: batchAvailable,
-    ingredients: ingredients.map((ingredient) => ({
-      name: ingredient.name,
+    linkedCount,
+    totalCount,
+    ingredients: ingredientRows.map((ingredient) => ({
+      name: ingredient.name ?? ingredient.rawName,
       quantity: toNumber(ingredient.quantity),
       unit: ingredient.unit,
-      averageUnitCost: toNumber(ingredient.averageUnitCost),
-      lineCost:
-        Math.round(toNumber(ingredient.quantity) * toNumber(ingredient.averageUnitCost) * 10_000) /
-        10_000,
-      currentQuantity: toNumber(ingredient.currentQuantity),
+      averageUnitCost: ingredient.averageUnitCost ? toNumber(ingredient.averageUnitCost) : 0,
+      lineCost: ingredient.averageUnitCost
+        ? Math.round(toNumber(ingredient.quantity) * toNumber(ingredient.averageUnitCost) * 10_000) /
+          10_000
+        : 0,
+      currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
+      inventoryItemId: ingredient.inventoryItemId,
+      rawName: ingredient.rawName,
+      linked: ingredient.inventoryItemId !== null,
     })),
   };
 }
@@ -222,7 +242,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         body.ingredients.map((ingredient) => ({
           shopId: shop.id,
           recipeId: recipe.id,
-          inventoryItemId: ingredient.inventoryItemId,
+          inventoryItemId: ingredient.inventoryItemId ?? null,
+          rawName: ingredient.rawName,
           quantity: qty(ingredient.quantity),
           unit: ingredient.unit,
         })),
@@ -306,7 +327,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
             body.ingredients.map((ingredient) => ({
               shopId: shop.id,
               recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId,
+              inventoryItemId: ingredient.inventoryItemId ?? null,
+              rawName: ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
             })),
@@ -562,7 +584,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
             body.ingredients.map((ingredient) => ({
               shopId: shop.id,
               recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId,
+              inventoryItemId: ingredient.inventoryItemId ?? null,
+              rawName: ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
             })),

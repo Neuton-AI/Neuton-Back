@@ -86,9 +86,10 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   recipeId: uuid('recipe_id')
     .notNull()
     .references(() => recipes.id, { onDelete: 'cascade' }),
-  inventoryItemId: uuid('inventory_item_id')
-    .notNull()
-    .references(() => inventoryItems.id, { onDelete: 'restrict' }),
+  inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
+    onDelete: 'restrict',
+  }),
+  rawName: text('raw_name').notNull(),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
   unit: text('unit').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
