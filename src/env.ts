@@ -58,14 +58,14 @@ const envSchema = z.object({
   /** BullMQ concurrency for the receipt vision pipeline. */
   RECEIPT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
   /** Max time (ms) a single Gemini API call may take before aborting. */
-  GEMINI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
-  /** Max time (ms) a BullMQ job may hold a worker slot (lockDuration). */
-  JOB_LOCK_DURATION_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  GEMINI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  /** Max time (ms) a BullMQ job may hold a worker slot (lockDuration). 2.5 min per attempt. */
+  JOB_LOCK_DURATION_MS: z.coerce.number().int().positive().default(2.5 * 60 * 1000),
   /** Max time (ms) a BullMQ job may run before being forcibly stalled. */
-  JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(2.5 * 60 * 1000),
   /** Max time (ms) a database query may run before timing out. */
   DB_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
-  /** Max time (ms) a receipt can spend in processing before being marked as failed. */
+  /** Max time (ms) a receipt can spend in processing before being marked as failed. 5 min total (2 attempts x 2.5 min). */
   RECEIPT_PROCESSING_TIMEOUT_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
   /** Circuit breaker: trip after this many consecutive Gemini failures across all jobs. */
   CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(10),
