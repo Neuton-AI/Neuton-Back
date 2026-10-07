@@ -85,6 +85,10 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
     return this;
   }
 
+  leftJoin(): this {
+    return this;
+  }
+
   limit(count: number): this {
     this.rowLimit = count;
     return this;

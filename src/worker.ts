@@ -486,7 +486,7 @@ export async function processOrderDocument(
       averageUnitCost: inventoryItems.averageUnitCost,
     })
     .from(recipeIngredients)
-    .innerJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
     .where(eq(recipeIngredients.shopId, data.shopId));
   const byRecipe = new Map<string, typeof ingredientRows>();
   for (const row of ingredientRows) {
@@ -497,7 +497,7 @@ export async function processOrderDocument(
     const breakdown = calculateUnitCost({
       ingredients: (byRecipe.get(row.recipe.id) ?? []).map((i) => ({
         quantity: i.quantity,
-        averageUnitCost: i.averageUnitCost,
+        averageUnitCost: i.averageUnitCost ?? '0',
       })),
       prepTimeMinutes: row.recipe.prepTimeMinutes,
       hourlyLaborCost: shop?.hourlyLaborCost ?? '0',

@@ -100,19 +100,18 @@ async function costRecipe(
     yieldQuantity: recipe.yieldQuantity,
   });
 
-  const baseMargin = linkedCount === totalCount ? shopMargin : shopMargin;
-  const marginToUse = linkedCount === totalCount ? shopMargin : '0';
+  const fullyLinked = linkedCount === totalCount;
 
   const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
     breakdown.unitCost,
-    linkedCount === totalCount ? shopMargin : shopMargin,
-    linkedCount === totalCount ? recipe.targetMarginPct : null,
+    shopMargin,
+    fullyLinked ? recipe.targetMarginPct : null,
   );
 
-  const retailPriceAdjusted = linkedCount === totalCount ? retailPrice : '0.0000';
+  const finalRetailPrice = fullyLinked ? retailPrice : '0.0000';
 
   const batchAvailable =
-    linkedCount === totalCount &&
+    fullyLinked &&
     linkedIngredients.every((ingredient) => {
       const stock = checkBatchStock({
         requiredQuantity: toNumber(ingredient.quantity),
@@ -126,8 +125,8 @@ async function costRecipe(
     ingredientsCost: breakdown.ingredientsCost,
     laborCost: breakdown.laborCost,
     batchCost: breakdown.batchCost,
-    retailPrice: retailPriceAdjusted,
-    appliedMarginPercent: linkedCount === totalCount ? appliedMarginPercent : '0.00',
+    retailPrice: finalRetailPrice,
+    appliedMarginPercent: fullyLinked ? appliedMarginPercent : '0.00',
     yieldQuantity: toNumber(recipe.yieldQuantity),
     inStock: batchAvailable,
     linkedCount,

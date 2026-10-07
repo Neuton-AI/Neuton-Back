@@ -7,7 +7,7 @@
  * writes through instead of reaching for a module-level client, so the caller's
  * whole receipt update stays inside one transaction.
  */
-import { and, asc, eq, ilike, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import { inventoryItems } from '../db/schema/index.js';
 import { INVENTORY_UNITS, type InventoryUnit } from '../db/schema/enums.js';
 import { quantity as qty, unitCost } from './money.js';

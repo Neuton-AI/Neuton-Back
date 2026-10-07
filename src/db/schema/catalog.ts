@@ -98,6 +98,10 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
     t.recipeId,
     t.inventoryItemId,
   ),
+  recipeRawNameUnique: uniqueIndex('recipe_ingredients_recipe_id_raw_name_unique').on(
+    t.recipeId,
+    t.rawName,
+  ),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
 }));
 
