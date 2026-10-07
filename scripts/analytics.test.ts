@@ -21,6 +21,7 @@ import { buildAnalyticsApp, NOW, SHOP_ID } from './support/testApp.js';
 import {
   PERIOD_DAYS,
   countedAsSpend,
+  expenseTotalsFields,
   netProfitOf,
   periodStart,
   previousPeriodStart,
@@ -116,6 +117,23 @@ test('expenses count `verified` receipts, and only them', () => {
   assert.deepEqual(query.params, ['verified']);
 });
 
+test('the undated counters only see receipts that move money', () => {
+  // A verified receipt with a null or 0.00 total sits inside `expenses`
+  // contributing nothing. Counting it reports undated spend that does not
+  // exist: `count: 1, amount: 0` on a shop whose only undated row was empty.
+  const dialect = new PgDialect();
+
+  const count = dialect.sqlToQuery(expenseTotalsFields.undatedCount);
+  assert.match(count.sql, /receipt_date" is null and coalesce\("receipts"\."total_amount",0\) <> 0/);
+
+  const amount = dialect.sqlToQuery(expenseTotalsFields.undatedAmount);
+  assert.match(
+    amount.sql,
+    /receipt_date" is null and coalesce\("receipts"\."total_amount",0\) <> 0/,
+    'the amount must filter the same rows as the count, or the pair disagrees',
+  );
+});
+
 test('dashboard: undated spend still reduces profit and is counted', async () => {
   const h = await harness({
     'select:orders': [
@@ -172,6 +190,58 @@ test('dashboard: a missing undated counter reads as zero rather than undefined',
   try {
     const { body } = await h.get('/api/v1/analytics/dashboard');
     assert.deepEqual(body.summary.undatedExpenses, { count: 0, amount: 0 });
+  } finally {
+    await h.close();
+  }
+});
+
+test('dashboard: only days with money in them become graph points', async () => {
+  const h = await harness({
+    'select:orders': [
+      // current window totals, comparison window totals, per-order profit sample
+      [{ revenue: '150.00', cost: '50.00', delivery: '0', count: 2 }],
+      [{ revenue: '0', cost: '0', delivery: '0' }],
+      [{ netProfit: '100.00' }, { netProfit: '0.00' }],
+      // graph series: a green day, a break-even day, a red day
+      [
+        { day: '2026-06-10', revenue: '100.00', delivery: '0', cost: '0' },
+        { day: '2026-06-13', revenue: '50.00', delivery: '0', cost: '50.00' },
+        { day: '2026-06-14', revenue: '0', delivery: '0', cost: '30.00' },
+      ],
+    ],
+    'select:receipts': [
+      [{ expenses: '25.00', undatedCount: 0, undatedAmount: '0' }],
+      [{ expenses: '0', undatedCount: 0, undatedAmount: '0' }],
+      // 06-11 is the upload day of a zero-total undated receipt: spend 0.
+      // 06-10 carries real spend on top of the sales.
+      [
+        { day: '2026-06-11', total: '0' },
+        { day: '2026-06-10', total: '25.00' },
+      ],
+    ],
+  });
+
+  try {
+    const { status, body } = await h.get('/api/v1/analytics/dashboard');
+    assert.equal(status, 200);
+
+    assert.deepEqual(
+      body.graph,
+      [
+        { date: '2026-06-10', revenue: 100, expenses: 25, netProfit: 75 },
+        // A loss is money moving: it stays, red as it is.
+        { date: '2026-06-14', revenue: 0, expenses: 0, netProfit: -30 },
+      ],
+      'the zero-total receipt day and the break-even day are not points',
+    );
+    assert.ok(
+      !body.graph.some((day: any) => day.date === '2026-06-11'),
+      'a moneyless day never appears in the graph',
+    );
+    assert.ok(
+      !body.graph.some((day: any) => day.netProfit === 0),
+      'a day that totals 0.00 is dropped even when orders existed',
+    );
   } finally {
     await h.close();
   }
