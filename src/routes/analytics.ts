@@ -97,11 +97,17 @@ function utcInstant(date: Date): string {
   return date.toISOString();
 }
 
-/** Expense total for a window, plus how much of it had no date on the receipt. */
-const expenseTotalsFields = {
+/**
+ * Expense total for a window, plus how much of it had no date on the receipt.
+ *
+ * The undated counters only see rows that move money: a verified receipt whose
+ * total is null or 0.00 sits inside `expenses` contributing nothing, so counting
+ * it would report undated spend that does not exist (`count: 1, amount: 0`).
+ */
+export const expenseTotalsFields = {
   expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
-  undatedCount: sql<number>`count(*) filter (where ${receipts.receiptDate} is null)::int`,
-  undatedAmount: sql<string>`coalesce(sum(${receipts.totalAmount}) filter (where ${receipts.receiptDate} is null),0)`,
+  undatedCount: sql<number>`count(*) filter (where ${receipts.receiptDate} is null and coalesce(${receipts.totalAmount},0) <> 0)::int`,
+  undatedAmount: sql<string>`coalesce(sum(${receipts.totalAmount}) filter (where ${receipts.receiptDate} is null and coalesce(${receipts.totalAmount},0) <> 0),0)`,
 };
 
 /**
@@ -389,6 +395,11 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
    * Every day with money in it, not only the days with sales: an expense day with
    * no orders — including the upload day of an undated receipt — still moves net
    * profit, so dropping it would leave the series short of `summary.expenses`.
+   *
+   * A day whose net profit rounds to 0.00 is not money in it and never becomes a
+   * point — whether it is a day with no movement at all, or a day where revenue
+   * exactly cancelled out cost, delivery and expenses. Red days and green days
+   * both stay; only the flat zero goes.
    */
   const byDay = new Map<string, { revenue: number; delivery: number; cost: number; expenses: number }>();
   for (const row of rows) {
@@ -411,5 +422,6 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       revenue: day.revenue,
       expenses: day.expenses,
       netProfit: Math.round(netProfitOf(day.revenue, day.delivery, day.cost, day.expenses) * 100) / 100,
-    }));
+    }))
+    .filter((day) => day.netProfit !== 0);
 }
