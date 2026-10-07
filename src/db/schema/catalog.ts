@@ -86,9 +86,10 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   recipeId: uuid('recipe_id')
     .notNull()
     .references(() => recipes.id, { onDelete: 'cascade' }),
-  inventoryItemId: uuid('inventory_item_id')
-    .notNull()
-    .references(() => inventoryItems.id, { onDelete: 'restrict' }),
+  inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
+    onDelete: 'restrict',
+  }),
+  rawName: text('raw_name').notNull(),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
   unit: text('unit').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -96,6 +97,10 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   recipeItemUnique: uniqueIndex('recipe_ingredients_recipe_id_inventory_item_id_unique').on(
     t.recipeId,
     t.inventoryItemId,
+  ),
+  recipeRawNameUnique: uniqueIndex('recipe_ingredients_recipe_id_raw_name_unique').on(
+    t.recipeId,
+    t.rawName,
   ),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
 }));

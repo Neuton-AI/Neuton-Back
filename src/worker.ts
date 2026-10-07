@@ -303,13 +303,14 @@ export async function processRecipe(
   const resolveLinkedIngredientIds = async (handle: InventoryDb): Promise<Map<string, string>> => {
     const linked = new Map<string, string>();
     for (const ingredient of extraction.ingredients) {
-      const inventoryItemId = await findOrCreateInventoryItemOn(
+      const found = await findOrCreateInventoryItemOn(
         handle,
         data.shopId,
         ingredient.rawName,
         ingredient.unit,
+        'recipe',
       );
-      if (inventoryItemId) linked.set(ingredient.rawName, inventoryItemId);
+      if (found) linked.set(ingredient.rawName, found);
     }
     return linked;
   };
@@ -337,23 +338,19 @@ export async function processRecipe(
       // Replace ingredients
       await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, existingRecipe.id));
 
-      const bill = extraction.ingredients
-        .map((ingredient) => {
-          const inventoryItemId = linkedIngredientIds.get(ingredient.rawName);
-          if (!inventoryItemId || !ingredient.quantity) return null;
-          return {
-            shopId: data.shopId,
-            recipeId: existingRecipe.id,
-            inventoryItemId,
-            quantity: qty(ingredient.quantity),
-            unit: ingredient.unit ?? 'unit',
-          };
-        })
-        .filter((row): row is NonNullable<typeof row> => row !== null);
+      const bill = extraction.ingredients.map((ingredient) => {
+        const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
+        return {
+          shopId: data.shopId,
+          recipeId: existingRecipe.id,
+          inventoryItemId,
+          rawName: ingredient.rawName,
+          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
+          unit: ingredient.unit ?? 'unit',
+        };
+      });
 
-      if (bill.length > 0) {
-        await tx.insert(recipeIngredients).values(bill);
-      }
+      await tx.insert(recipeIngredients).values(bill);
     });
 
     logger.info(
@@ -388,23 +385,19 @@ export async function processRecipe(
       const recipe = newRecipe[0];
       if (!recipe) throw new Error('recipe insert returned no row');
 
-      const bill = extraction.ingredients
-        .map((ingredient) => {
-          const inventoryItemId = linkedIngredientIds.get(ingredient.rawName);
-          if (!inventoryItemId || !ingredient.quantity) return null;
-          return {
-            shopId: data.shopId,
-            recipeId: recipe.id,
-            inventoryItemId,
-            quantity: qty(ingredient.quantity),
-            unit: ingredient.unit ?? 'unit',
-          };
-        })
-        .filter((row): row is NonNullable<typeof row> => row !== null);
+      const bill = extraction.ingredients.map((ingredient) => {
+        const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
+        return {
+          shopId: data.shopId,
+          recipeId: recipe.id,
+          inventoryItemId,
+          rawName: ingredient.rawName,
+          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
+          unit: ingredient.unit ?? 'unit',
+        };
+      });
 
-      if (bill.length > 0) {
-        await tx.insert(recipeIngredients).values(bill);
-      }
+      await tx.insert(recipeIngredients).values(bill);
 
       return recipe;
     });
@@ -493,7 +486,7 @@ export async function processOrderDocument(
       averageUnitCost: inventoryItems.averageUnitCost,
     })
     .from(recipeIngredients)
-    .innerJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
     .where(eq(recipeIngredients.shopId, data.shopId));
   const byRecipe = new Map<string, typeof ingredientRows>();
   for (const row of ingredientRows) {
@@ -504,7 +497,7 @@ export async function processOrderDocument(
     const breakdown = calculateUnitCost({
       ingredients: (byRecipe.get(row.recipe.id) ?? []).map((i) => ({
         quantity: i.quantity,
-        averageUnitCost: i.averageUnitCost,
+        averageUnitCost: i.averageUnitCost ?? '0',
       })),
       prepTimeMinutes: row.recipe.prepTimeMinutes,
       hourlyLaborCost: shop?.hourlyLaborCost ?? '0',

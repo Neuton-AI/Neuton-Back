@@ -3,25 +3,74 @@
   "dialect": "postgresql",
   "entries": [
     {
+      "breakpoints": true,
       "idx": 0,
-      "version": "7",
-      "when": 1790797554528,
       "tag": "0000_initial_schema",
-      "breakpoints": true
+      "version": "7",
+      "when": 1790797554528
     },
     {
+      "breakpoints": true,
       "idx": 1,
-      "version": "7",
-      "when": 1790797554528,
       "tag": "0001_auth_and_rls",
-      "breakpoints": true
+      "version": "7",
+      "when": 1790797554528
     },
     {
+      "breakpoints": true,
       "idx": 2,
-      "version": "7",
-      "when": 1790801316418,
       "tag": "0002_receipts_content_type",
-      "breakpoints": true
+      "version": "7",
+      "when": 1790801316418
+    },
+    {
+      "breakpoints": true,
+      "idx": 3,
+      "tag": "0003_lethal_jack_power",
+      "version": "7",
+      "when": 1790960000000
+    },
+    {
+      "breakpoints": true,
+      "idx": 4,
+      "tag": "0005_receipts_progress_tracking",
+      "version": "7",
+      "when": 1790960100000
+    },
+    {
+      "breakpoints": true,
+      "idx": 5,
+      "tag": "0006_receipt_verification",
+      "version": "7",
+      "when": 1791132800000
+    },
+    {
+      "breakpoints": true,
+      "idx": 6,
+      "tag": "0007_receipt_status_switchover",
+      "version": "7",
+      "when": 1791132900000
+    },
+    {
+      "breakpoints": true,
+      "idx": 7,
+      "tag": "0008_recipe_status",
+      "version": "7",
+      "when": 1791219300000
+    },
+    {
+      "breakpoints": true,
+      "idx": 8,
+      "tag": "0009_recipe_error_message",
+      "version": "7",
+      "when": 1791332400000
+    },
+    {
+      "breakpoints": true,
+      "idx": 9,
+      "tag": "0010_recipe_ingredient_unlinked",
+      "version": "7",
+      "when": 1791332600000
     }
   ]
 }
