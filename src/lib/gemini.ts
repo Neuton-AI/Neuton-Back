@@ -1,17 +1,9 @@
 import { GoogleGenAI, type Part } from '@google/genai';
-import pino from 'pino';
-import { env, isDevelopment } from '../env.js';
+import { env } from '../env.js';
+import { geminiLogger } from './logger/index.js';
+import type { LogContext } from './logger/types.js';
 import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import type { MediaKind } from './queue.js';
-
-const logger = pino({
-  // Silent in tests: the model walk warns once per failure, which would bury
-  // the assertion output. Same reason worker.ts silences itself under NODE_ENV=test.
-  level: env.NODE_ENV === 'test' ? 'silent' : env.NODE_ENV === 'production' ? 'info' : 'debug',
-  // pino-pretty logs through a worker thread, so it is limited to development;
-  // tests and CI use plain JSON and the process is free to exit.
-  ...(isDevelopment ? { transport: { target: 'pino-pretty', options: { colorize: true } } } : {}),
-});
 
 /**
  * Creates an AbortController that fires after the configured Gemini request timeout.
@@ -226,15 +218,21 @@ class UnusableResponseError extends Error {
 export async function walkModels<T>(
   models: readonly string[],
   call: (model: string) => Promise<T>,
+  context: LogContext = {},
 ): Promise<T> {
   let lastError: unknown;
   // A walk where *every* model answered "not found" never got a single usable
   // response, so the list itself is misconfigured rather than the parse failing.
   let everyFailureWasUnknownModel = true;
 
-  for (const model of models) {
+  for (let attempt = 1; attempt <= models.length; attempt++) {
+    const model = models[attempt - 1]!;
+    const attemptContext = geminiLogger.child({ ...context, model, attempt });
+    const startedAt = Date.now();
     try {
-      return await call(model);
+      const result = await call(model);
+      attemptContext.info({ durationMs: Date.now() - startedAt }, 'gemini model call succeeded');
+      return result;
     } catch (error) {
       // Auth, billing, malformed requests and oversize payloads fail
       // identically on every model, so they end the job immediately instead of
@@ -245,7 +243,7 @@ export async function walkModels<T>(
       lastError = error;
       if (!isUnknownModelError(error)) everyFailureWasUnknownModel = false;
 
-      logger.warn({ model, err: error }, 'gemini model failed, trying the next model');
+      attemptContext.warn({ err: error }, 'gemini model failed, trying the next model');
     }
   }
 
@@ -263,34 +261,43 @@ export async function walkModels<T>(
  * Calls one model with the shared structured-extraction contract, or throws:
  * an unusable answer is just another reason to advance to the next model.
  */
-async function runStructured<T>(kind: MediaKind, part: Part): Promise<T> {
+async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContext): Promise<T> {
   const { instruction, schema } = PROMPTS[kind];
 
-  return walkModels(MODELS, async (model) => {
-    const abortSignal = createGeminiAbortSignal();
-    const response = await client.models.generateContent({
-      model,
-      contents: [{ role: 'user', parts: [part, { text: instruction }] }],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
-        temperature: 0.1,
-        abortSignal,
-      },
-    });
+  return walkModels(
+    MODELS,
+    async (model) => {
+      const abortSignal = createGeminiAbortSignal();
+      const response = await client.models.generateContent({
+        model,
+        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
+          temperature: 0.1,
+          abortSignal,
+        },
+      });
 
-    const text = response.text;
-    if (!text) throw new UnusableResponseError(model, 'returned no text');
-    return parseJson<T>(text);
-  });
+      const text = response.text;
+      if (!text) throw new UnusableResponseError(model, 'returned no text');
+      return parseJson<T>(text);
+    },
+    context,
+  );
 }
 
 export async function extractReceipt(
   inlineData: { mimeType: string; data: string },
+  context?: LogContext,
 ): Promise<ReceiptExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('receipt', {
-    inlineData,
-  });
+  const raw = await runStructured<Record<string, unknown>>(
+    'receipt',
+    {
+      inlineData,
+    },
+    context,
+  );
 
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {
@@ -315,8 +322,9 @@ export async function extractReceipt(
 
 export async function extractRecipe(
   inlineData: { mimeType: string; data: string },
+  context?: LogContext,
 ): Promise<RecipeExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData });
+  const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
 
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
@@ -342,8 +350,9 @@ export async function extractRecipe(
 
 export async function extractOrder(
   inlineData: { mimeType: string; data: string },
+  context?: LogContext,
 ): Promise<OrderExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('order', { inlineData });
+  const raw = await runStructured<Record<string, unknown>>('order', { inlineData }, context);
 
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {

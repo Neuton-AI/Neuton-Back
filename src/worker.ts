@@ -1,6 +1,5 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import pino from 'pino';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
@@ -27,18 +26,25 @@ import {
   findOrCreateInventoryItem as findOrCreateInventoryItemOn,
   type InventoryDb,
 } from './lib/inventory.js';
-import { env, isDevelopment } from './env.js';
+import { env } from './env.js';
+import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
-const logger = pino({
-  // A test run should assert on output, not emit a wall of JSON between cases.
-  level: env.NODE_ENV === 'test' ? 'silent' : env.NODE_ENV === 'production' ? 'info' : 'debug',
-  // pino-pretty ships logs through a worker thread, so it is limited to
-  // development. Anywhere else (tests, CI) plain JSON is used, which keeps the
-  // process able to exit.
-  ...(isDevelopment ? { transport: { target: 'pino-pretty', options: { colorize: true } } } : {}),
-});
+/**
+ * Correlation context shared by a job's logger and its Gemini extraction
+ * calls (issue #99): same jobId/traceId/shopId/userId on the worker lines and
+ * on the `gemini` service lines, so one traceId query spans both services.
+ */
+function jobLogContext(data: MediaJobData, job: Job<MediaJobData>) {
+  return {
+    jobId: job.id,
+    kind: data.kind,
+    shopId: data.shopId,
+    userId: data.uploadedBy ?? undefined,
+    traceId: data.traceId,
+  };
+}
 
 /**
  * Collaborators each job handler reaches for. Injected so the handlers can be
@@ -114,6 +120,7 @@ export async function processReceipt(
     throw new Error('Cannot process receipt without storagePath');
   }
 
+  const jobLogger = workerLogger.child(jobLogContext(data, job));
   const startedAt = new Date();
   const deadline = new Date(startedAt.getTime() + env.RECEIPT_PROCESSING_TIMEOUT_MS);
 
@@ -136,10 +143,13 @@ export async function processReceipt(
   await updateReceiptProgress(deps, data.shopId, storagePath, 'extracting', 'Extracting receipt data with AI');
   await job.updateProgress(10);
 
-  const extraction = await deps.extractReceipt({
-    mimeType: data.contentType,
-    data: toBase64(bytes),
-  });
+  const extraction = await deps.extractReceipt(
+    {
+      mimeType: data.contentType,
+      data: toBase64(bytes),
+    },
+    jobLogContext(data, job),
+  );
   checkDeadline(deadline);
 
   if (!extraction) {
@@ -148,8 +158,6 @@ export async function processReceipt(
 
   await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
   await job.updateProgress(30);
-
-  const jobLogger = logger.child({ jobId: job.id, shopId: data.shopId });
 
   await deps.db.transaction(async (tx) => {
     const receiptRows = await tx
@@ -249,6 +257,7 @@ export async function processRecipe(
   if (!storagePath) {
     throw new Error('Cannot process recipe without storagePath');
   }
+  const jobLogger = workerLogger.child(jobLogContext(data, job));
 
   // Claim the row by (shopId, storagePath) and set to 'processing'
   const claimRows = await deps.db
@@ -266,10 +275,13 @@ export async function processRecipe(
   }
 
   const bytes = await deps.getObjectBytes(storagePath);
-  const extraction = await deps.extractRecipe({
-    mimeType: data.contentType,
-    data: toBase64(bytes),
-  });
+  const extraction = await deps.extractRecipe(
+    {
+      mimeType: data.contentType,
+      data: toBase64(bytes),
+    },
+    jobLogContext(data, job),
+  );
 
   if (!extraction?.name) {
     throw new Error('Gemini returned no parsable recipe extraction');
@@ -353,9 +365,8 @@ export async function processRecipe(
       await tx.insert(recipeIngredients).values(bill);
     });
 
-    logger.info(
+    jobLogger.info(
       {
-        jobId: job.id,
         recipeId: existingRecipe.id,
         name: safeName,
         hourlyLaborCost: shop?.hourlyLaborCost,
@@ -402,9 +413,8 @@ export async function processRecipe(
       return recipe;
     });
 
-    logger.info(
+    jobLogger.info(
       {
-        jobId: job.id,
         recipeId: inserted.id,
         name: inserted.name,
         hourlyLaborCost: shop?.hourlyLaborCost,
@@ -423,18 +433,22 @@ export async function processOrderDocument(
   if (!storagePath) {
     throw new Error('Cannot process order document without storagePath');
   }
+  const jobLogger = workerLogger.child(jobLogContext(data, job));
   const bytes = await deps.getObjectBytes(storagePath);
-  const extraction = await deps.extractOrder({
-    mimeType: data.contentType,
-    data: toBase64(bytes),
-  });
+  const extraction = await deps.extractOrder(
+    {
+      mimeType: data.contentType,
+      data: toBase64(bytes),
+    },
+    jobLogContext(data, job),
+  );
 
   if (!extraction || extraction.items.length === 0) {
     throw new Error('Gemini returned no parsable order extraction');
   }
 
   if (!data.orderId) {
-    logger.warn({ jobId: job.id }, 'order document uploaded without a target order');
+    jobLogger.warn('order document uploaded without a target order');
     return;
   }
 
@@ -445,7 +459,7 @@ export async function processOrderDocument(
     .limit(1);
   const order = orderRows[0];
   if (!order) {
-    logger.warn({ jobId: job.id, orderId: data.orderId }, 'target order not found');
+    jobLogger.warn({ orderId: data.orderId }, 'target order not found');
     return;
   }
 
@@ -475,7 +489,7 @@ export async function processOrderDocument(
     .filter((row): row is NonNullable<typeof row> => row !== null);
 
   if (matched.length === 0) {
-    logger.info({ jobId: job.id }, 'no order lines matched catalog recipes');
+    jobLogger.info('no order lines matched catalog recipes');
     return;
   }
 
@@ -547,7 +561,7 @@ export async function processOrderDocument(
       .where(eq(orders.id, order.id));
   });
 
-  logger.info({ jobId: job.id, orderId: order.id, lines: priced.length }, 'order auto-filled');
+  jobLogger.info({ orderId: order.id, lines: priced.length }, 'order auto-filled');
 }
 
 /**
@@ -589,10 +603,9 @@ export async function recordTerminalFailure(
         .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)));
     }
   } catch (updateError) {
-    logger.error(
-      { err: updateError, jobShopId: data.shopId, kind: data.kind },
-      'could not record terminal failure',
-    );
+    workerLogger
+      .child({ kind: data.kind, shopId: data.shopId, userId: data.uploadedBy ?? undefined, traceId: data.traceId })
+      .error({ err: updateError }, 'could not record terminal failure');
   }
 }
 
@@ -606,7 +619,7 @@ export async function runJob(
   job: Job<MediaJobData>,
   deps: WorkerDeps = defaultWorkerDeps,
 ): Promise<void> {
-  const jobLogger = logger.child({ jobId: job.id, kind: data.kind, shopId: data.shopId });
+  const jobLogger = workerLogger.child(jobLogContext(data, job));
   jobLogger.info('job started');
 
   // Check circuit breaker before starting
@@ -689,26 +702,41 @@ function startWorker(): void {
     lockDuration: env.JOB_LOCK_DURATION_MS,
   });
 
-  worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
+  worker.on('completed', (job) =>
+    workerLogger.info(
+      { jobId: job.id, traceId: job.data.traceId, shopId: job.data.shopId },
+      'job done',
+    ),
+  );
   worker.on('failed', (job, error) => {
-    logger.error({ jobId: job?.id, err: error }, 'job failed');
+    workerLogger.error(
+      {
+        jobId: job?.id,
+        err: error,
+        traceId: job?.data.traceId,
+        shopId: job?.data.shopId,
+      },
+      'job failed',
+    );
     // Covers transient errors that ran out of attempts, so the receipt row does
     // not stay on "processing" with no explanation.
     if (job && (error instanceof UnrecoverableError || error instanceof CircuitOpenError)) return;
     if (!job) return;
     void recordTerminalFailure(defaultWorkerDeps, job.data, error);
   });
-  worker.on('error', (error) => logger.error({ err: error }, 'worker error'));
+  worker.on('error', (error) => workerLogger.error({ err: error }, 'worker error'));
 
-  logger.info(
+  workerLogger.info(
     { queue: QUEUE_NAME, concurrency: env.RECEIPT_WORKER_CONCURRENCY },
     'neuton vision worker ready',
   );
 
   const shutdown = async (signal: string) => {
-    logger.info(`${signal} received, closing worker`);
+    workerLogger.info(`${signal} received, closing worker`);
     await worker.close();
     await sqlClient.end({ timeout: 5 }).catch(() => { });
+    // Flushes the Loki worker's last batch before the process exits (issue #99).
+    await loggerFactory.shutdown();
     process.exit(0);
   };
 

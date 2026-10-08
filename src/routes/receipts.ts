@@ -216,6 +216,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       storagePath: body.storagePath,
       contentType: body.contentType,
       originalFilename: body.originalFilename ?? null,
+      traceId: request.traceId,
       ...(body.orderId ? { orderId: body.orderId } : {}),
     });
 
