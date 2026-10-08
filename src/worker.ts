@@ -197,14 +197,25 @@ export async function processReceipt(
       // an untouched receipt from one that has already been applied. Doing it
       // here is also what stops a wrong AI reading from corrupting stock counts
       // before a human has seen the numbers.
+      //
+      // The model often reads only two of quantity/unit-price/line-total (a
+      // shelf ticket shows the unit price, a receipt tape the line total), so
+      // the missing third is derived rather than stored as NULL — a NULL total
+      // renders as $0.00 downstream and reads as a free item.
+      let { quantity, unitPrice, totalPrice } = item;
+      if (totalPrice === null && quantity !== null && unitPrice !== null) {
+        totalPrice = quantity * unitPrice;
+      } else if (unitPrice === null && quantity !== null && quantity !== 0 && totalPrice !== null) {
+        unitPrice = totalPrice / quantity;
+      }
       await tx.insert(receiptItems).values({
         shopId: data.shopId,
         receiptId,
         inventoryItemId: null,
         rawName: item.rawName,
-        quantity: item.quantity === null ? null : qty(item.quantity),
-        unitPrice: item.unitPrice === null ? null : unitCost(item.unitPrice),
-        totalPrice: item.totalPrice === null ? null : money(item.totalPrice),
+        quantity: quantity === null ? null : qty(quantity),
+        unitPrice: unitPrice === null ? null : unitCost(unitPrice),
+        totalPrice: totalPrice === null ? null : money(totalPrice),
         unit: item.unit,
         confidence: item.confidence === null ? null : item.confidence.toFixed(3),
       });

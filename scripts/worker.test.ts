@@ -301,6 +301,78 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
   assert.equal(patch.totalAmount, '0.00');
 });
 
+test('receipt: a missing line total is derived from quantity x unit price', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:receipts': [[{ id: 'rcpt-1' }]],
+      'insert:receiptItems': [[{ id: 'ri-1' }]],
+    },
+    extractions: {
+      receipt: receipt({
+        totalAmount: null,
+        items: [
+          { rawName: 'Flour', quantity: 2, unit: 'kg', unitPrice: 3.5, totalPrice: null, confidence: 1 },
+        ],
+      }),
+    },
+  });
+
+  await processReceipt(deps, jobData, job);
+
+  const line = db.onlyCallTo('insert', 'receiptItems').values as Record<string, unknown>;
+  assert.equal(line.totalPrice, '7.00');
+  assert.equal(line.unitPrice, '3.5000');
+});
+
+test('receipt: a missing unit price is derived from total / quantity', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:receipts': [[{ id: 'rcpt-1' }]],
+      'insert:receiptItems': [[{ id: 'ri-1' }]],
+    },
+    extractions: {
+      receipt: receipt({
+        totalAmount: null,
+        items: [
+          { rawName: 'Flour', quantity: 2, unit: 'kg', unitPrice: null, totalPrice: 7, confidence: 1 },
+        ],
+      }),
+    },
+  });
+
+  await processReceipt(deps, jobData, job);
+
+  const line = db.onlyCallTo('insert', 'receiptItems').values as Record<string, unknown>;
+  assert.equal(line.unitPrice, '3.5000');
+  assert.equal(line.totalPrice, '7.00');
+});
+
+test('receipt: derivation never divides by zero or invents from nothing', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:receipts': [[{ id: 'rcpt-1' }]],
+      'insert:receiptItems': [[{ id: 'ri-1' }], [{ id: 'ri-2' }]],
+    },
+    extractions: {
+      receipt: receipt({
+        totalAmount: null,
+        items: [
+          { rawName: 'ZeroQty', quantity: 0, unit: 'kg', unitPrice: null, totalPrice: 7, confidence: 1 },
+          { rawName: 'Mystery', quantity: null, unit: null, unitPrice: null, totalPrice: null, confidence: null },
+        ],
+      }),
+    },
+  });
+
+  await processReceipt(deps, jobData, job);
+
+  const lines = db.callsTo('insert', 'receiptItems').map((c) => c.values as Record<string, unknown>);
+  assert.equal(lines[0]!.unitPrice, null);
+  assert.equal(lines[0]!.totalPrice, '7.00');
+  assert.equal(lines[1]!.unitPrice, null);
+  assert.equal(lines[1]!.totalPrice, null);
+});
+
 test('receipt: extraction never touches inventory, however well-formed the line is', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
