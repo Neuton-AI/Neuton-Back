@@ -1,0 +1,320 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.01},
+              {"color": "red", "value": 0.05}
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} |= \"error\" [5m])) by (service) / sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} [5m])) by (service) * 100",
+          "legendFormat": "{{service}} error rate",
+          "refId": "A"
+        }
+      ],
+      "title": "Error Rate by Service (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"lineWidth": 1},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "histogram_quantile(0.50, sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} | json | __line__=~\".*duration.*\" [5m])) by (le, service))",
+          "legendFormat": "{{service}} p50",
+          "refId": "A"
+        },
+        {
+          "datasource": "Loki",
+          "expr": "histogram_quantile(0.95, sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} | json | __line__=~\".*duration.*\" [5m])) by (le, service))",
+          "legendFormat": "{{service}} p95",
+          "refId": "B"
+        },
+        {
+          "datasource": "Loki",
+          "expr": "histogram_quantile(0.99, sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} | json | __line__=~\".*duration.*\" [5m])) by (le, service))",
+          "legendFormat": "{{service}} p99",
+          "refId": "C"
+        }
+      ],
+      "title": "Request Latency (p50/p95/p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} [1m])) by (service)",
+          "legendFormat": "{{service}} rps",
+          "refId": "A"
+        }
+      ],
+      "title": "Requests per Second by Service",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100},
+              {"color": "red", "value": 1000}
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"orientation": "auto", "reduceOptions": {"values": false, "calcs": ["lastNotNull"], "fields": ""}, "showThresholdLabels": false, "showThresholdMarkers": true},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=\"api\", environment=\"production\", level=\"error\"} [5m]))",
+          "legendFormat": "API errors",
+          "refId": "A"
+        },
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=\"worker\", environment=\"production\", level=\"error\"} [5m]))",
+          "legendFormat": "Worker errors",
+          "refId": "B"
+        },
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=\"gemini\", environment=\"production\", level=\"error\"} [5m]))",
+          "legendFormat": "Gemini errors",
+          "refId": "C"
+        }
+      ],
+      "title": "Error Count (5m rate)",
+      "type": "gauge"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 5,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "topk(10, sum(rate({service=\"api\", environment=\"production\"} [5m])) by (route, method))",
+          "legendFormat": "{{method}} {{route}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top API Endpoints (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 6,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "topk(10, sum(rate({service=\"worker\", environment=\"production\", kind=~\".+\"} [5m])) by (kind))",
+          "legendFormat": "{{kind}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Worker Job Types (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [{"type": "label", "options": {"0": "OK", "1": "DEGRADED", "2": "DOWN"}}],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1}, {"color": "red", "value": 2}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 12, "x": 0, "y": 12},
+      "id": 7,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto"},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "count_over_time({service=~\"api|worker|gemini\", environment=\"production\"} [1m]) > 0",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Service Health (receiving logs)",
+      "type": "stat"
+    },
+    {
+      "datasource": "Loki",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "id": 8,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": "Loki",
+          "expr": "sum(rate({service=~\"api|worker|gemini\", environment=\"production\"} | json | level=~\".+\" [5m])) by (level, service)",
+          "legendFormat": "{{service}} {{level}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Log Volume by Level & Service (5m)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["neuton", "overview", "logging"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": true, "text": "production", "value": "production"},
+        "datasource": "Loki",
+        "definition": "label_values({service=~\"api|worker|gemini\"}, environment)",
+        "hide": 0,
+        "label": "Environment",
+        "name": "environment",
+        "options": [],
+        "query": {"query": "label_values({service=~\"api|worker|gemini\"}, environment)", "refId": "StandardVariableQuery"},
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {"selected": true, "text": "All", "value": "$__all"},
+        "datasource": "Loki",
+        "definition": "label_values({service=~\"api|worker|gemini\", environment=\"$environment\"}, service)",
+        "hide": 0,
+        "label": "Service",
+        "multi": true,
+        "name": "service",
+        "options": [],
+        "query": {"query": "label_values({service=~\"api|worker|gemini\", environment=\"$environment\"}, service)", "refId": "StandardVariableQuery"},
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Neuton - Service Overview",
+  "uid": "neuton-service-overview",
+  "version": 1,
+  "weekStart": ""
+}

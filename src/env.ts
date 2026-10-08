@@ -9,6 +9,10 @@ const boolish = z
     typeof v === 'boolean' ? v : ['1', 'true', 'yes', 'on'].includes(v.toLowerCase()),
   );
 
+/** Treats unset or blank values as "not configured" so `.env` stubs stay valid. */
+const emptyToUndefined = (schema: z.ZodString) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), schema.optional());
+
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -24,6 +28,17 @@ const envSchema = z.object({
   R2_BUCKET_NAME: z.string().min(1, 'R2_BUCKET_NAME is required'),
 
   GRAFANA_LOG_URL: z.string().url().default('http://localhost:9999/loki/api/v1/push'),
+  /** Bearer token for the Loki push endpoint (Grafana Cloud). Unset/empty disables Loki shipping. */
+  GRAFANA_LOKI_TOKEN: emptyToUndefined(z.string()),
+  /** Stream label for the Loki `environment` label. Defaults from NODE_ENV. */
+  LOG_ENV: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.enum(['development', 'staging', 'production']).optional(),
+  ),
+  /** Release identifier attached to every log line. Falls back to GIT_SHA, then `dev`. */
+  APP_VERSION: emptyToUndefined(z.string()),
+  /** Commit sha provided by CI; picked up when APP_VERSION is unset. */
+  GIT_SHA: emptyToUndefined(z.string()),
 
   GEMINI_API_KEY: z.string().min(1, 'GEMINI_API_KEY is required'),
 

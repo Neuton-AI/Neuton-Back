@@ -1,5 +1,6 @@
 import { buildApp } from './app.js';
 import { env } from './env.js';
+import { loggerFactory } from './lib/logger/index.js';
 
 const app = await buildApp();
 
@@ -14,6 +15,9 @@ try {
 const shutdown = async (signal: string) => {
   app.log.info(`${signal} received, shutting down`);
   await app.close();
+  // Flushes the Loki worker's last ~5s batch — without this the lines the
+  // shutdown itself logs never reach Loki (issue #99 DOD).
+  await loggerFactory.shutdown();
   process.exit(0);
 };
 

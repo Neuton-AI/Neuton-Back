@@ -28,6 +28,8 @@ export interface MediaJobData {
   originalFilename: string | null;
   /** Present for `kind === 'order'`: the order row being auto-filled. */
   orderId?: string;
+  /** Correlation id of the API request that enqueued this job (issue #99). */
+  traceId?: string;
 }
 
 export const DEFAULT_JOB_OPTIONS: JobsOptions = {
