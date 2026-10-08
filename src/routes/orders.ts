@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
-import { orderItems, orders, recipes } from '../db/schema/index.js';
+import { orderItems, orders, orderItemRecipeName, recipes } from '../db/schema/index.js';
 import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
@@ -187,13 +187,16 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       .select({
         id: orderItems.id,
         recipeId: orderItems.recipeId,
-        name: recipes.name,
+        // Snapshot first: renaming a recipe must not rewrite orders that
+        // already went out, and a recipe with no row left must not take its
+        // lines down with it.
+        name: orderItemRecipeName,
         quantity: orderItems.quantity,
         unitCost: orderItems.unitCost,
         unitPrice: orderItems.unitPrice,
       })
       .from(orderItems)
-      .innerJoin(recipes, eq(recipes.id, orderItems.recipeId))
+      .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
       .where(eq(orderItems.orderId, id))
       .orderBy(asc(orderItems.id));
 
@@ -313,6 +316,9 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
           shopId: shop.id,
           orderId: order.id,
           recipeId: item.recipeId,
+          // Frozen here, while the catalog row is in hand: every later read
+          // prefers this over the live name (N-107).
+          recipeName: item.name,
           quantity: qty(item.quantity),
           unitCost: money(item.unitCost),
           unitPrice: money(item.unitPrice),

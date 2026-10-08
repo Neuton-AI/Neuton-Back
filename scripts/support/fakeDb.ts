@@ -24,6 +24,10 @@ export interface RecordedCall {
   set?: Record<string, unknown>;
   /** Payload passed to `.limit(...)`, when the statement used one. */
   limit?: number;
+  /** Columns passed to `select(...)`, so a test can assert on what a read asks for. */
+  fields?: unknown;
+  /** Join kinds in issue order — how a read reacts to a missing joined row. */
+  joins?: string[];
   inTransaction: boolean;
 }
 
@@ -48,11 +52,13 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
   private payload?: unknown;
   private patch?: Record<string, unknown>;
   private rowLimit?: number;
+  private readonly joinKinds: string[] = [];
 
   constructor(
     private readonly db: FakeDb,
     private readonly op: DbOperation,
     private table: string,
+    private readonly fields?: unknown,
   ) {}
 
   from(table: unknown): this {
@@ -82,10 +88,12 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
   }
 
   innerJoin(): this {
+    this.joinKinds.push('innerJoin');
     return this;
   }
 
   leftJoin(): this {
+    this.joinKinds.push('leftJoin');
     return this;
   }
 
@@ -124,6 +132,8 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
         values: this.payload,
         set: this.patch,
         limit: this.rowLimit,
+        fields: this.fields,
+        joins: this.joinKinds,
       }) as T);
     } catch (error) {
       result = Promise.reject(error);
@@ -160,8 +170,8 @@ export class FakeDb {
     return this;
   }
 
-  select(_fields?: unknown): FakeQuery {
-    return new FakeQuery(this, 'select', '');
+  select(fields?: unknown): FakeQuery {
+    return new FakeQuery(this, 'select', '', fields);
   }
 
   insert(table: unknown): FakeQuery {

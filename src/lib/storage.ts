@@ -1,4 +1,9 @@
-import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../env.js';
 import { badRequest } from './errors.js';
@@ -68,6 +73,16 @@ export async function createPresignedDownloadUrl(key: string) {
   return getSignedUrl(r2, new GetObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }), {
     expiresIn: 3600,
   });
+}
+
+/**
+ * Removes an uploaded object when its row goes away.
+ *
+ * S3/R2 answer 204 for a key that does not exist, so deleting twice — or
+ * deleting an upload that never landed — is a no-op rather than an error.
+ */
+export async function deleteObject(key: string): Promise<void> {
+  await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
 }
 
 /** Server-side read used by the vision worker to fetch an uploaded document. */

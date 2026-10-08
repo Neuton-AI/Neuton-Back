@@ -535,6 +535,8 @@ export async function processOrderDocument(
     );
     return {
       recipeId: row.recipe.id,
+      // Snapshotted with the line: order history must survive renames (N-107).
+      name: row.recipe.name,
       quantity: row.quantity,
       unitCost: breakdown.unitCost,
       unitPrice: row.unitPrice ?? retailPrice,
@@ -548,6 +550,7 @@ export async function processOrderDocument(
         shopId: data.shopId,
         orderId: order.id,
         recipeId: row.recipeId,
+        recipeName: row.name,
         quantity: qty(row.quantity),
         unitCost: money(row.unitCost),
         unitPrice: money(row.unitPrice),

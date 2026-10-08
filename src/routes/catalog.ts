@@ -11,6 +11,7 @@ import {
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, conflict, forbidden } from '../lib/errors.js';
+import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
 import {
   calculateRetailPrice,
@@ -42,6 +43,29 @@ const recipeSchema = z.object({
 });
 
 const recipePatchSchema = recipeSchema.partial();
+
+/**
+ * The schema refusing to erase a recipe is an FK `23503`, and that refusal is
+ * the signal to fall back rather than fail: `order_items.recipe_id` is
+ * `ON DELETE RESTRICT` precisely because order lines are sales history.
+ *
+ * postgres.js puts `code` on the error itself; drizzle may wrap it, so the
+ * cause chain is walked before deciding this is not the case we are looking for.
+ */
+function isForeignKeyViolation(error: unknown): boolean {
+  let candidate: unknown = error;
+  for (let depth = 0; candidate && depth < 3; depth += 1) {
+    if (
+      typeof candidate === 'object' &&
+      'code' in candidate &&
+      (candidate as { code?: unknown }).code === '23503'
+    ) {
+      return true;
+    }
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 const inventorySchema = z.object({
   name: z.string().trim().min(1).max(160),
@@ -347,14 +371,73 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { recipe: updated[0] };
   });
 
+  /**
+   * Deletes a recipe the only two ways the data model allows.
+   *
+   * The catalog row goes first: `recipe_ingredients` cascade with it and the
+   * per-shop name — unique — goes back into the pool. What the schema will not
+   * allow is erasing a recipe order lines still point at, so an FK `23503`
+   * means "this recipe is part of the shop's sales history" and the delete
+   * degrades to `is_active = false` instead of failing the request.
+   *
+   * The uploaded document leaves R2 either way: hard delete takes it with the
+   * row, soft delete nulls `storage_path`/`image_url` before removing it so the
+   * deactivated recipe never renders a pointer to an object that is gone.
+   */
   app.delete('/recipes/:id', mutationGuards, async (request) => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
     const shop = currentShop(request);
+    const user = currentUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await db
-      .update(recipes)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)));
-    return { ok: true };
+
+    const rows = await deps.db
+      .select({ id: recipes.id, storagePath: recipes.storagePath })
+      .from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
+      .limit(1);
+    const recipe = rows[0];
+    if (!recipe) throw notFound('Recipe not found');
+
+    let mode: 'hard' | 'soft';
+    try {
+      await deps.db.transaction(async (tx) => {
+        await tx
+          .delete(recipes)
+          .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)));
+      });
+      mode = 'hard';
+    } catch (error) {
+      if (!isForeignKeyViolation(error)) throw error;
+      mode = 'soft';
+      await deps.db
+        .update(recipes)
+        .set({ isActive: false, storagePath: null, imageUrl: null, updatedAt: new Date() })
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)));
+    }
+
+    // Row state first, object second, in both modes: a failed object delete
+    // then leaks a file, while the other order would leave the row describing
+    // an object that is already gone. It never fails the request — the recipe
+    // is deactivated or deleted either way, and a 500 would only turn that
+    // success into a doomed retry.
+    if (recipe.storagePath) {
+      try {
+        await deps.deleteObject(recipe.storagePath);
+      } catch (error) {
+        request.log.error({ err: error, recipeId: id }, 'recipe object cleanup failed');
+      }
+    }
+
+    await recordAuditSafe(app, {
+      shopId: shop.id,
+      userId: user.id,
+      eventType: 'RECIPE_DELETED',
+      resourceId: id,
+      ipAddress: request.ip,
+      metadata: { mode },
+    });
+
+    return { ok: true, mode };
   });
 
   app.get('/inventory', guards, async (request) => {
