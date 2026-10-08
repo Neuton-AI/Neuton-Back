@@ -653,7 +653,9 @@ test('order: prices matched lines from the catalog and folds in the delivery fee
 
   const lines = db.onlyCallTo('insert', 'orderItems').values as Array<Record<string, unknown>>;
   assert.deepEqual(lines, [
-    { shopId: SHOP_ID, orderId: 'order-1', recipeId: 'rec-1', quantity: '2.000', unitCost: '6.00', unitPrice: '9.00' },
+    // `recipeName` rides along with the line so renames never rewrite this
+    // order (N-107).
+    { shopId: SHOP_ID, orderId: 'order-1', recipeId: 'rec-1', recipeName: 'Focaccia', quantity: '2.000', unitCost: '6.00', unitPrice: '9.00' },
   ]);
 
   const patch = db.onlyCallTo('update', 'orders').set as Record<string, unknown>;

@@ -6,7 +6,7 @@ import { receipts, receiptItems, recipes } from '../db/schema/index.js';
 import { RECEIPT_STATUSES, RECIPE_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { notFound, forbidden, tooLarge } from '../lib/errors.js';
+import { notFound, forbidden, tooLarge, conflict } from '../lib/errors.js';
 import { verifyReceipt } from '../lib/verifyReceipt.js';
 import { enqueueMediaJob, type MediaKind } from '../lib/queue.js';
 import {
@@ -14,6 +14,7 @@ import {
   buildStoragePath,
   createPresignedDownloadUrl,
   createPresignedUploadUrl,
+  deleteObject,
 } from '../lib/storage.js';
 import { env } from '../env.js';
 
@@ -54,25 +55,27 @@ const verifySchema = z.object({
 
 /**
  * Collaborators the receipt routes write through. Injected so the verification
- * transaction can be exercised against a scripted database; production always
- * uses `defaultReceiptsDeps`.
+ * transaction and the delete endpoint's R2 cleanup can be exercised against a
+ * scripted database; production always uses `defaultReceiptsDeps`.
  */
 export interface ReceiptsDeps {
   db: Database;
+  /** Removes the uploaded object when its row goes; a no-op seam in tests. */
+  deleteObject: (key: string) => Promise<void>;
 }
 
 declare module 'fastify' {
   interface FastifyRequest {
     /**
      * Per-request override of `defaultReceiptsDeps`. Production never sets it;
-     * it exists so the verification endpoint can be tested without a live
-     * Postgres.
+     * it exists so the verification and delete endpoints can be tested without
+     * a live Postgres or R2 bucket.
      */
     receiptsDeps?: ReceiptsDeps;
   }
 }
 
-export const defaultReceiptsDeps: ReceiptsDeps = { db };
+export const defaultReceiptsDeps: ReceiptsDeps = { db, deleteObject };
 
 export const receiptRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
@@ -324,6 +327,72 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     // `select()` above, so the review screen reads the whole verdict from here
     // without a second request.
     return { receipt: { ...receipt, items } };
+  });
+
+  /**
+   * Deletes a receipt that has not reached `verified`.
+   *
+   * Status decides the semantics. Everything upstream of verification has moved
+   * no stock and booked no spend, so the row is removed outright — its lines go
+   * with it through the `receipt_items` cascade — and the uploaded object is
+   * cleaned out of R2 behind it. `verified` is the other side of that line: the
+   * receipt has already applied to inventory (`lib/verifyReceipt.ts`) and
+   * analytics counts it as spend (`countedAsSpend`), and with no reversal ledger
+   * to undo either, deleting it would quietly hollow out the books. It is a 409
+   * that changes nothing instead. Receipts have no soft-delete state by design:
+   * `status` is the lifecycle, not a tombstone.
+   */
+  app.delete('/receipts/:id', mutationGuards, async (request) => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+    const shop = currentShop(request);
+    const user = currentUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+
+    const storagePath = await deps.db.transaction(async (tx) => {
+      // Lock the row so "is it deletable?" and the delete are one decision —
+      // a verification landing in between would otherwise erase a receipt that
+      // has just moved stock.
+      const rows = await tx
+        .select({ status: receipts.status, storagePath: receipts.storagePath })
+        .from(receipts)
+        .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)))
+        .limit(1)
+        .for('update');
+      const receipt = rows[0];
+      if (!receipt) throw notFound('Receipt not found');
+      if (receipt.status === 'verified') {
+        throw conflict(
+          'A verified receipt already moved stock and counted as spend; it cannot be deleted',
+        );
+      }
+
+      await tx
+        .delete(receipts)
+        .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)));
+      return receipt.storagePath;
+    });
+
+    // Row first, object second: a failed object delete then leaks a file, while
+    // the other order would leave a row pointing at nothing. Never fails the
+    // request either — the receipt is already gone, so a 500 would only turn a
+    // successful delete into a doomed retry.
+    if (storagePath) {
+      try {
+        await deps.deleteObject(storagePath);
+      } catch (error) {
+        request.log.error({ err: error, receiptId: id }, 'receipt object cleanup failed');
+      }
+    }
+
+    await recordAuditSafe(app, {
+      shopId: shop.id,
+      userId: user.id,
+      eventType: 'RECEIPT_DELETED',
+      resourceId: id,
+      ipAddress: request.ip,
+    });
+
+    return { ok: true };
   });
 
   /** Cheap polling endpoint for the "processing…" state on a receipt card. */

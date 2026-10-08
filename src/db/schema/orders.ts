@@ -47,12 +47,30 @@ export const orderItems = pgTable('order_items', {
   recipeId: uuid('recipe_id')
     .notNull()
     .references(() => recipes.id, { onDelete: 'restrict' }),
+  /**
+   * The recipe's name at the moment the order line was written (N-107).
+   *
+   * Order history is a record of what was sold, so renaming a recipe must not
+   * rewrite labels on orders that already went out. Nullable only so the
+   * migration can backfill; reads go through `orderItemRecipeName`, which falls
+   * back to the live name for any row that still predates the snapshot.
+   */
+  recipeName: text('recipe_name'),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull().default('1'),
   unitCost: numeric('unit_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({
   orderIdx: index('order_items_order_id_idx').on(t.orderId),
 }));
+
+/**
+ * The label an order line reports: the name snapshotted when the line was
+ * written, falling back to the live recipe name for rows that still predate
+ * N-107's backfill. Snapshot-first is the point — renaming a recipe must never
+ * rewrite orders that already went out, and a recipe with no row left must
+ * never blank one.
+ */
+export const orderItemRecipeName = sql<string>`coalesce(${orderItems.recipeName}, ${recipes.name})`;
 
 export type Order = typeof orders.$inferSelect;
 export type NewOrder = typeof orders.$inferInsert;

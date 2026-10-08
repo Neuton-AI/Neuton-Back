@@ -1,5 +1,6 @@
 /**
- * Order status lifecycle tests for N-103.
+ * Order status lifecycle tests for N-103, plus the order-line recipe name
+ * snapshot for N-107.
  *
  * These drive the real `orderRoutes` over a Fastify instance whose three auth
  * guards are stubbed (`scripts/support/ordersApp.ts`). The route bodies are the
@@ -9,8 +10,11 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { FakeDb } from './support/fakeDb.js';
 import { buildOrdersApp, SHOP_ID } from './support/ordersApp.js';
+import { orderItemRecipeName } from '../src/db/schema/index.js';
 
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const ORDER_ID = '44444444-4444-4444-4444-444444444444';
@@ -199,6 +203,66 @@ test('GET /orders/:id returns status', async () => {
     const { status, body } = await h.get(`/api/v1/orders/${ORDER_ID}`);
     assert.equal(status, 200);
     assert.equal(body.order.status, 'delivered');
+  } finally {
+    await h.close();
+  }
+});
+
+test('POST /orders freezes the recipe name onto every line as it is created', async () => {
+  const h = await harness('owner', {
+    ...recipeResponses(),
+    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing' }]],
+    'insert:orderItems': [[]],
+  });
+  try {
+    const { status } = await h.post('/api/v1/orders', {
+      customerName: 'Dana',
+      deliveryDistanceKm: 0,
+      items: [{ recipeId: RECIPE_ID, quantity: 2 }],
+    });
+    assert.equal(status, 201);
+
+    const lines = h.db.onlyCallTo('insert', 'orderItems').values as Array<Record<string, unknown>>;
+    assert.equal(lines.length, 1);
+    assert.equal(
+      lines[0]?.recipeName,
+      recipeRow.name,
+      'the name is copied out of the catalog row while it is still in hand',
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('GET /orders/:id labels lines from the snapshot first, recipes only as a fallback', async () => {
+  const h = await harness('owner', {
+    'select:orders': [
+      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
+    ],
+    'select:orderItems': [
+      [{ id: '77777777-7777-7777-7777-777777777777', recipeId: RECIPE_ID, name: 'Focaccia', quantity: '2.000', unitCost: '6.00', unitPrice: '9.00' }],
+    ],
+  });
+  try {
+    const { status, body } = await h.get(`/api/v1/orders/${ORDER_ID}`);
+    assert.equal(status, 200);
+    assert.equal(body.order.items[0].name, 'Focaccia');
+
+    // Both halves of the snapshot contract are in the statement the route
+    // actually sends: a label that reads `recipe_name` before the live name is
+    // what keeps a renamed recipe's old orders labelled, and what keeps the
+    // lines visible once their recipe has been deleted.
+    const read = h.db.onlyCallTo('select', 'orderItems');
+    assert.deepEqual(
+      read.joins,
+      ['leftJoin'],
+      'a recipe row may be missing; the line must survive it',
+    );
+    const projectedName = new PgDialect().sqlToQuery((read.fields as { name: SQL }).name).sql;
+    assert.match(
+      projectedName,
+      /coalesce\("order_items"\."recipe_name",\s*"recipes"\."name"\)/,
+    );
   } finally {
     await h.close();
   }

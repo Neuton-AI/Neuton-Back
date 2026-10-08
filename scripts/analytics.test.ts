@@ -363,6 +363,26 @@ test('dashboard: a shop with no activity reports zeroes, not nulls', async () =>
   }
 });
 
+test('dashboard: the top item is read through the order line, not gated on the recipe', async () => {
+  const h = await harness();
+
+  try {
+    const { status } = await h.get('/api/v1/analytics/dashboard');
+    assert.equal(status, 200);
+
+    const topItemRead = h.db.calls.find(
+      (call) => call.op === 'select' && call.table === 'orderItems',
+    );
+    assert.ok(topItemRead, 'the dashboard asks for a top item');
+    // `recipes` is joined as a fallback for the same reason as in GET
+    // /orders/:id: the label comes from the order line's snapshot, so a recipe
+    // that no longer exists neither drops its sales nor renames them (N-107).
+    assert.deepEqual(topItemRead.joins, ['leftJoin', 'innerJoin']);
+  } finally {
+    await h.close();
+  }
+});
+
 test('dashboard: a loss reports a negative margin instead of clamping at zero', async () => {
   const h = await harness({
     'select:orders': [[{ revenue: '100.00', cost: '200.00', delivery: '10.00', count: 2 }]],

@@ -5,6 +5,7 @@ import { db, type Database } from '../db/client.js';
 import {
   inventoryItems,
   orderItems,
+  orderItemRecipeName,
   orders,
   receipts,
   recipes,
@@ -290,18 +291,20 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
 async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Date) {
   const rows = await deps.db
     .select({
-      recipeId: recipes.id,
-      name: recipes.name,
+      // Keyed off the line, not the recipe: a recipe with no row left still has
+      // sales to report, and its label comes from the snapshot (N-107).
+      recipeId: orderItems.recipeId,
+      name: orderItemRecipeName,
       imageUrl: recipes.imageUrl,
       unitsSold: sql<string>`coalesce(sum(${orderItems.quantity}),0)`,
       revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice}),0)`,
       cost: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitCost}),0)`,
     })
     .from(orderItems)
-    .innerJoin(recipes, eq(recipes.id, orderItems.recipeId))
+    .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
     .where(and(eq(orderItems.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
-    .groupBy(recipes.id, recipes.name, recipes.imageUrl)
+    .groupBy(orderItems.recipeId, orderItemRecipeName, recipes.imageUrl)
     .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}),0)`))
     .limit(1);
 
