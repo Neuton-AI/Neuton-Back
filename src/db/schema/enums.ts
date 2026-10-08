@@ -40,6 +40,18 @@ export type RecipeStatus = (typeof RECIPE_STATUSES)[number];
 export const RECEIPT_REVIEW_STATUSES = ['pending', 'accepted', 'rejected'] as const;
 export type ReceiptReviewStatus = (typeof RECEIPT_REVIEW_STATUSES)[number];
 
+/**
+ * The order lifecycle as the shop sees it:
+ *
+ * `processing` → `delivered`
+ *
+ * Every order starts as `processing`. It moves to `delivered` only after
+ * explicit human verification via `PATCH /orders/:id/status`. No other
+ * transition exists.
+ */
+export const ORDER_STATUSES = ['processing', 'delivered'] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
 export const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const;
 export type InventoryUnit = (typeof INVENTORY_UNITS)[number];
 
