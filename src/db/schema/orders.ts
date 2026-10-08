@@ -1,10 +1,12 @@
 import { sql } from 'drizzle-orm';
 import {
   index,
+  integer,
   numeric,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { recipes } from './catalog.js';
@@ -12,6 +14,15 @@ import { profiles, shops } from './identity.js';
 
 export const orders = pgTable('orders', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  /**
+   * Per-shop sequential invoice number (N-105).
+   *
+   * Issued exactly once, inside the creating transaction, by incrementing
+   * `shops.last_order_number`; unique per shop, never reused. There is no
+   * DEFAULT — an insert that does not ask the counter for a number is a bug,
+   * not a fallback, because a number nobody issued cannot be audited.
+   */
+  orderNumber: integer('order_number').notNull(),
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
@@ -34,6 +45,7 @@ export const orders = pgTable('orders', {
   shopDateIdx: index('orders_shop_id_order_date_idx').on(t.shopId, t.orderDate),
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
   shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
+  shopOrderNumberUnique: uniqueIndex('orders_shop_id_order_number_unique').on(t.shopId, t.orderNumber),
 }));
 
 export const orderItems = pgTable('order_items', {

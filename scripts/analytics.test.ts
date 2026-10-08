@@ -20,6 +20,7 @@ import { FakeDb, type FakeResponses } from './support/fakeDb.js';
 import { buildAnalyticsApp, NOW, SHOP_ID } from './support/testApp.js';
 import {
   PERIOD_DAYS,
+  countedAsSale,
   countedAsSpend,
   expenseTotalsFields,
   netProfitOf,
@@ -115,6 +116,16 @@ test('expenses count `verified` receipts, and only them', () => {
   const query = dialect.sqlToQuery(countedAsSpend);
   assert.match(query.sql, /"receipts"\."status" = \$\d/);
   assert.deepEqual(query.params, ['verified']);
+});
+
+test('a cancelled order never counts as a sale', () => {
+  // N-105 keeps a cancelled order's row so its invoice number stays auditable.
+  // Nothing throws when this predicate drifts — revenue just goes on counting
+  // orders the shop voided — so pin the predicate itself, like `countedAsSpend`.
+  const dialect = new PgDialect();
+  const query = dialect.sqlToQuery(countedAsSale);
+  assert.match(query.sql, /"orders"\."deleted_at" is null and "orders"\."status" <> \$\d/);
+  assert.deepEqual(query.params, ['cancelled']);
 });
 
 test('the undated counters only see receipts that move money', () => {

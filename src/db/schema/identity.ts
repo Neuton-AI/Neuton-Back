@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   char,
   index,
+  integer,
   jsonb,
   numeric,
   pgTable,
@@ -17,6 +18,15 @@ export const shops = pgTable('shops', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   name: text('name').notNull(),
   slug: text('slug').notNull(),
+  /**
+   * High-water mark of this shop's order sequence (N-105).
+   *
+   * `POST /orders` increments it with a single `UPDATE … RETURNING` inside the
+   * order's creation transaction, so the shop row doubles as the sequence lock:
+   * concurrent creates queue on it and can neither duplicate nor skip a number,
+   * and a rolled-back create takes its number back with it.
+   */
+  lastOrderNumber: integer('last_order_number').notNull().default(0),
   currency: char('currency', { length: 3 }).notNull().default('USD'),
   timezone: text('timezone').notNull().default('UTC'),
   storeAddress: text('store_address'),

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
-import { orderItems, orders, orderItemRecipeName, recipes } from '../db/schema/index.js';
+import { orderItems, orders, orderItemRecipeName, recipes, shops } from '../db/schema/index.js';
 import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
@@ -152,7 +152,10 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       .select()
       .from(orders)
       .where(and(...conditions))
-      .orderBy(desc(orders.orderDate), desc(orders.createdAt))
+      // Secondary key is the invoice number (N-105): it is issued in creation
+      // order, so within a day the listing is the sequence itself and ties no
+      // longer depend on how `created_at` happens to sort.
+      .orderBy(desc(orders.orderDate), desc(orders.orderNumber))
       .limit(query.limit)
       .offset(query.offset);
 
@@ -285,9 +288,22 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const created = await deps.db.transaction(async (tx) => {
+      // One `UPDATE … RETURNING` both claims the next number and locks the
+      // shop row until this transaction ends (N-105): concurrent creates queue
+      // behind it, so they read the row the previous one wrote and can neither
+      // duplicate nor skip a number. A create that rolls back takes its number
+      // back with it, and nothing ever reuses a number that was issued.
+      const [counter] = await tx
+        .update(shops)
+        .set({ lastOrderNumber: sql`${shops.lastOrderNumber} + 1` })
+        .where(eq(shops.id, shop.id))
+        .returning({ lastOrderNumber: shops.lastOrderNumber });
+      if (!counter) throw new Error('Shop row missing while allocating order number');
+
       const inserted = await tx
         .insert(orders)
         .values({
+          orderNumber: counter.lastOrderNumber,
           shopId: shop.id,
           userId: user.id,
           customerName: body.customerName ?? null,
@@ -390,13 +406,53 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     return { order: next };
   });
 
+  /**
+   * Voids an order instead of deleting it (N-105).
+   *
+   * Invoicing wants a gapless per-shop sequence: a number that was issued has
+   * to stay issued, so the row outlives the decision to cancel it and keeps its
+   * number as a void. The row is locked first, the way `DELETE /receipts/:id`
+   * does it, so "is it already void?" and the write are one decision; the write
+   * is idempotent (a double tap answers the same way) and a missing or
+   * cross-shop id reads as 404, like every other order write.
+   */
   app.delete('/orders/:id', mutationGuards, async (request) => {
     const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
+    const user = currentUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await deps.db
-      .delete(orders)
-      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)));
+
+    const previousStatus = await deps.db.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: orders.id, status: orders.status })
+        .from(orders)
+        .where(and(eq(orders.id, id), eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
+        .limit(1)
+        .for('update');
+      const order = rows[0];
+      if (!order) throw notFound('Order not found');
+      if (order.status === 'cancelled') return null;
+
+      const updated = await tx
+        .update(orders)
+        .set({ status: 'cancelled' })
+        .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)))
+        .returning({ id: orders.id });
+      if (!updated[0]) throw notFound('Order not found');
+      return order.status;
+    });
+
+    if (previousStatus) {
+      await recordAuditSafe(app, {
+        shopId: shop.id,
+        userId: user.id,
+        eventType: 'ORDER_CANCELLED',
+        resourceId: id,
+        ipAddress: request.ip,
+        metadata: { from: previousStatus, to: 'cancelled' },
+      });
+    }
+
     return { ok: true };
   });
 };

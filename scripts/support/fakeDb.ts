@@ -28,6 +28,8 @@ export interface RecordedCall {
   fields?: unknown;
   /** Join kinds in issue order — how a read reacts to a missing joined row. */
   joins?: string[];
+  /** Sort keys in issue order — how a read pins the order it answers with. */
+  orderBys?: unknown[];
   inTransaction: boolean;
 }
 
@@ -53,6 +55,7 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
   private patch?: Record<string, unknown>;
   private rowLimit?: number;
   private readonly joinKinds: string[] = [];
+  private readonly sortKeys: unknown[] = [];
 
   constructor(
     private readonly db: FakeDb,
@@ -70,7 +73,8 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
     return this;
   }
 
-  orderBy(): this {
+  orderBy(...keys: unknown[]): this {
+    this.sortKeys.push(...keys);
     return this;
   }
 
@@ -134,6 +138,7 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
         limit: this.rowLimit,
         fields: this.fields,
         joins: this.joinKinds,
+        orderBys: this.sortKeys,
       }) as T);
     } catch (error) {
       result = Promise.reject(error);
