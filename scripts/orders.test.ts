@@ -1,11 +1,16 @@
 /**
- * Order status lifecycle tests for N-103, plus the order-line recipe name
- * snapshot for N-107.
+ * Order status lifecycle tests for N-103, the order-line recipe name snapshot
+ * for N-107, and the sequential invoice numbers / void-instead-of-delete
+ * contract for N-105.
  *
  * These drive the real `orderRoutes` over a Fastify instance whose three auth
  * guards are stubbed (`scripts/support/ordersApp.ts`). The route bodies are the
  * production ones; only the collaborators are replaced — `request.ordersDeps`
  * swaps in a `FakeDb`, so no query or network call is live.
+ *
+ * The statements a test pins are the statements the route actually sends, so a
+ * contract that lives in SQL (the counter increment, the listing's sort keys)
+ * fails here instead of only against a database nobody has open.
  */
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
@@ -52,6 +57,10 @@ async function harness(role = 'owner', responses: Record<string, unknown[]> = {}
       const response = await testApp.app.inject({ method: 'PATCH', url, payload: body });
       return { status: response.statusCode, body: response.json() as any };
     },
+    async del(url: string) {
+      const response = await testApp.app.inject({ method: 'DELETE', url });
+      return { status: response.statusCode, body: response.json() as any };
+    },
     close: () => testApp.close(),
   };
 }
@@ -59,7 +68,8 @@ async function harness(role = 'owner', responses: Record<string, unknown[]> = {}
 test('POST /orders always creates processing orders, even when the client sends a status', async () => {
   const h = await harness('owner', {
     ...recipeResponses(),
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing' }]],
+    'update:shops': [[{ lastOrderNumber: 1 }]],
+    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
     'insert:orderItems': [[]],
   });
   try {
@@ -181,7 +191,7 @@ test('PATCH /orders/:id/status reads cross-shop access as 404', async () => {
   }
 });
 
-test('GET /orders/:id returns status', async () => {
+test('GET /orders/:id returns status and the invoice number', async () => {
   const h = await harness('owner', {
     'select:orders': [
       [
@@ -189,6 +199,7 @@ test('GET /orders/:id returns status', async () => {
           id: ORDER_ID,
           shopId: SHOP_ID,
           status: 'delivered',
+          orderNumber: 42,
           totalAmount: '10.00',
           deliveryFee: '0',
           totalCost: '4.00',
@@ -203,6 +214,7 @@ test('GET /orders/:id returns status', async () => {
     const { status, body } = await h.get(`/api/v1/orders/${ORDER_ID}`);
     assert.equal(status, 200);
     assert.equal(body.order.status, 'delivered');
+    assert.equal(body.order.orderNumber, 42, 'the detail view prints the number the invoice carries');
   } finally {
     await h.close();
   }
@@ -211,7 +223,8 @@ test('GET /orders/:id returns status', async () => {
 test('POST /orders freezes the recipe name onto every line as it is created', async () => {
   const h = await harness('owner', {
     ...recipeResponses(),
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing' }]],
+    'update:shops': [[{ lastOrderNumber: 1 }]],
+    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
     'insert:orderItems': [[]],
   });
   try {
@@ -263,6 +276,169 @@ test('GET /orders/:id labels lines from the snapshot first, recipes only as a fa
       projectedName,
       /coalesce\("order_items"\."recipe_name",\s*"recipes"\."name"\)/,
     );
+  } finally {
+    await h.close();
+  }
+});
+
+/* ---------------------------------------------- sequential numbers (N-105) */
+
+test('POST /orders claims the next per-shop number inside the creation transaction', async () => {
+  const h = await harness('owner', {
+    ...recipeResponses(),
+    'update:shops': [[{ lastOrderNumber: 7 }]],
+    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 7 }]],
+    'insert:orderItems': [[]],
+  });
+  try {
+    const { status, body } = await h.post('/api/v1/orders', {
+      customerName: 'Dana',
+      deliveryDistanceKm: 0,
+      items: [{ recipeId: RECIPE_ID, quantity: 2 }],
+    });
+    assert.equal(status, 201);
+    assert.equal(
+      body.order.orderNumber,
+      7,
+      'the number is handed out by the counter, not invented by the row',
+    );
+
+    // The counter moves inside the same transaction as the insert, so a create
+    // that rolls back takes its number with it and a concurrent create blocks
+    // on this row instead of racing past it.
+    const bump = h.db.onlyCallTo('update', 'shops');
+    assert.equal(bump.inTransaction, true);
+    const increment = new PgDialect().sqlToQuery((bump.set as { lastOrderNumber: SQL }).lastOrderNumber).sql;
+    assert.match(
+      increment,
+      /"shops"\."last_order_number" \+ 1/,
+      'an increment of the stored value, never a literal the next create could repeat',
+    );
+
+    const insert = h.db.onlyCallTo('insert', 'orders');
+    assert.equal(insert.inTransaction, true);
+    assert.equal((insert.values as { orderNumber: number }).orderNumber, 7);
+  } finally {
+    await h.close();
+  }
+});
+
+test('GET /orders exposes the invoice number and falls back to it for ties', async () => {
+  const h = await harness('owner', {
+    'select:orders': [
+      [
+        {
+          id: ORDER_ID,
+          orderNumber: 42,
+          status: 'processing',
+          totalAmount: '10.00',
+          deliveryFee: '0',
+          totalCost: '4.00',
+        },
+      ],
+      [{ count: 1 }],
+    ],
+  });
+  try {
+    const { status, body } = await h.get('/api/v1/orders');
+    assert.equal(status, 200);
+    assert.equal(body.orders[0].orderNumber, 42, 'the list is what an invoice index prints from');
+
+    const read = h.db.callsTo('select', 'orders')[0]!;
+    const sortKeys = (read.orderBys ?? []).map((key) => new PgDialect().sqlToQuery(key as SQL).sql);
+    assert.deepEqual(
+      sortKeys,
+      ['"orders"."order_date" desc', '"orders"."order_number" desc'],
+      'within a day the listing is the sequence itself, not an arbitrary UUID order',
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('GET /orders accepts ?status=cancelled so a void stays findable', async () => {
+  const h = await harness('owner', {
+    'select:orders': [
+      [{ id: ORDER_ID, status: 'cancelled', orderNumber: 42, totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
+      [{ count: 1 }],
+    ],
+  });
+  try {
+    const { status, body } = await h.get('/api/v1/orders?status=cancelled');
+    assert.equal(status, 200);
+    assert.equal(body.orders[0].status, 'cancelled');
+    assert.equal(body.orders[0].orderNumber, 42);
+  } finally {
+    await h.close();
+  }
+});
+
+/* ------------------------------------------------- void instead of delete */
+
+test('DELETE /orders/:id cancels the order so its number is never freed', async () => {
+  const h = await harness('owner', {
+    'select:orders': [
+      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 42, deletedAt: null }],
+    ],
+    'update:orders': [[{ id: ORDER_ID, status: 'cancelled', orderNumber: 42 }]],
+  });
+  try {
+    const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { ok: true });
+
+    assert.deepEqual(
+      h.db.callsTo('delete', 'orders'),
+      [],
+      'the row — and with it the issued number — must outlive the cancel',
+    );
+    const update = h.db.onlyCallTo('update', 'orders');
+    assert.deepEqual(update.set, { status: 'cancelled' });
+  } finally {
+    await h.close();
+  }
+});
+
+test('DELETE /orders/:id answers the same way on an order that is already cancelled', async () => {
+  const h = await harness('owner', {
+    'select:orders': [
+      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', orderNumber: 42, deletedAt: null }],
+    ],
+  });
+  try {
+    const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { ok: true });
+    assert.deepEqual(h.db.callsTo('update', 'orders'), [], 'a void never writes itself twice');
+    assert.deepEqual(h.db.callsTo('delete', 'orders'), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test('DELETE /orders/:id reads a missing or cross-shop order as 404', async () => {
+  const h = await harness('owner', { 'select:orders': [[]] });
+  try {
+    const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
+    assert.equal(status, 404);
+    assert.equal(body.error.code, 'NOT_FOUND');
+    assert.deepEqual(h.db.callsTo('update', 'orders'), []);
+  } finally {
+    await h.close();
+  }
+});
+
+test('PATCH /orders/:id/status cannot revive a cancelled order', async () => {
+  const h = await harness('member', {
+    'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', deletedAt: null }]],
+  });
+  try {
+    const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
+      status: 'delivered',
+    });
+    assert.equal(status, 400);
+    assert.match(body.error.message, /already cancelled/);
+    assert.deepEqual(h.db.callsTo('update', 'orders'), []);
   } finally {
     await h.close();
   }

@@ -43,13 +43,21 @@ export type ReceiptReviewStatus = (typeof RECEIPT_REVIEW_STATUSES)[number];
 /**
  * The order lifecycle as the shop sees it:
  *
- * `processing` → `delivered`
+ * `processing` → `delivered`, with `cancelled` reachable from either
  *
  * Every order starts as `processing`. It moves to `delivered` only after
- * explicit human verification via `PATCH /orders/:id/status`. No other
- * transition exists.
+ * explicit human verification via `PATCH /orders/:id/status`. No transition out
+ * of `delivered` exists.
+ *
+ * `cancelled` is what `DELETE /orders/:id` writes instead of removing the row
+ * (N-105): invoicing needs a gapless per-shop sequence, so the number an order
+ * was issued stays assigned and the void is visible rather than a hole. A
+ * cancelled order is frozen — no transition out of it — and it never counts as
+ * a sale in analytics. Like the receipt statuses there is no CHECK constraint,
+ * so this list and the routes that write it are all that keep the values
+ * honest.
  */
-export const ORDER_STATUSES = ['processing', 'delivered'] as const;
+export const ORDER_STATUSES = ['processing', 'delivered', 'cancelled'] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const;

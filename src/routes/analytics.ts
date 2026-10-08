@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
 import {
@@ -128,6 +128,18 @@ export const expenseTotalsFields = {
  */
 export const countedAsSpend = eq(receipts.status, 'verified');
 
+/**
+ * Orders that count as sales.
+ *
+ * A cancelled order keeps its row and its number so the per-shop invoice
+ * sequence stays auditable (N-105), but a void is not a sale: leaving one in
+ * these totals would put money on the dashboard that cancelling was meant to
+ * take off — the exact phantom the old hard delete used to hide. Exported so
+ * `scripts/analytics.test.ts` can pin the predicate itself, because a wrong one
+ * here does not throw, it just reports plausible numbers.
+ */
+export const countedAsSale = sql`${isNull(orders.deletedAt)} and ${ne(orders.status, 'cancelled')}`;
+
 export const analyticsRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
 
@@ -153,7 +165,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             count: sql<number>`count(*)::int`,
           })
           .from(orders)
-          .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`)),
+          .where(and(eq(orders.shopId, shop.id), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`)),
         deps.db
           .select(expenseTotalsFields)
           .from(receipts)
@@ -174,7 +186,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .where(
             and(
               eq(orders.shopId, shop.id),
-              isNull(orders.deletedAt),
+              countedAsSale,
               sql`${orders.orderDate} >= ${utcInstant(previousStart)}::timestamptz`,
               sql`${orders.orderDate} < ${utcInstant(start)}::timestamptz`,
             ),
@@ -256,7 +268,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const rows = await deps.db
       .select()
       .from(orders)
-      .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
+      .where(and(eq(orders.shopId, shop.id), countedAsSale))
       .orderBy(desc(orders.orderDate))
       .limit(limit);
 
@@ -303,7 +315,7 @@ async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Dat
     .from(orderItems)
     .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
-    .where(and(eq(orderItems.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
+    .where(and(eq(orderItems.shopId, shopId), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
     .groupBy(orderItems.recipeId, orderItemRecipeName, recipes.imageUrl)
     .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}),0)`))
     .limit(1);
@@ -329,7 +341,7 @@ async function orderProfitStats(deps: AnalyticsDeps, shopId: string, start: Date
       netProfit: sql<string>`${orders.totalAmount} - ${orders.deliveryFee} - ${orders.totalCost}`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`));
+    .where(and(eq(orders.shopId, shopId), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`));
 
   const profits = rows.map((row) => toNumber(row.netProfit));
   return {
@@ -380,7 +392,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
+    .where(and(eq(orders.shopId, shopId), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
     .groupBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`)
     .orderBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`);
 
