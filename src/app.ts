@@ -3,11 +3,10 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
-import Fastify, { LogController, type FastifyError, type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
-import { ZodError } from 'zod';
 import { corsOrigins, env } from './env.js';
-import { AppError } from './lib/errors.js';
+import { registerErrorHandler } from './lib/errorHandler.js';
 import { loggerFactory } from './lib/logger/index.js';
 import { authPlugins, requireAuth, requireShopContext } from './plugins/auth.js';
 import { shopRoutes } from './routes/shops.js';
@@ -64,47 +63,12 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   });
 
   /**
-   * Error handling is registered before every plugin and route, and that order is
-   * load-bearing. Fastify resolves a route context's error handler when the route
-   * is added and keeps that reference on the context (`lib/context.js`:
-   * `this.errorHandler = errorHandler || server[kErrorHandler]`). A handler set
-   * afterwards never reaches routes that already exist.
-   *
-   * When these two calls sat below the route plugins, every route kept Fastify's
-   * built-in handler: each `AppError` 4xx/409/413 and each `z.parse()` failure
-   * answered 500 with the raw internal message, to unauthenticated callers.
-   *
-   * Registering ahead of `@fastify/cors` as well is deliberate: a rejected origin
-   * is raised from that plugin's `onRequest` hook, so it reaches this handler and
-   * gets the flat generic 500 instead of "Origin not allowed by CORS".
-   *
-   * `setNotFoundHandler` is resolved on the root router at request time, so it was
-   * never affected by the ordering bug. It lives here for cohesion.
-   *
-   * Covered by scripts/error-handler.test.ts.
+   * Error handling is registered before every plugin and route; that ordering
+   * and the full envelope (Zod, AppError, 4xx, transient-DB 503 + Retry-After,
+   * generic 500 — `traceId` on every body) live in `registerErrorHandler`.
+   * See `src/lib/errorHandler.ts` for why the position is load-bearing.
    */
-  app.setErrorHandler((error: FastifyError, request, reply) => {
-    if (error instanceof ZodError) {
-      return reply.code(400).send({
-        error: { code: 'VALIDATION_ERROR', message: 'Invalid request', details: error.issues },
-      });
-    }
-    if (error instanceof AppError) {
-      return reply
-        .code(error.statusCode)
-        .send({ error: { code: error.code, message: error.message, details: error.details } });
-    }
-    if (typeof error.statusCode === 'number' && error.statusCode >= 400 && error.statusCode < 500) {
-      return reply
-        .code(error.statusCode)
-        .send({ error: { code: error.code ?? 'REQUEST_ERROR', message: error.message } });
-    }
-
-    request.log.error({ err: error }, 'unhandled request error');
-    return reply
-      .code(500)
-      .send({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } });
-  });
+  registerErrorHandler(app);
 
   app.setNotFoundHandler((request, reply) =>
     reply
@@ -151,6 +115,9 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       if (!origin || corsOrigins.includes(origin)) cb(null, true);
       else cb(new Error('Origin not allowed by CORS'), false);
     },
+    // Retry-After and X-Trace-Id (N-110) are not on the CORS safelist, so the
+    // browser would otherwise hide them from the client that needs them.
+    exposedHeaders: ['Retry-After', 'X-Trace-Id'],
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
