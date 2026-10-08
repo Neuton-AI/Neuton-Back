@@ -27,11 +27,13 @@ export const orders = pgTable('orders', {
   totalCost: numeric('total_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull().default('0.00'),
   documentUrl: text('document_url'),
+  status: text('status').notNull().default('processing'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
   shopDateIdx: index('orders_shop_id_order_date_idx').on(t.shopId, t.orderDate),
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
+  shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
 }));
 
 export const orderItems = pgTable('order_items', {

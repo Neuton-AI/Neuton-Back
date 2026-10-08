@@ -94,6 +94,10 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
     return this;
   }
 
+  offset(_count: number): this {
+    return this;
+  }
+
   returning(): this {
     return this;
   }

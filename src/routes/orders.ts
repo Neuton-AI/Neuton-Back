@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { db } from '../db/client.js';
+import { db, type Database } from '../db/client.js';
 import { orderItems, orders, recipes } from '../db/schema/index.js';
+import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { notFound } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { money, quantity as qty, toNumber } from '../lib/money.js';
 import {
   calculateDeliveryFee,
@@ -31,7 +32,32 @@ const createOrderSchema = z.object({
   items: z.array(orderItemSchema).min(1),
 });
 
+/**
+ * Collaborators the order routes write through. Injected so the status
+ * lifecycle can be exercised against a scripted database; production always
+ * uses `defaultOrdersDeps`.
+ */
+export interface OrdersDeps {
+  db: Database;
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /**
+     * Per-request override of `defaultOrdersDeps`. Production never sets it;
+     * it exists so the create/transition endpoints can be tested without a
+     * live Postgres.
+     */
+    ordersDeps?: OrdersDeps;
+  }
+}
+
+export const defaultOrdersDeps: OrdersDeps = { db };
+
+type PriceDb = Pick<Database, 'select'>;
+
 async function priceOrderItems(
+  database: PriceDb,
   shopId: string,
   shopMargin: string,
   hourlyLaborCost: string,
@@ -40,12 +66,12 @@ async function priceOrderItems(
   const recipeIds = [...new Set(items.map((item) => item.recipeId))];
   if (recipeIds.length === 0) return [];
 
-  const recipeRows = await db
+  const recipeRows = await database
     .select()
     .from(recipes)
     .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)));
 
-  const ingredientRows = await db
+  const ingredientRows = await database
     .select({
       recipeId: recipeIngredients.recipeId,
       quantity: recipeIngredients.quantity,
@@ -101,12 +127,14 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
   };
 
   app.get('/orders', guards, async (request) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const query = z
       .object({
         from: z.coerce.date().optional(),
         to: z.coerce.date().optional(),
         search: z.string().trim().max(120).optional(),
+        status: z.enum(ORDER_STATUSES).optional(),
         limit: z.coerce.number().int().min(1).max(100).default(50),
         offset: z.coerce.number().int().min(0).default(0),
       })
@@ -118,8 +146,9 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     if (query.search) {
       conditions.push(sql`${orders.customerName} ilike ${`%${query.search}%`}`);
     }
+    if (query.status) conditions.push(eq(orders.status, query.status));
 
-    const rows = await db
+    const rows = await deps.db
       .select()
       .from(orders)
       .where(and(...conditions))
@@ -127,7 +156,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       .limit(query.limit)
       .offset(query.offset);
 
-    const totalRows = await db
+    const totalRows = await deps.db
       .select({ count: sql<number>`count(*)::int` })
       .from(orders)
       .where(and(...conditions));
@@ -142,10 +171,11 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/orders/:id', guards, async (request) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
-    const rows = await db
+    const rows = await deps.db
       .select()
       .from(orders)
       .where(and(eq(orders.id, id), eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
@@ -153,7 +183,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     const order = rows[0];
     if (!order) throw notFound('Order not found');
 
-    const items = await db
+    const items = await deps.db
       .select({
         id: orderItems.id,
         recipeId: orderItems.recipeId,
@@ -181,6 +211,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
 
   /** Live pricing for the New Order screen before anything is persisted. */
   app.post('/orders/quote', guards, async (request) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const body = z
       .object({
@@ -190,6 +221,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       .parse(request.body);
 
     const priced = await priceOrderItems(
+      deps.db,
       shop.id,
       shop.targetProfitMargin,
       shop.hourlyLaborCost,
@@ -221,11 +253,13 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post('/orders', mutationGuards, async (request, reply) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const user = currentUser(request);
     const body = createOrderSchema.parse(request.body);
 
     const priced = await priceOrderItems(
+      deps.db,
       shop.id,
       shop.targetProfitMargin,
       shop.hourlyLaborCost,
@@ -247,7 +281,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       deliveryFee,
     });
 
-    const created = await db.transaction(async (tx) => {
+    const created = await deps.db.transaction(async (tx) => {
       const inserted = await tx
         .insert(orders)
         .values({
@@ -265,6 +299,9 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
           totalCost: money(totals.totalCost),
           totalAmount: money(totals.totalAmount),
           documentUrl: body.documentUrl ?? null,
+          // The client can never set the lifecycle state on create:
+          // every order starts as `processing`.
+          status: 'processing',
         })
         .returning();
 
@@ -297,10 +334,61 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ order: created, totals });
   });
 
+  /**
+   * Human verification gate: `processing` → `delivered`.
+   *
+   * Any authenticated shop member may mark an order delivered (standard shop
+   * guards, NOT owner/admin-only). Only the forward transition is allowed;
+   * anything else is a 400, and cross-shop access reads as 404 so one shop
+   * can never probe another shop's orders.
+   */
+  app.patch('/orders/:id/status', guards, async (request) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
+    const shop = currentShop(request);
+    const user = currentUser(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { status } = z.object({ status: z.enum(ORDER_STATUSES) }).parse(request.body);
+
+    if (status !== 'delivered') {
+      throw badRequest('Only the processing -> delivered transition is supported');
+    }
+
+    const rows = await deps.db
+      .select()
+      .from(orders)
+      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
+      .limit(1);
+    const order = rows[0];
+    if (!order) throw notFound('Order not found');
+    if (order.status !== 'processing') {
+      throw badRequest(`Order is already ${order.status}`);
+    }
+
+    const updated = await deps.db
+      .update(orders)
+      .set({ status: 'delivered' })
+      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)))
+      .returning();
+    const next = updated[0];
+    if (!next) throw notFound('Order not found');
+
+    await recordAuditSafe(app, {
+      shopId: shop.id,
+      userId: user.id,
+      eventType: 'ORDER_DELIVERED',
+      resourceId: id,
+      ipAddress: request.ip,
+      metadata: { from: 'processing', to: 'delivered' },
+    });
+
+    return { order: next };
+  });
+
   app.delete('/orders/:id', mutationGuards, async (request) => {
+    const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    await db
+    await deps.db
       .delete(orders)
       .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)));
     return { ok: true };
