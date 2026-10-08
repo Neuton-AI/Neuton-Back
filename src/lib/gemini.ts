@@ -170,8 +170,24 @@ const PROMPTS: Record<MediaKind, { instruction: string; schema: string }> = {
 
 const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-function asNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+/**
+ * Coerces a model-returned value to a finite number, or null when unreadable.
+ * Models frequently ignore `responseSchema` and answer numerics as strings
+ * (`"3.00"`, `"1,290.50"`, `"₪12.90"`), so strings are stripped of currency
+ * symbols, grouping commas and whitespace before parsing. Anything
+ * unparseable stays null — never invented, never zero.
+ */
+export function asNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^0-9.\-]/g, '');
+    if (!cleaned || cleaned === '.' || cleaned === '-' || cleaned === '-.') return null;
+    const parsed = Number.parseFloat(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function asString(value: unknown): string | null {
