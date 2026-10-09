@@ -11,6 +11,7 @@ import {
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, conflict, forbidden } from '../lib/errors.js';
+import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
 import {
@@ -23,22 +24,22 @@ import { defaultReceiptsDeps } from './receipts.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
-  rawName: z.string().trim().min(1).max(160),
+  rawName: htmlFree(z.string().trim().min(1).max(160)),
   quantity: z.coerce.number().positive(),
-  unit: z.string().trim().min(1).max(24),
+  unit: htmlFree(z.string().trim().min(1).max(24)),
 });
 
 const recipeSchema = z.object({
-  name: z.string().trim().min(1).max(160),
-  description: z.string().trim().max(2_000).nullable().optional(),
+  name: htmlFree(z.string().trim().min(1).max(160)),
+  description: htmlFree(z.string().trim().max(2_000)).nullable().optional(),
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
   prepTimeMinutes: z.coerce.number().int().min(0).max(10_000).default(0),
   yieldQuantity: z.coerce.number().positive().max(100_000).default(1),
-  yieldUnit: z.string().trim().min(1).max(24).default('portion'),
+  yieldUnit: htmlFree(z.string().trim().min(1).max(24)).default('portion'),
   targetMarginPct: z.coerce.number().min(0).max(999).nullable().optional(),
-  allergens: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
-  instructions: z.string().trim().max(20_000).nullable().optional(),
+  allergens: z.array(htmlFree(z.string().trim().min(1).max(40))).max(20).default([]),
+  instructions: htmlFree(z.string().trim().max(20_000)).nullable().optional(),
   ingredients: z.array(recipeIngredientSchema).min(1),
 });
 
@@ -68,8 +69,8 @@ function isForeignKeyViolation(error: unknown): boolean {
 }
 
 const inventorySchema = z.object({
-  name: z.string().trim().min(1).max(160),
-  sku: z.string().trim().max(64).nullable().optional(),
+  name: htmlFree(z.string().trim().min(1).max(160)),
+  sku: htmlFree(z.string().trim().max(64)).nullable().optional(),
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
   unit: z.enum(['kg', 'g', 'l', 'ml', 'unit', 'pack']),
@@ -190,7 +191,9 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/categories', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
-    const body = z.object({ name: z.string().trim().min(1).max(80) }).parse(request.body);
+    const body = z
+      .object({ name: htmlFree(z.string().trim().min(1).max(80)) })
+      .parse(request.body);
     const rows = await db
       .insert(categories)
       .values({ shopId: shop.id, name: body.name })
@@ -597,9 +600,9 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
             z.object({
               id: z.string().uuid(),
               accepted: z.boolean(),
-              rawName: z.string().trim().min(1).max(200).optional(),
-              rawSku: z.string().trim().min(1).max(120).optional(),
-              unit: z.string().trim().min(1).max(20).optional(),
+              rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
+              rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
+              unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
               quantity: z.coerce.number().min(0).optional(),
               unitPrice: z.coerce.number().min(0).optional(),
               totalPrice: z.coerce.number().min(0).optional(),

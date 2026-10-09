@@ -20,6 +20,7 @@ import {
 import { getObjectBytes } from './lib/storage.js';
 import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
+import { isHtmlSafe } from './lib/safeText.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import {
@@ -563,10 +564,16 @@ export async function processOrderDocument(
     await tx
       .update(orders)
       .set({
-        ...(extraction.customerName && !order.customerName
+        // Extraction text is written only while it carries no HTML (issue
+        // #116): an image can feed the model markup, and the field it would
+        // land in is rendered to every shop member. Unsafe values leave the
+        // order exactly as it was.
+        ...(extraction.customerName && !order.customerName && isHtmlSafe(extraction.customerName)
           ? { customerName: extraction.customerName }
           : {}),
-        ...(extraction.destinationAddress && !order.destinationAddress
+        ...(extraction.destinationAddress &&
+          !order.destinationAddress &&
+          isHtmlSafe(extraction.destinationAddress)
           ? { destinationAddress: extraction.destinationAddress }
           : {}),
         totalCost: money(totalCost),

@@ -708,6 +708,35 @@ test('order: an existing customer name is never overwritten by the model', async
   assert.equal('destinationAddress' in patch, false);
 });
 
+test('order: extracted text carrying HTML is never written (#116)', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:orders': [[{ ...ORDER }]],
+      'select:recipes': [[{ ...CATALOG_RECIPE }]],
+      'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
+      'select:recipeIngredients': [[]],
+      'insert:orderItems': [[]],
+    },
+    data: { kind: 'order', orderId: 'order-1' },
+    extractions: {
+      // A customer order sheet can be an outsider's document, and the model
+      // echoes what it reads: markup in the image must not land in a column
+      // every shop member renders.
+      order: {
+        customerName: '<script>alert(1)</script>',
+        destinationAddress: '<svg onload=alert(3)>',
+        items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }],
+      },
+    },
+  });
+
+  await processOrderDocument(deps, jobData, job);
+
+  const patch = db.onlyCallTo('update', 'orders').set as Record<string, unknown>;
+  assert.equal('customerName' in patch, false, 'unsafe name leaves the order untouched');
+  assert.equal('destinationAddress' in patch, false, 'unsafe address leaves the order untouched');
+});
+
 test('order: a missing quantity is sold as one', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
