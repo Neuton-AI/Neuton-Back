@@ -7,6 +7,7 @@ import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { badRequest, notFound } from '../lib/errors.js';
+import { htmlFree } from '../lib/safeText.js';
 import { money, quantity as qty, toNumber } from '../lib/money.js';
 import {
   calculateDeliveryFee,
@@ -24,11 +25,11 @@ const orderItemSchema = z.object({
 });
 
 const createOrderSchema = z.object({
-  customerName: z.string().trim().max(160).nullable().optional(),
+  customerName: htmlFree(z.string().trim().max(160)).nullable().optional(),
   orderDate: z.coerce.date().optional(),
-  destinationAddress: z.string().trim().max(300).nullable().optional(),
+  destinationAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
   deliveryDistanceKm: z.coerce.number().min(0).max(20_000).default(0),
-  documentUrl: z.string().trim().max(500).nullable().optional(),
+  documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),
   items: z.array(orderItemSchema).min(1),
 });
 

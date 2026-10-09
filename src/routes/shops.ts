@@ -6,12 +6,13 @@ import { profiles, shopMembers, shops } from '../db/schema/index.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { htmlFree } from '../lib/safeText.js';
 import { generateUniqueSlug } from '../lib/slug.js';
 import { supabaseAdmin } from '../lib/supabase-admin.js';
 import { toNumber } from '../lib/money.js';
 
 const shopSettingsSchema = z.object({
-  name: z.string().trim().min(2).max(120).optional(),
+  name: htmlFree(z.string().trim().min(2).max(120)).optional(),
   slug: z
     .string()
     .trim()
@@ -19,18 +20,18 @@ const shopSettingsSchema = z.object({
     .max(80)
     .regex(/^[a-z0-9-]+$/, 'Slug may only contain lowercase letters, numbers and dashes')
     .optional(),
-  storeAddress: z.string().trim().max(300).nullable().optional(),
+  storeAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
   targetProfitMargin: z.coerce.number().min(0).max(999).optional(),
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).optional(),
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).optional(),
   deliveryRatePerKm: z.coerce.number().min(0).max(100_000).optional(),
-  currency: z.string().trim().length(3).toUpperCase().optional(),
-  timezone: z.string().trim().min(1).max(80).optional(),
+  currency: htmlFree(z.string().trim().length(3).toUpperCase()).optional(),
+  timezone: htmlFree(z.string().trim().min(1).max(80)).optional(),
 });
 
 const createShopSchema = z.object({
-  name: z.string().trim().min(2).max(120),
-  storeAddress: z.string().trim().max(300).optional(),
+  name: htmlFree(z.string().trim().min(2).max(120)),
+  storeAddress: htmlFree(z.string().trim().max(300)).optional(),
   targetProfitMargin: z.coerce.number().min(0).max(999).default(35),
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).default(18),
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).default(3),
@@ -38,7 +39,7 @@ const createShopSchema = z.object({
 });
 
 const updateProfileSchema = z.object({
-  fullName: z.string().trim().min(1).max(120).nullable().optional(),
+  fullName: htmlFree(z.string().trim().min(1).max(120)).nullable().optional(),
   avatarUrl: z.string().trim().url().max(500).nullable().optional(),
 });
 

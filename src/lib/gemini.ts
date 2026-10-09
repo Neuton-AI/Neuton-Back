@@ -3,6 +3,7 @@ import { env } from '../env.js';
 import { geminiLogger } from './logger/index.js';
 import type { LogContext } from './logger/types.js';
 import { isPermanentError, isUnknownModelError } from './jobErrors.js';
+import { stripHtml } from './safeText.js';
 import type { MediaKind } from './queue.js';
 
 /**
@@ -191,7 +192,12 @@ export function asNumber(value: unknown): number | null {
 }
 
 function asString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+  if (typeof value !== 'string') return null;
+  // Model output is untrusted — a receipt or order image can carry markup the
+  // model happily echoes back, so it is stripped here, at the trust boundary,
+  // before any extraction value can reach a table (issue #116).
+  const cleaned = stripHtml(value).trim();
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 function parseJson<T>(text: string): T {
@@ -350,7 +356,10 @@ export async function extractRecipe(
     yieldQuantity: asNumber(raw.yieldQuantity),
     yieldUnit: asString(raw.yieldUnit),
     allergens: Array.isArray(raw.allergens)
-      ? raw.allergens.filter((a): a is string => typeof a === 'string')
+      ? raw.allergens
+          .filter((a): a is string => typeof a === 'string')
+          .map((a) => stripHtml(a).trim())
+          .filter((a) => a.length > 0)
       : [],
     instructions: asString(raw.instructions),
     ingredients: ingredients.map((entry) => {

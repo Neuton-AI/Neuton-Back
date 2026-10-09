@@ -7,6 +7,7 @@ import { RECEIPT_STATUSES, RECIPE_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, forbidden, tooLarge, conflict } from '../lib/errors.js';
+import { htmlFree } from '../lib/safeText.js';
 import { verifyReceipt } from '../lib/verifyReceipt.js';
 import { enqueueMediaJob, type MediaKind } from '../lib/queue.js';
 import {
@@ -28,7 +29,7 @@ const STORAGE_KINDS = {
 const presignSchema = z.object({
   kind: z.enum(['receipt', 'recipe', 'product', 'order']),
   contentType: z.string().min(1),
-  originalFilename: z.string().trim().max(255).nullable().optional(),
+  originalFilename: htmlFree(z.string().trim().max(255)).nullable().optional(),
   byteSize: z.coerce.number().int().positive().optional(),
   orderId: z.string().uuid().optional(),
 });
@@ -41,9 +42,9 @@ const presignSchema = z.object({
 const verifyItemSchema = z.object({
   id: z.string().uuid(),
   accepted: z.boolean(),
-  rawName: z.string().trim().min(1).max(200).optional(),
-  rawSku: z.string().trim().min(1).max(120).optional(),
-  unit: z.string().trim().min(1).max(20).optional(),
+  rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
+  rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
+  unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
   quantity: z.coerce.number().min(0).optional(),
   unitPrice: z.coerce.number().min(0).optional(),
   totalPrice: z.coerce.number().min(0).optional(),
@@ -144,7 +145,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         storagePath: z.string().trim().min(1).max(400),
         kind: z.enum(['receipt', 'recipe', 'product', 'order']),
         contentType: z.string().min(1),
-        originalFilename: z.string().trim().max(255).nullable().optional(),
+        originalFilename: htmlFree(z.string().trim().max(255)).nullable().optional(),
         receiptId: z.string().uuid().optional(),
         orderId: z.string().uuid().optional(),
       })
