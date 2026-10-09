@@ -109,7 +109,26 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     );
   });
 
-  await app.register(helmet, { contentSecurityPolicy: false });
+  /**
+   * Issue #115: the API serves JSON only, so the deny-all policy is the right
+   * one — `default-src 'none'` stops script/resource execution if a stored
+   * HTML render ever slips through, `frame-ancestors`/`base-uri`/`form-action`
+   * close the clickjacking, `<base>` hijack and form-post vectors. Helmet's
+   * HTML-oriented defaults are dropped because they contradict
+   * `default-src 'none'`; an endpoint that later needs a resource must widen
+   * this deliberately.
+   */
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+      },
+    },
+  });
   await app.register(cors, {
     origin: (origin, cb) => {
       if (!origin || corsOrigins.includes(origin)) cb(null, true);
