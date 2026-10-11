@@ -443,3 +443,73 @@ test('PATCH /orders/:id/status cannot revive a cancelled order', async () => {
     await h.close();
   }
 });
+
+/* ------------------------------------------- whole-unit quantities (N-112) */
+
+test('POST /orders/quote rejects a fractional quantity with 400, never pricing it', async () => {
+  const h = await harness();
+  try {
+    for (const quantity of [1.5, 2.7]) {
+      const { status, body } = await h.post('/api/v1/orders/quote', {
+        items: [{ recipeId: RECIPE_ID, quantity }],
+      });
+      assert.equal(status, 400, `quantity=${quantity} must be rejected`);
+      assert.equal(body.error.code, 'VALIDATION_ERROR');
+      const issue = body.error.details[0];
+      assert.deepEqual(issue.path, ['items', 0, 'quantity']);
+      assert.match(issue.message, /positive integer/i);
+    }
+    assert.deepEqual(
+      h.db.calls,
+      [],
+      'a rejected quantity must not reach the pricing queries',
+    );
+  } finally {
+    await h.close();
+  }
+});
+
+test('POST /orders/quote still rejects zero and negative quantities with 400', async () => {
+  const h = await harness();
+  try {
+    for (const quantity of [0, -5]) {
+      const { status, body } = await h.post('/api/v1/orders/quote', {
+        items: [{ recipeId: RECIPE_ID, quantity }],
+      });
+      assert.equal(status, 400, `quantity=${quantity} must be rejected`);
+      assert.equal(body.error.code, 'VALIDATION_ERROR');
+      assert.match(body.error.details[0].message, /positive integer/i);
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+test('POST /orders/quote prices a whole-number quantity', async () => {
+  const h = await harness('owner', recipeResponses());
+  try {
+    const { status, body } = await h.post('/api/v1/orders/quote', {
+      items: [{ recipeId: RECIPE_ID, quantity: 2 }],
+    });
+    assert.equal(status, 200);
+    assert.equal(body.items[0].quantity, 2);
+  } finally {
+    await h.close();
+  }
+});
+
+test('POST /orders rejects a fractional quantity with 400 as well', async () => {
+  const h = await harness('owner');
+  try {
+    const { status, body } = await h.post('/api/v1/orders', {
+      deliveryDistanceKm: 0,
+      items: [{ recipeId: RECIPE_ID, quantity: 1.5 }],
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.details[0].message, /positive integer/i);
+    assert.deepEqual(h.db.calls, [], 'the order must not be created from a fractional line');
+  } finally {
+    await h.close();
+  }
+});
