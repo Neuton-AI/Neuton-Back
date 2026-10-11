@@ -15,6 +15,7 @@ export interface PriceResult {
   price: number;
   barcode: string;
   manufacturer?: string;
+  score: number;
 }
 
 export interface ShufersalFileEntry {
@@ -341,6 +342,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
               name: s.item.ItemName,
               price,
               barcode: s.item.ItemCode,
+              score: s.score,
               ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
             });
           }
@@ -373,6 +375,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
               name: s.item.ItemName,
               price,
               barcode: s.item.ItemCode,
+              score: s.score,
               ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
             });
           }
@@ -385,12 +388,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
 
   await Promise.allSettled(tasks);
 
-  results.sort((a, b) => {
-    // Sort by score would require keeping score, but we only have PriceResult
-    // For now sort by price asc as fallback
-    if (b.price === a.price) return 0;
-    return a.price < b.price ? -1 : 1;
-  });
+  results.sort((a, b) => b.score - a.score);
 
   return results;
 }
