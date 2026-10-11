@@ -66,6 +66,15 @@ export type InventoryUnit = (typeof INVENTORY_UNITS)[number];
 export const MEDIA_KINDS = ['receipt', 'recipe', 'product', 'order'] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
+/**
+ * The Israeli supermarket chains whose public PriceFull feeds populate
+ * `general_prices`. Text-typed on purpose (no CHECK constraint), mirroring the
+ * other status columns: the worker is the only writer and this list is what
+ * keeps the values honest.
+ */
+export const PRICE_CHAINS = ['shufersal', 'carrefour'] as const;
+export type PriceChain = (typeof PRICE_CHAINS)[number];
+
 /** Slugs that must never be handed out to a shop because they collide with app routes. */
 export const RESERVED_SLUGS = [
   'admin',
