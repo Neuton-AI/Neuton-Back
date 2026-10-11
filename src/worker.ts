@@ -4,6 +4,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
+  generalPrices,
   orderItems,
   orders,
   receiptItems,
@@ -30,6 +31,9 @@ import {
 import { env } from './env.js';
 import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
+import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
+import { searchProduct } from './lib/supermarket/prices.js';
+import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
 /**
@@ -58,6 +62,7 @@ export interface WorkerDeps {
   extractReceipt: typeof extractReceipt;
   extractRecipe: typeof extractRecipe;
   extractOrder: typeof extractOrder;
+  searchProduct: typeof searchProduct;
 }
 
 export const defaultWorkerDeps: WorkerDeps = {
@@ -66,6 +71,7 @@ export const defaultWorkerDeps: WorkerDeps = {
   extractReceipt,
   extractRecipe,
   extractOrder,
+  searchProduct,
 };
 
 function toBase64(bytes: Uint8Array): string {
@@ -273,11 +279,15 @@ export async function processRecipe(
 
   // Claim the row by (shopId, storagePath) and set to 'processing'
   const claimRows = await deps.db
-    .select({ id: recipes.id })
+    .select({ id: recipes.id, status: recipes.status })
     .from(recipes)
     .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)))
     .limit(1);
   const existingRecipe = claimRows[0];
+
+  // A completed extraction may be redelivered by the queue. Preserve its links
+  // (and any subsequent manual verification) instead of extracting it again.
+  if (existingRecipe?.status === 'unverified' || existingRecipe?.status === 'verified') return;
 
   if (existingRecipe) {
     await deps.db
@@ -375,6 +385,7 @@ export async function processRecipe(
       });
 
       await tx.insert(recipeIngredients).values(bill);
+      await linkRecipeFallbackPrices(tx, data.shopId, existingRecipe.id, deps.searchProduct);
     });
 
     jobLogger.info(
@@ -421,6 +432,7 @@ export async function processRecipe(
       });
 
       await tx.insert(recipeIngredients).values(bill);
+      await linkRecipeFallbackPrices(tx, data.shopId, recipe.id, deps.searchProduct);
 
       return recipe;
     });
@@ -509,10 +521,11 @@ export async function processOrderDocument(
     .select({
       recipeId: recipeIngredients.recipeId,
       quantity: recipeIngredients.quantity,
-      averageUnitCost: inventoryItems.averageUnitCost,
+      averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)
     .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
     .where(eq(recipeIngredients.shopId, data.shopId));
   const byRecipe = new Map<string, typeof ingredientRows>();
   for (const row of ingredientRows) {
