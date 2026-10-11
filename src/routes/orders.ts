@@ -19,7 +19,16 @@ import { recipeIngredients, inventoryItems } from '../db/schema/index.js';
 
 const orderItemSchema = z.object({
   recipeId: z.string().uuid(),
-  quantity: z.coerce.number().positive().max(100_000),
+  /**
+   * A line item is a count of whole units; the New Order stepper only ever
+   * emits integers, so a fractional quantity is a client bug and is rejected
+   * here rather than silently scaled through the pricing.
+   */
+  quantity: z.coerce
+    .number()
+    .int('Quantity must be a positive integer')
+    .positive('Quantity must be a positive integer')
+    .max(100_000),
   /** Optional override; when omitted the recipe retail price is used. */
   unitPrice: z.coerce.number().min(0).nullable().optional(),
 });
