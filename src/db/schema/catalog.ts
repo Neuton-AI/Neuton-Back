@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   numeric,
@@ -10,7 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { INVENTORY_UNITS, RECIPE_STATUSES } from './enums.js';
+import { INVENTORY_UNITS, PRICE_CHAINS, RECIPE_STATUSES } from './enums.js';
 import { shops } from './identity.js';
 
 export const categories = pgTable('categories', {
@@ -78,6 +79,35 @@ export const recipes = pgTable('recipes', {
     .where(sql`${t.storagePath} IS NOT NULL`),
 }));
 
+/**
+ * A *global* (not per-shop) cache of supermarket prices fetched from the
+ * Israeli PriceFull feeds. An unlinked recipe ingredient — one whose material
+ * the shop does not stock — points here so cost calc stops falling back to 0.
+ *
+ * Global because the same product price is shared by every shop, and read-only
+ * for shops: the worker owns the rows and refreshes them. `normalized_name` is
+ * the lookup key (unique); `barcode` is indexed for scan-based matching.
+ */
+export const generalPrices = pgTable('general_prices', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  normalizedName: text('normalized_name').notNull(),
+  barcode: text('barcode'),
+  name: text('name').notNull(),
+  manufacturer: text('manufacturer'),
+  chain: text('chain', { enum: PRICE_CHAINS }).notNull(),
+  priceIls: numeric('price_ils', { precision: 12, scale: 2 }).notNull(),
+  packageQuantity: numeric('package_quantity', { precision: 12, scale: 3 }),
+  packageUnit: text('package_unit'),
+  pricePerBaseUnit: numeric('price_per_base_unit', { precision: 12, scale: 4 }),
+  sourceUrl: text('source_url'),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  normalizedNameUnique: uniqueIndex('general_prices_normalized_name_unique').on(t.normalizedName),
+  barcodeIdx: index('general_prices_barcode_idx').on(t.barcode),
+}));
+
 export const recipeIngredients = pgTable('recipe_ingredients', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   shopId: uuid('shop_id')
@@ -88,6 +118,14 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
     .references(() => recipes.id, { onDelete: 'cascade' }),
   inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
     onDelete: 'restrict',
+  }),
+  /**
+   * External fallback price for a material the shop does not stock. Mutually
+   * exclusive with `inventoryItemId`: a line links to at most one price source,
+   * and both null means it is truly unpriced.
+   */
+  generalPriceId: uuid('general_price_id').references(() => generalPrices.id, {
+    onDelete: 'set null',
   }),
   rawName: text('raw_name').notNull(),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
@@ -103,11 +141,17 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
     t.rawName,
   ),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
+  priceLinkCheck: check(
+    'recipe_ingredients_price_link_check',
+    sql`num_nonnulls(${t.inventoryItemId}, ${t.generalPriceId}) <= 1`,
+  ),
 }));
 
 export type Category = typeof categories.$inferSelect;
 export type InventoryItem = typeof inventoryItems.$inferSelect;
 export type NewInventoryItem = typeof inventoryItems.$inferInsert;
+export type GeneralPrice = typeof generalPrices.$inferSelect;
+export type NewGeneralPrice = typeof generalPrices.$inferInsert;
 export type Recipe = typeof recipes.$inferSelect;
 export type NewRecipe = typeof recipes.$inferInsert;
 export type RecipeIngredient = typeof recipeIngredients.$inferSelect;
