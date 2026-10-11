@@ -4,7 +4,7 @@ import fp from 'fastify-plugin';
 import { db } from '../db/client.js';
 import { profiles, shopMembers, shops } from '../db/schema/index.js';
 import type { ShopRole } from '../db/schema/enums.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { AppError, forbidden, unauthorized } from '../lib/errors.js';
 import { supabaseAdmin } from '../lib/supabase-admin.js';
 
 export interface AuthUser {
@@ -107,10 +107,10 @@ const requireShopContextImpl: FastifyPluginAsync = async (app) => {
     if (!user) throw unauthorized();
 
     const requestedShopId = request.headers['x-shop-id'];
-    const explicitShopId =
-      typeof requestedShopId === 'string' && requestedShopId.length > 0
-        ? requestedShopId
-        : undefined;
+    if (typeof requestedShopId !== 'string' || requestedShopId.length === 0) {
+      throw new AppError(400, 'MISSING_SHOP_ID', 'Missing required header: x-shop-id');
+    }
+    const explicitShopId = requestedShopId;
 
     const membershipRows = await db
       .select({ shopId: shopMembers.shopId, role: shopMembers.role })
@@ -126,9 +126,7 @@ const requireShopContextImpl: FastifyPluginAsync = async (app) => {
       throw forbidden('This account is not a member of any shop yet');
     }
 
-    const chosen = explicitShopId
-      ? memberships.find((m) => m.shopId === explicitShopId)
-      : memberships[0];
+    const chosen = memberships.find((m) => m.shopId === explicitShopId);
 
     if (!chosen) {
       throw forbidden('You do not have access to the requested shop');
