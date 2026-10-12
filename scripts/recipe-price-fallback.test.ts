@@ -11,7 +11,7 @@ import { FakeDb } from './support/fakeDb.js';
 const product: PriceResult = {
   name: 'Milk', barcode: '123', chain: 'shufersal', price: 6, score: 5000,
 };
-const line = { id: 'line-1', rawName: ' Milk ', inventoryItemId: null, generalPriceId: null };
+const line = { id: 'line-1', rawName: ' Milk ', searchAbleName: ' Milk ', inventoryItemId: null, generalPriceId: null };
 const asDatabase = (db: FakeDb) => db as unknown as Database;
 
 test('fallback links the best affordable scored product directly, with no inventory writes', async () => {
@@ -36,7 +36,7 @@ test('fallback skips both existing link types and empty names on a retry', async
   const db = new FakeDb({ 'select:recipeIngredients': [[
     { ...line, inventoryItemId: 'inv-1' },
     { ...line, generalPriceId: 'price-1' },
-    { ...line, rawName: ' ' },
+    { ...line, rawName: ' ', searchAbleName: ' ' },
   ]] });
   await linkRecipeFallbackPrices(asDatabase(db), 'shop-1', 'recipe-1', async () => {
     assert.fail('linked ingredients must not be searched');

@@ -529,7 +529,7 @@ test('recipe: both extraction paths apply external fallback before committing th
       responses: {
         'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
         'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
-        'select:recipeIngredients': [[{ id: 'line-1', rawName: 'Flour', inventoryItemId: null, generalPriceId: null }]],
+        'select:recipeIngredients': [[{ id: 'line-1', rawName: 'Flour', searchAbleName: 'Flour', inventoryItemId: null, generalPriceId: null }]],
         'insert:generalPrices': [[{ id: 'price-1' }]],
       },
       extractions: { recipe: { ...RECIPE, ingredients: [RECIPE.ingredients[0]!] } },

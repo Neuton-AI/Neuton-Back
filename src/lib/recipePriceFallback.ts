@@ -24,18 +24,15 @@ export async function linkRecipeFallbackPrices(
     isNull(recipeIngredients.inventoryItemId),
     isNull(recipeIngredients.generalPriceId),
   ));
-  for (const ingredient of ingredients) {
-    console.log('unlinked ingredient: ', ingredient.rawName, 'searchAbleName:', ingredient.searchAbleName)
-  }
   const matches = new Map<string, PriceResult | null>();
   for (const ingredient of ingredients) {
     // Also guard in memory: retries must never replace an existing price link.
     if (ingredient.inventoryItemId || ingredient.generalPriceId) continue;
-    const query = normalizePriceName(ingredient.searchAbleName || ingredient.rawName);
+    // `searchAbleName` is the shop-standardized query built for the supermarket APIs.
+    const query = normalizePriceName(ingredient.searchAbleName);
     if (!query) continue;
     if (!matches.has(query)) {
       try {
-        console.log('search for ingredient: ', query)
         const results = await search(query);
         const candidates = results.filter((result) => {
           const name = normalizePriceName(result.name);
@@ -44,10 +41,8 @@ export async function linkRecipeFallbackPrices(
             Number.isFinite(result.price) && result.price > 0;
         });
         candidates.sort((a, b) => b.score - a.score || a.price - b.price);
-        console.log('top candidate: ', candidates[0]);
         matches.set(query, candidates[0] ?? null);
-      } catch (error) {
-        console.log('error in fallback prices', error);
+      } catch {
         // A catalog outage leaves the line available for manual review.
         matches.set(query, null);
       }

@@ -371,8 +371,6 @@ export async function extractRecipe(
 ): Promise<RecipeExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
 
-  console.log('raw receipe extraction', raw);
-  console.log('raw.ingredients', raw.ingredients)
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
     name: asString(raw.name),
