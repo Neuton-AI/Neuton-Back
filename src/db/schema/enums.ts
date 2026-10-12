@@ -60,7 +60,7 @@ export type ReceiptReviewStatus = (typeof RECEIPT_REVIEW_STATUSES)[number];
 export const ORDER_STATUSES = ['processing', 'delivered', 'cancelled'] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack'] as const;
+export const INVENTORY_UNITS = ['kg', 'g', 'l', 'ml', 'unit', 'pack', 'each'] as const;
 export type InventoryUnit = (typeof INVENTORY_UNITS)[number];
 
 export const MEDIA_KINDS = ['receipt', 'recipe', 'product', 'order'] as const;

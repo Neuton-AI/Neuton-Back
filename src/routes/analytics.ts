@@ -161,6 +161,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .select({
             revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
             cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+            unknownCosts: sql<number>`count(*) filter (where ${orders.totalCost} is null)::int`,
             delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
             count: sql<number>`count(*)::int`,
           })
@@ -181,6 +182,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
             delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
             cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+            unknownCosts: sql<number>`count(*) filter (where ${orders.totalCost} is null)::int`,
           })
           .from(orders)
           .where(
@@ -208,7 +210,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const productionCost = toNumber(orderTotals[0]?.cost);
     const expenses = toNumber(expenseTotals[0]?.expenses);
 
-    const netProfit = netProfitOf(revenue, delivery, productionCost, expenses);
+    const incomplete = Number(orderTotals[0]?.unknownCosts ?? 0) > 0;
+    const netProfit = incomplete ? null : netProfitOf(revenue, delivery, productionCost, expenses);
     const previousRevenue = toNumber(previousOrderTotals[0]?.revenue);
     const previousProfit = netProfitOf(
       previousRevenue,
@@ -232,10 +235,12 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
         revenue,
         expenses,
         deliveryFees: delivery,
-        productionCost,
+        productionCost: incomplete ? null : productionCost,
+        knownProductionCost: productionCost,
+        incompleteOrderCount: orderTotals[0]?.unknownCosts ?? 0,
         netProfit,
         orderCount: orderTotals[0]?.count ?? 0,
-        profitMarginPercent: revenue > 0 ? Math.round((netProfit / revenue) * 1000) / 10 : 0,
+        profitMarginPercent: netProfit === null ? null : revenue > 0 ? Math.round((netProfit / revenue) * 1000) / 10 : 0,
         /**
          * Spend that is inside the totals above but had no date on the document,
          * so it was booked on its upload day. Surfaced so the UI can say so
@@ -248,7 +253,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       },
       trend: {
         revenuePercent: trendPercent(revenue, previousRevenue),
-        profitPercent: trendPercent(netProfit, previousProfit),
+        profitPercent: netProfit === null || Number(previousOrderTotals[0]?.unknownCosts ?? 0) > 0 ? null : trendPercent(netProfit, previousProfit),
         expensesPercent: trendPercent(expenses, previousExpenses),
       },
       graph,
@@ -275,7 +280,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     return {
       orders: rows.map((order) => ({
         ...order,
-        netProfit: netProfitOf(
+        netProfit: order.totalCost === null ? null : netProfitOf(
           toNumber(order.totalAmount),
           toNumber(order.deliveryFee),
           toNumber(order.totalCost),
@@ -290,7 +295,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const shop = currentShop(request);
     const rows = await deps.db
       .select({
-        value: sql<string>`coalesce(sum(${inventoryItems.currentQuantity} * ${inventoryItems.averageUnitCost}),0)`,
+        value: sql<string>`coalesce(sum(${inventoryItems.currentQuantity} * ${inventoryItems.averageUnitCost}) filter (where ${inventoryItems.measurementStatus} = 'ready'),0)`,
         units: sql<number>`count(*)::int`,
       })
       .from(inventoryItems)
@@ -311,6 +316,7 @@ async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Dat
       unitsSold: sql<string>`coalesce(sum(${orderItems.quantity}),0)`,
       revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice}),0)`,
       cost: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitCost}),0)`,
+      unknownCosts: sql<number>`count(*) filter (where ${orderItems.unitCost} is null)::int`,
     })
     .from(orderItems)
     .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
@@ -331,7 +337,7 @@ async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Dat
     imageUrl: row.imageUrl,
     unitsSold: toNumber(row.unitsSold),
     revenue,
-    netProfit: Math.round((revenue - cost) * 100) / 100,
+    netProfit: Number(row.unknownCosts ?? 0) > 0 ? null : Math.round((revenue - cost) * 100) / 100,
   };
 }
 
@@ -343,7 +349,7 @@ async function orderProfitStats(deps: AnalyticsDeps, shopId: string, start: Date
     .from(orders)
     .where(and(eq(orders.shopId, shopId), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`));
 
-  const profits = rows.map((row) => toNumber(row.netProfit));
+  const profits = rows.filter(row => row.netProfit !== null).map((row) => toNumber(row.netProfit));
   return {
     average: average(profits),
     median: median(profits),
@@ -390,6 +396,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
       delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
       cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+            unknownCosts: sql<number>`count(*) filter (where ${orders.totalCost} is null)::int`,
     })
     .from(orders)
     .where(and(eq(orders.shopId, shopId), countedAsSale, sql`${orders.orderDate} >= ${utcInstant(start)}::timestamptz`))
@@ -416,17 +423,18 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
    * exactly cancelled out cost, delivery and expenses. Red days and green days
    * both stay; only the flat zero goes.
    */
-  const byDay = new Map<string, { revenue: number; delivery: number; cost: number; expenses: number }>();
+  const byDay = new Map<string, { revenue: number; delivery: number; cost: number; expenses: number; unknownCosts: number }>();
   for (const row of rows) {
     byDay.set(row.day, {
       revenue: toNumber(row.revenue),
       delivery: toNumber(row.delivery),
       cost: toNumber(row.cost),
+      unknownCosts: Number(row.unknownCosts ?? 0),
       expenses: 0,
     });
   }
   for (const row of expenses) {
-    const day = byDay.get(row.day) ?? { revenue: 0, delivery: 0, cost: 0, expenses: 0 };
+    const day = byDay.get(row.day) ?? { revenue: 0, delivery: 0, cost: 0, expenses: 0, unknownCosts: 0 };
     byDay.set(row.day, { ...day, expenses: day.expenses + toNumber(row.total) });
   }
 
@@ -436,7 +444,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       date,
       revenue: day.revenue,
       expenses: day.expenses,
-      netProfit: Math.round(netProfitOf(day.revenue, day.delivery, day.cost, day.expenses) * 100) / 100,
+      netProfit: day.unknownCosts > 0 ? null : Math.round(netProfitOf(day.revenue, day.delivery, day.cost, day.expenses) * 100) / 100,
     }))
     .filter((day) => day.netProfit !== 0);
 }

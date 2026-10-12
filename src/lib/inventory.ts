@@ -9,7 +9,7 @@
  */
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { inventoryItems } from '../db/schema/index.js';
-import { INVENTORY_UNITS, type InventoryUnit } from '../db/schema/enums.js';
+import { normalizeMeasurement } from './measurements.js';
 import { quantity as qty, unitCost } from './money.js';
 import { applyWeightedAverage, type InventoryCostUpdate } from './pricing.js';
 
@@ -17,6 +17,8 @@ import { applyWeightedAverage, type InventoryCostUpdate } from './pricing.js';
 export interface InventorySnapshot {
   currentQuantity: string;
   averageUnitCost: string;
+  unit?: string;
+  measurementStatus?: string;
 }
 
 /**
@@ -72,19 +74,13 @@ export async function findOrCreateInventoryItem(
   const name = rawName.trim();
   if (name.length === 0) return null;
 
-  const created = await db
-    .insert(inventoryItems)
-    .values({
-      shopId,
-      name,
-      unit: (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
-        ? (unit as InventoryUnit)
-        : 'unit',
-      currentQuantity: '0.000',
-    })
-    .returning({ id: inventoryItems.id });
+  const measurement = normalizeMeasurement(1, unit);
+  if (!measurement.measurement) return null;
+  const created = await db.insert(inventoryItems).values({ shopId, name,
+    unit: measurement.measurement.unit, currentQuantity: '0', measurementStatus: 'ready',
+  }).onConflictDoNothing({ target: [inventoryItems.shopId, inventoryItems.name] }).returning({ id: inventoryItems.id });
 
-  return created[0]?.id ?? null;
+  return created[0]?.id ?? await findInventoryItem(db, shopId, rawName);
 }
 
 /**
@@ -107,6 +103,8 @@ export async function lockInventoryRows(
   const rows = await db
     .select({
       id: inventoryItems.id,
+      unit: inventoryItems.unit,
+      measurementStatus: inventoryItems.measurementStatus,
       currentQuantity: inventoryItems.currentQuantity,
       averageUnitCost: inventoryItems.averageUnitCost,
     })
@@ -117,6 +115,8 @@ export async function lockInventoryRows(
 
   for (const row of rows) {
     locked.set(row.id, {
+      unit: row.unit,
+      measurementStatus: row.measurementStatus,
       currentQuantity: row.currentQuantity,
       averageUnitCost: row.averageUnitCost,
     });
@@ -164,6 +164,7 @@ export async function applyPurchaseFrom(
   await writeInventoryState(db, inventoryItemId, next);
 
   return {
+    ...snapshot,
     currentQuantity: qty(next.currentQuantity),
     averageUnitCost: unitCost(next.averageUnitCost),
   };

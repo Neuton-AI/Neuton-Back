@@ -1,3 +1,6 @@
+import { normalizeMeasurement, parseNumber } from '../lib/measurements.js';
+import { ingredientConversions } from '../db/schema/index.js';
+import { costRecipe } from '../lib/recipeCosting.js';
 import { z } from 'zod';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -11,7 +14,7 @@ import {
 } from '../db/schema/index.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { notFound, conflict, forbidden } from '../lib/errors.js';
+import { notFound, conflict, forbidden, badRequest } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
@@ -21,13 +24,14 @@ import {
   checkBatchStock,
 } from '../lib/pricing.js';
 import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js';
-import { defaultReceiptsDeps } from './receipts.js';
+import { defaultReceiptsDeps, verifyItemSchema } from './receipts.js';
 import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
   rawName: htmlFree(z.string().trim().min(1).max(160)),
   searchAbleName: htmlFree(z.string().trim().min(1).max(160)).optional(),
+  measurementContext: z.object({ convention: z.enum(['us', 'metric', 'imperial']).nullable().optional(), qualifier: htmlFree(z.string().max(100)).nullable().optional(), alternatives: z.array(htmlFree(z.string().max(160))).optional() }).optional(),
   quantity: z.coerce.number().positive(),
   unit: htmlFree(z.string().trim().min(1).max(24)),
 });
@@ -76,7 +80,8 @@ const inventorySchema = z.object({
   sku: htmlFree(z.string().trim().max(64)).nullable().optional(),
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
-  unit: z.enum(['kg', 'g', 'l', 'ml', 'unit', 'pack']),
+  unit: z.enum(['kg', 'g', 'l', 'ml', 'unit', 'pack', 'each']),
+  reconcileMeasurement: z.boolean().optional(),
   currentQuantity: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).nullable().optional(),
   lastUnitCost: z.coerce.number().min(0).nullable().optional(),
@@ -85,100 +90,7 @@ const inventorySchema = z.object({
 
 const inventoryPatchSchema = inventorySchema.partial();
 
-export async function costRecipe(
-  shopId: string,
-  recipe: typeof recipes.$inferSelect,
-  shopMargin: string,
-  hourlyLaborCost: string,
-  database: Pick<Database, 'select'> = db,
-) {
-  const ingredientRows = await database
-    .select({
-      inventoryItemId: recipeIngredients.inventoryItemId,
-      generalPriceId: recipeIngredients.generalPriceId,
-      rawName: recipeIngredients.rawName,
-      unit: recipeIngredients.unit,
-      quantity: recipeIngredients.quantity,
-      name: sql<string>`coalesce(${inventoryItems.name}, ${generalPrices.name})`,
-      currentQuantity: inventoryItems.currentQuantity,
-      averageUnitCost: recipeIngredientUnitCost,
-    })
-    .from(recipeIngredients)
-    .leftJoin(
-      inventoryItems,
-      eq(inventoryItems.id, recipeIngredients.inventoryItemId),
-    )
-    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-    .where(
-      and(
-        eq(recipeIngredients.shopId, shopId),
-        eq(recipeIngredients.recipeId, recipe.id),
-      ),
-    )
-    .orderBy(asc(recipeIngredients.id));
-
-  const linkedIngredients = ingredientRows.filter((i) => i.inventoryItemId != null || i.generalPriceId != null);
-  const totalCount = ingredientRows.length;
-  const linkedCount = linkedIngredients.length;
-
-  const breakdown = calculateUnitCost({
-    ingredients: linkedIngredients.map((i) => ({
-      quantity: i.quantity,
-      averageUnitCost: i.averageUnitCost ?? '0',
-    })),
-    prepTimeMinutes: recipe.prepTimeMinutes,
-    hourlyLaborCost,
-    yieldQuantity: recipe.yieldQuantity,
-  });
-
-  const fullyLinked = linkedCount === totalCount;
-
-  const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
-    breakdown.unitCost,
-    shopMargin,
-    fullyLinked ? recipe.targetMarginPct : null,
-  );
-
-  const finalRetailPrice = fullyLinked ? retailPrice : '0.0000';
-
-  const batchAvailable =
-    fullyLinked &&
-    linkedIngredients.every((ingredient) => {
-      const stock = checkBatchStock({
-        requiredQuantity: toNumber(ingredient.quantity),
-        currentQuantity: toNumber(ingredient.currentQuantity ?? '0'),
-      });
-      return stock.inStock;
-    });
-
-  return {
-    unitCost: breakdown.unitCost,
-    ingredientsCost: breakdown.ingredientsCost,
-    laborCost: breakdown.laborCost,
-    batchCost: breakdown.batchCost,
-    retailPrice: finalRetailPrice,
-    appliedMarginPercent: fullyLinked ? appliedMarginPercent : '0.00',
-    yieldQuantity: toNumber(recipe.yieldQuantity),
-    inStock: batchAvailable,
-    linkedCount,
-    totalCount,
-    ingredients: ingredientRows.map((ingredient) => ({
-      name: ingredient.name ?? ingredient.rawName,
-      quantity: toNumber(ingredient.quantity),
-      unit: ingredient.unit,
-      averageUnitCost: ingredient.averageUnitCost ? toNumber(ingredient.averageUnitCost) : 0,
-      lineCost: ingredient.averageUnitCost
-        ? Math.round(toNumber(ingredient.quantity) * toNumber(ingredient.averageUnitCost) * 10_000) /
-          10_000
-        : 0,
-      currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
-      inventoryItemId: ingredient.inventoryItemId,
-      generalPriceId: ingredient.generalPriceId,
-      rawName: ingredient.rawName,
-      linked: ingredient.inventoryItemId != null || ingredient.generalPriceId != null,
-    })),
-  };
-}
+export { costRecipe } from '../lib/recipeCosting.js';
 
 export const catalogRoutes: FastifyPluginAsync = async (app) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
@@ -280,6 +192,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity),
           unit: ingredient.unit,
+              measurementContext: ingredient.measurementContext ?? null,
         })),
       );
 
@@ -366,6 +279,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
+              measurementContext: ingredient.measurementContext ?? null,
             })),
           );
         }
@@ -492,6 +406,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
   app.post('/inventory', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const body = inventorySchema.parse(request.body);
+    const basis = normalizeMeasurement(1, body.unit).measurement;
+    if (!basis) throw badRequest('Provide a mass, volume or count inventory basis');
 
     const rows = await db
       .insert(inventoryItems)
@@ -501,18 +417,20 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         sku: body.sku ?? null,
         imageUrl: body.imageUrl ?? null,
         categoryId: body.categoryId ?? null,
-        unit: body.unit,
-        currentQuantity: qty(body.currentQuantity),
+        unit: basis.unit,
+        currentQuantity: qty(body.currentQuantity * basis.quantity),
+        measurementStatus: 'ready',
+        measurementEvidence: { source: 'confirmed-opening-balance', original: body, confirmedBy: currentUser(request).id },
         reorderLevel: body.reorderLevel === null || body.reorderLevel === undefined
           ? null
-          : qty(body.reorderLevel),
+          : qty(body.reorderLevel * basis.quantity),
         lastUnitCost: body.lastUnitCost === null || body.lastUnitCost === undefined
           ? null
-          : unitCost(body.lastUnitCost),
+          : unitCost(body.lastUnitCost / basis.quantity),
         averageUnitCost:
           body.averageUnitCost === null || body.averageUnitCost === undefined
             ? null
-            : unitCost(body.averageUnitCost),
+            : unitCost(body.averageUnitCost / basis.quantity),
       })
       .returning();
 
@@ -534,7 +452,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     const body = inventoryPatchSchema.parse(request.body);
 
     const existing = await db
-      .select({ id: inventoryItems.id })
+      .select()
       .from(inventoryItems)
       .where(and(eq(inventoryItems.id, id), eq(inventoryItems.shopId, shop.id)))
       .limit(1);
@@ -545,17 +463,23 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     if (body.sku !== undefined) patch.sku = body.sku ?? null;
     if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
     if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
-    if (body.unit !== undefined) patch.unit = body.unit;
-    if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
-    if (body.reorderLevel !== undefined) {
-      patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);
-    }
-    if (body.lastUnitCost !== undefined) {
-      patch.lastUnitCost = body.lastUnitCost === null ? null : unitCost(body.lastUnitCost);
-    }
-    if (body.averageUnitCost !== undefined) {
-      patch.averageUnitCost =
-        body.averageUnitCost === null ? null : unitCost(body.averageUnitCost);
+    const old = existing[0]!;
+    if (body.unit !== undefined || body.reconcileMeasurement) {
+      if (!body.reconcileMeasurement || body.currentQuantity === undefined || body.averageUnitCost == null || !body.unit) throw badRequest('Confirm the unit, opening quantity and average cost together to reconcile inventory');
+      const basis = normalizeMeasurement(1, body.unit).measurement;
+      if (!basis) throw badRequest('Unsupported opening balance unit');
+      patch.unit = basis.unit;
+      patch.currentQuantity = qty(body.currentQuantity * basis.quantity);
+      patch.averageUnitCost = unitCost(body.averageUnitCost / basis.quantity);
+      patch.lastUnitCost = body.lastUnitCost == null ? patch.averageUnitCost : unitCost(body.lastUnitCost / basis.quantity);
+      patch.reorderLevel = body.reorderLevel == null ? null : qty(body.reorderLevel * basis.quantity);
+      patch.measurementStatus = 'ready';
+      patch.measurementEvidence = { source: 'confirmed-reconciliation', previous: old, original: body, confirmedBy: currentUser(request).id, confirmedAt: new Date().toISOString() };
+    } else {
+      if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
+      if (body.reorderLevel !== undefined) patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);
+      if (body.lastUnitCost !== undefined) patch.lastUnitCost = body.lastUnitCost === null ? null : unitCost(body.lastUnitCost);
+      if (body.averageUnitCost !== undefined) patch.averageUnitCost = body.averageUnitCost === null ? null : unitCost(body.averageUnitCost);
     }
 
     const updated = await db
@@ -573,6 +497,48 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return { item: updated[0] };
+  });
+
+  app.patch('/recipes/:recipeId/ingredients/:lineId/measurement', mutationGuards, async request => {
+    const shop = currentShop(request);
+    const { recipeId, lineId } = z.object({ recipeId: z.string().uuid(), lineId: z.string().uuid() }).parse(request.params);
+    const profileSchema = z.object({ from: z.enum(['g', 'ml', 'each']), to: z.enum(['g', 'ml', 'each']), factor: z.number().positive(), qualifier: z.string().nullable().optional() });
+    const body = z.object({ quantity: z.number().positive().optional(), unit: htmlFree(z.string().max(24)).optional(),
+      convention: z.enum(['us', 'metric', 'imperial']).nullable().optional(),
+      selectedAlternative: htmlFree(z.string().max(160)).optional(), inventoryItemId: z.string().uuid().optional(),
+      profile: profileSchema.optional(), scope: z.enum(['recipe', 'ingredient', 'product']).default('recipe'),
+    }).parse(request.body);
+    return db.transaction(async tx => {
+      const [row] = await tx.select().from(recipeIngredients).where(and(eq(recipeIngredients.id, lineId), eq(recipeIngredients.recipeId, recipeId), eq(recipeIngredients.shopId, shop.id))).for('update').limit(1);
+      if (!row) throw notFound('Ingredient not found');
+      const context = (row.measurementContext ?? {}) as import('../lib/recipeCosting.js').MeasurementContext;
+      if (body.selectedAlternative && !context.alternatives?.includes(body.selectedAlternative)) throw badRequest('Select an original ingredient alternative');
+      if (body.inventoryItemId) {
+        const [item] = await tx.select().from(inventoryItems).where(and(eq(inventoryItems.id, body.inventoryItemId), eq(inventoryItems.shopId, shop.id))).limit(1);
+        if (!item) throw notFound('Inventory item not found');
+      }
+      const profile = body.profile ? { ...body.profile, convention: body.convention ?? context.convention,
+        source: 'shop-confirmed:' + currentUser(request).id, version: new Date().toISOString(), estimated: false } : undefined;
+      const nextContext = { ...context,
+        ...(body.convention !== undefined ? { convention: body.convention } : {}),
+        ...(body.selectedAlternative ? { selectedAlternative: body.selectedAlternative } : {}),
+        ...(profile ? { profile } : {}), confirmedBy: currentUser(request).id };
+      // Changes are resolved from source fields on every read, never stale derived fields.
+      await tx.update(recipeIngredients).set({
+        ...(body.quantity !== undefined ? { quantity: qty(body.quantity) } : {}), ...(body.unit !== undefined ? { unit: body.unit } : {}),
+        ...(body.inventoryItemId ? { inventoryItemId: body.inventoryItemId, generalPriceId: null } : {}),
+        ...(body.selectedAlternative ? { searchAbleName: body.selectedAlternative, inventoryItemId: body.inventoryItemId ?? null, generalPriceId: null } : {}),
+        measurementContext: nextContext,
+      }).where(eq(recipeIngredients.id, lineId));
+      if (profile && body.scope !== 'recipe') {
+        const itemId = body.inventoryItemId ?? row.inventoryItemId;
+        if (body.scope === 'product' && !itemId) throw badRequest('Link an inventory product before saving its conversion');
+        const scopeKey = body.scope === 'product' ? 'product:' + itemId : 'ingredient:' + (body.selectedAlternative ?? row.searchAbleName).trim().toLowerCase();
+        const saved = { shopId: shop.id, scopeKey, profile, updatedAt: new Date() };
+        await tx.insert(ingredientConversions).values(saved).onConflictDoUpdate({ target: [ingredientConversions.shopId, ingredientConversions.scopeKey], set: saved });
+      }
+      return { ok: true };
+    });
   });
 
   app.delete('/inventory/:id', mutationGuards, async (request) => {
@@ -605,18 +571,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     if (type === 'receipt') {
       const body = z
         .object({
-          items: z.array(
-            z.object({
-              id: z.string().uuid(),
-              accepted: z.boolean(),
-              rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
-              rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
-              unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
-              quantity: z.coerce.number().min(0).optional(),
-              unitPrice: z.coerce.number().min(0).optional(),
-              totalPrice: z.coerce.number().min(0).optional(),
-            }),
-          ).min(1).max(500),
+          items: z.array(verifyItemSchema).min(1).max(500),
         })
         .parse(request.body);
 
@@ -683,6 +638,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
+              measurementContext: ingredient.measurementContext ?? null,
             })),
           );
         }
@@ -733,7 +689,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           shop.targetProfitMargin,
           shop.hourlyLaborCost,
         );
-        return { ...row, unitCost: costing.unitCost, retailPrice: costing.retailPrice };
+        return { ...row, unitCost: costing.unitCost, retailPrice: costing.retailPrice, costingStatus: costing.measurementState, reasons: costing.reasons };
       }),
     );
 
@@ -759,7 +715,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
 
     const ids = body.adjustments.map((a) => a.inventoryItemId);
     const owned = await db
-      .select({ id: inventoryItems.id })
+      .select()
       .from(inventoryItems)
       .where(and(inArray(inventoryItems.id, ids), eq(inventoryItems.shopId, shop.id)));
 

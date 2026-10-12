@@ -1,3 +1,4 @@
+import { parseNumber } from './measurements.js';
 import { GoogleGenAI, type Part } from '@google/genai';
 import { env } from '../env.js';
 import { geminiLogger } from './logger/index.js';
@@ -38,6 +39,10 @@ if (MODELS.length === 0) {
 }
 
 export interface ExtractedLineItem {
+  rawSku?: string | null;
+  packageQuantity?: number | null;
+  packageUnit?: string | null;
+  packagesPerPurchase?: number | null;
   rawName: string;
   quantity: number | null;
   unit: string | null;
@@ -56,6 +61,10 @@ export interface ReceiptExtraction {
 }
 
 export interface RecipeIngredient {
+  qualifier?: string | null;
+  convention?: string | null;
+  alternatives?: string[];
+  alternateMeasurements?: { quantity: number | null; unit: string | null }[];
   rawName: string;
   searchAbleName?: string | null;
   quantity: number | null;
@@ -94,6 +103,9 @@ const RECEIPT_SCHEMA = `{
         "properties": {
           "rawName": { "type": "string" },
           "rawSku": {"type": "string"},
+          "packageQuantity": {"type": "number"},
+          "packageUnit": {"type": "string"},
+          "packagesPerPurchase": {"type": "number"},
           "quantity": { "type": "number" },
           "unit": { "type": "string" },
           "unitPrice": { "type": "number" },
@@ -124,6 +136,10 @@ const RECIPE_SCHEMA = `{
         "properties": {
           "rawName": { "type": "string" },
           "searchAbleName": { "type": "string" },
+          "qualifier": {"type": "string"},
+          "convention": {"type": "string", "enum": ["us", "metric", "imperial"]},
+          "alternatives": {"type": "array", "items": {"type": "string"}},
+          "alternateMeasurements": {"type": "array", "items": {"type": "object", "properties": {"quantity": {"type": "number"}, "unit": {"type": "string"}}}},
           "quantity": { "type": "number" },
           "unit": { "type": "string" }
         },
@@ -156,20 +172,15 @@ const ORDER_SCHEMA = `{
 }`;
 
 const EXTRACT_RECEIPT_PROMPT = `Extract this shopping receipt.
-Return all the data in the receipt that we need in our response schema.
+Preserve rawSku as a string, including leading zeros. Separate package count, packageQuantity/packageUnit (contents per inner package), and packagesPerPurchase (multipack count). For weighed purchases keep the measured quantity and its unit. Never infer package contents from price. Return all receipt fields.
 Use null for anything you cannot read. Never invent values.`;
 
-const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
-Return all the data in the recipe that we need in our response schema.
-For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our searchAbleName.
-The searchAbleName should be:
-- firm and not ambiguous, not "or" or "maybe" a firm determination of what is the ingredient.
-- clean without any instructions or measures.
-Example of standartize 1: bad - "1 cup flour, sifted or raw", good - "flour" and unit will be "cup" quantity will be 1.
-Example of standartize 2: bad - "2 large eggs, room temperature", good - "eggs" and unit will be "large" quantity will be 2.
-Example of standartize 3: bad - "chocolate chips or chopped chocolate", good - "chocolate chips"
-Use null for anything you cannot read. Never invent values.
-`
+const EXTRACT_RECIPE_PROMPT = `Extract the recipe without inventing missing values. Preserve all separate ingredient lines.
+Use an explicit gram weight in preference to an accompanying cup measurement; preserve alternateMeasurements.
+Preserve numeric fractions exactly: 1/4 = 0.25. Two large eggs = quantity 2, unit each, qualifier large.
+Separate preparation/size qualifiers from the measurement unit. Preserve alternatives as an array, never silently select a substitute.
+Keep searchAbleName clean of measures/instructions, retaining ingredient attributes. When alternatives are not chosen leave searchAbleName null.
+Record a measurement convention only if the document establishes it; otherwise use null. Missing quantity, unit or yield stays null.`;
 
 const PROMPTS: Record<MediaKind, { instruction: string; schema: string }> = {
   receipt: {
@@ -206,10 +217,8 @@ export function asNumber(value: unknown): number | null {
     return Number.isFinite(value) ? value : null;
   }
   if (typeof value === 'string') {
-    const cleaned = value.replace(/[^0-9.\-]/g, '');
-    if (!cleaned || cleaned === '.' || cleaned === '-' || cleaned === '-.') return null;
-    const parsed = Number.parseFloat(cleaned);
-    return Number.isFinite(parsed) ? parsed : null;
+    const cleaned = value.trim().replace(/^(?:[₪$€£]|ILS|NIS|USD)\s*/, '').replace(/\s*(?:ILS|NIS|USD|₪)$/, '');
+    return parseNumber(cleaned.replace(/(?<=\d),(?=\d{3}(?:,|\.|$))/g, ''));
   }
   return null;
 }
@@ -355,6 +364,10 @@ export async function extractReceipt(
       const item = (entry ?? {}) as Record<string, unknown>;
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
+        rawSku: asString(item.rawSku),
+        packageQuantity: asNumber(item.packageQuantity),
+        packageUnit: asString(item.packageUnit),
+        packagesPerPurchase: asNumber(item.packagesPerPurchase),
         quantity: asNumber(item.quantity),
         unit: asString(item.unit),
         unitPrice: asNumber(item.unitPrice),
@@ -390,6 +403,10 @@ export async function extractRecipe(
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
         searchAbleName: asString(item.searchAbleName),
+        qualifier: asString(item.qualifier),
+        convention: asString(item.convention),
+        alternatives: Array.isArray(item.alternatives) ? item.alternatives.map(asString).filter((v): v is string => v !== null) : [],
+        alternateMeasurements: Array.isArray(item.alternateMeasurements) ? item.alternateMeasurements.map(v => ({ quantity: asNumber(v.quantity), unit: asString(v.unit) })) : [],
         quantity: asNumber(item.quantity),
         unit: asString(item.unit),
       };

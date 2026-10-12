@@ -132,31 +132,35 @@ export function applyWeightedAverage(
 }
 
 export interface OrderTotalsInput {
-  items: { quantity: number; unitCost: number; unitPrice: number }[];
+  items: { quantity: number; unitCost: number | null; unitPrice: number | null }[];
   deliveryFee: number;
 }
 
 /** Net profit = billed amount − delivery fee − production cost. */
 export function calculateOrderTotals(input: OrderTotalsInput) {
   const totalCost = input.items.reduce(
-    (sum, item) => sum + item.quantity * item.unitCost,
+    (sum, item) => sum + item.quantity * (item.unitCost ?? 0),
     0,
   );
   const itemsSubtotal = input.items.reduce(
-    (sum, item) => sum + item.quantity * item.unitPrice,
+    (sum, item) => sum + item.quantity * (item.unitPrice ?? 0),
     0,
   );
-  const totalAmount = round(itemsSubtotal + input.deliveryFee, 2);
+  const costsComplete = input.items.every(i => i.unitCost !== null);
+  const pricesComplete = input.items.every(i => i.unitPrice !== null);
+  const totalAmount = pricesComplete ? round(itemsSubtotal + input.deliveryFee, 2) : null;
   const deliveryFee = round(input.deliveryFee, 2);
-  const netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  const netProfit = costsComplete && totalAmount !== null ? round(totalAmount - deliveryFee - totalCost, 2) : null;
 
   return {
-    totalCost: round(totalCost, 2),
+    totalCost: costsComplete ? round(totalCost, 2) : null,
+    knownCostSubtotal: round(totalCost, 2),
+    costingComplete: costsComplete,
     totalAmount,
     deliveryFee,
     netProfit,
     profitMarginPercent:
-      totalAmount > 0 ? round((netProfit / totalAmount) * 100, 2) : 0,
+      netProfit !== null && totalAmount !== null ? totalAmount > 0 ? round((netProfit / totalAmount) * 100, 2) : 0 : null,
   };
 }
 

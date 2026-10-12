@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -35,7 +36,8 @@ export const orders = pgTable('orders', {
     .default('0.00'),
   deliveryFee: numeric('delivery_fee', { precision: 10, scale: 2 }).notNull().default('0.00'),
   appliedProfitMargin: numeric('applied_profit_margin', { precision: 5, scale: 2 }),
-  totalCost: numeric('total_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
+  totalCost: numeric('total_cost', { precision: 10, scale: 2 }),
+  costingStatus: text('costing_status').notNull().default('unresolved'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull().default('0.00'),
   documentUrl: text('document_url'),
   status: text('status').notNull().default('processing'),
@@ -69,7 +71,8 @@ export const orderItems = pgTable('order_items', {
    */
   recipeName: text('recipe_name'),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull().default('1'),
-  unitCost: numeric('unit_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
+  unitCost: numeric('unit_cost', { precision: 18, scale: 6 }),
+  costingSnapshot: jsonb('costing_snapshot'),
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({
   orderIdx: index('order_items_order_id_idx').on(t.orderId),

@@ -39,9 +39,15 @@ const presignSchema = z.object({
  * Every field is optional: omitting a correction means "the extraction was
  * right", which is what the common case looks like.
  */
-const verifyItemSchema = z.object({
+export const verifyItemSchema = z.object({
   id: z.string().uuid(),
   accepted: z.boolean(),
+  codeChain: z.enum(['shufersal', 'carrefour']).optional(),
+  packageQuantity: z.coerce.number().positive().optional(),
+  packageUnit: z.enum(['g', 'kg', 'ml', 'l', 'each']).optional(),
+  packagesPerPurchase: z.coerce.number().positive().optional(),
+  discountConfirmed: z.boolean().optional(),
+  saveProductMeasurement: z.boolean().optional(),
   rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
   rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
   unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
@@ -269,6 +275,41 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return reply.code(200).send(outcome);
+  });
+
+  app.patch('/receipts/:id/items/:lineId/measurement', mutationGuards, async request => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+    const shop = currentShop(request);
+    const { id, lineId } = z.object({ id: z.string().uuid(), lineId: z.string().uuid() }).parse(request.params);
+    const body = verifyItemSchema.parse({ ...(request.body as object), id: lineId, accepted: true });
+    return deps.db.transaction(async tx => {
+      const [receipt] = await tx.select().from(receipts).where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id))).for('update').limit(1);
+      if (!receipt) throw notFound('Receipt not found');
+      if (receipt.status !== 'unverified') throw conflict('Only extracted, unverified purchases can be edited');
+      const [line] = await tx.select().from(receiptItems).where(and(eq(receiptItems.id, lineId), eq(receiptItems.receiptId, id), eq(receiptItems.shopId, shop.id))).limit(1);
+      if (!line) throw notFound('Receipt line not found');
+      await tx.update(receiptItems).set({
+        ...(body.quantity != null ? { quantity: body.quantity.toFixed(6) } : {}),
+        ...(body.unitPrice != null ? { unitPrice: body.unitPrice.toFixed(4) } : {}),
+        ...(body.totalPrice != null ? { totalPrice: body.totalPrice.toFixed(2) } : {}),
+        ...(body.rawSku ? { rawSku: body.rawSku } : {}), ...(body.codeChain ? { codeChain: body.codeChain } : {}),
+        ...(body.unit ? { unit: body.unit } : {}),
+        ...(body.packageQuantity ? { packageQuantity: body.packageQuantity.toFixed(6), packageUnit: body.packageUnit } : {}),
+        ...(body.packagesPerPurchase ? { packagesPerPurchase: body.packagesPerPurchase.toFixed(6) } : {}),
+        measurementStatus: 'unresolved', measurementReason: null,
+        measurementEvidence: { confirmedBy: currentUser(request).id, discountConfirmed: body.discountConfirmed ?? false, saveProductMeasurement: body.saveProductMeasurement ?? false },
+      }).where(eq(receiptItems.id, lineId));
+      return { ok: true };
+    });
+  });
+
+  app.post('/receipts/:id/resolve-measurements', mutationGuards, async request => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+    const shop = currentShop(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = verifySchema.parse(request.body);
+    return verifyReceipt({ db: deps.db, shopId: shop.id, userId: currentUser(request).id,
+      receiptId: id, items: body.items, deferred: true });
   });
 
   app.get('/receipts', guards, async (request) => {

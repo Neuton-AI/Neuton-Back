@@ -1,203 +1,127 @@
-/**
- * The verification transaction behind `POST /receipts/:id/verify`.
- *
- * Extracted from the route so the row-lock behaviour can be exercised directly
- * against a real Postgres. Locking, not arithmetic, is the substance here: a
- * transaction alone does not stop two verifications of receipts sharing a SKU
- * from both reading the same quantity before either writes, and the fix — locking
- * every affected inventory row in ascending id order — only means anything if it
- * survives contact with a real lock manager.
- */
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { receipts, receiptItems } from '../db/schema/index.js';
+import { receipts, receiptItems, productMeasurements } from '../db/schema/index.js';
 import { badRequest, conflict, notFound } from './errors.js';
 import { applyPurchaseFrom, findOrCreateInventoryItem, lockInventoryRows } from './inventory.js';
-import { money, quantity as qty, toNumber, unitCost } from './money.js';
+import { money, quantity as qty, unitCost } from './money.js';
+import { normalizePurchase } from './purchaseNormalization.js';
+import { lookupExactProduct, type PriceChain } from './supermarket/prices.js';
 
 export interface VerifyLineInput {
-  id: string;
-  accepted: boolean;
-  rawName?: string;
-  rawSku?: string;
-  unit?: string;
-  quantity?: number;
-  unitPrice?: number;
-  totalPrice?: number;
+  id: string; accepted: boolean; rawName?: string; rawSku?: string; codeChain?: PriceChain;
+  unit?: string; quantity?: number; unitPrice?: number; totalPrice?: number;
+  packageQuantity?: number; packageUnit?: string; packagesPerPurchase?: number;
+  discountConfirmed?: boolean; saveProductMeasurement?: boolean;
 }
-
 export interface VerifyReceiptInput {
-  db: Database;
-  shopId: string;
-  userId: string;
-  receiptId: string;
-  items: VerifyLineInput[];
+  db: Database; shopId: string; userId: string; receiptId: string; items: VerifyLineInput[];
+  deferred?: boolean;
+  lookup?: typeof lookupExactProduct;
 }
-
 export interface VerifyReceiptResult {
-  receiptId: string;
-  status: 'verified';
-  accepted: number;
-  rejected: number;
+  receiptId: string; status: 'verified'; accepted: number; rejected: number; pending: number; applied: number;
+}
+export function productMeasurementKey(code: string | null, chain?: string | null): string | null {
+  if (!code) return null;
+  if (/^\d{8,14}$/.test(code)) return 'barcode:' + code;
+  return chain ? chain + ':' + code : null;
 }
 
-interface Decision {
-  stored: { id: string; rawName: string; unit: string | null; quantity: string | null };
-  submitted: VerifyLineInput;
-  inventoryItemId: string | null;
-  rawName: string;
-  unit: string | null;
-  /** Quantity to put into stock: the reviewer's figure, absent nothing applied. */
-  quantity: number;
-  unitPrice: number;
-}
-
+/** External retrieval runs before write locks; the transaction rereads all data.
+ * Only identity and package evidence is used, never the catalog's current price. */
 export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyReceiptResult> {
   const { db, shopId, userId, receiptId, items } = input;
-
-  return db.transaction(async (tx) => {
-    const receiptRows = await tx
-      .select()
-      .from(receipts)
-      .where(and(eq(receipts.id, receiptId), eq(receipts.shopId, shopId)))
-      .limit(1)
-      .for('update');
-    const receipt = receiptRows[0];
+  if (new Set(items.map(i => i.id)).size !== items.length) throw badRequest('Duplicate receipt decisions');
+  const before = await db.select().from(receiptItems).where(and(eq(receiptItems.receiptId, receiptId), eq(receiptItems.shopId, shopId)));
+  const enriched = new Map<string, Awaited<ReturnType<typeof lookupExactProduct>>>();
+  for (const submitted of items) {
+    const line = before.find(row => row.id === submitted.id);
+    const code = submitted.rawSku ?? line?.rawSku;
+    const chain = submitted.codeChain ?? line?.codeChain as PriceChain | undefined;
+    if (!submitted.accepted || !code || submitted.packageQuantity != null || line?.packageQuantity != null) continue;
+    try { enriched.set(submitted.id, await (input.lookup ?? lookupExactProduct)(code, chain)); } catch { /* Review remains available during outages. */ }
+  }
+  return db.transaction(async tx => {
+    const [receipt] = await tx.select().from(receipts).where(and(eq(receipts.id, receiptId), eq(receipts.shopId, shopId))).limit(1).for('update');
     if (!receipt) throw notFound('Receipt not found');
-
-    // Verified exactly once. Refusing the second attempt with a 409 is what
-    // makes this endpoint safe to retry: no retry can apply the purchase twice.
-    // Taking the receipt lock above is what makes the check atomic rather than a
-    // check-then-act race two parallel requests can both pass.
-    if (receipt.status === 'verified') {
-      throw conflict('Receipt is already verified');
-    }
-
-    const storedRows = await tx
-      .select()
-      .from(receiptItems)
-      .where(and(eq(receiptItems.receiptId, receiptId), eq(receiptItems.shopId, shopId)));
-    const byId = new Map(storedRows.map((row) => [row.id, row]));
-
-    const foreign = items.find((item) => !byId.has(item.id));
-    if (foreign) {
-      throw badRequest(`Receipt line ${foreign.id} does not belong to this receipt`);
-    }
-
-    const decisions: Decision[] = [];
-    let accepted = 0;
-    let rejected = 0;
-
+    if (!input.deferred && receipt.status === 'verified') throw conflict('Receipt is already verified');
+    if (input.deferred && receipt.status !== 'verified') throw conflict('Verify receipt before resolving pending purchases');
+    const storedRows = await tx.select().from(receiptItems).where(and(eq(receiptItems.receiptId, receiptId), eq(receiptItems.shopId, shopId)));
+    if (items.some(i => !storedRows.some(row => row.id === i.id))) throw badRequest('Receipt line does not belong to this receipt');
+    if (!input.deferred && storedRows.length !== items.length) throw badRequest('Review every receipt line');
+    const decisions = [];
+    let accepted = 0, rejected = 0, pending = 0, applied = 0;
     for (const submitted of items) {
-      const stored = byId.get(submitted.id)!;
+      const stored = storedRows.find(row => row.id === submitted.id)!;
+      if (input.deferred && (stored.applicationStatus !== 'pending' || stored.reviewStatus !== 'accepted')) throw conflict('Purchase has already been applied or was not accepted');
+      let product = enriched.get(stored.id);
+      const original = before.find(row => row.id === stored.id);
+      // Do not apply an enrichment fetched for data edited while awaiting I/O.
+      if (original && JSON.stringify(original) !== JSON.stringify(stored)) product = null;
       const rawName = submitted.rawName ?? stored.rawName;
-      const unit = submitted.unit ?? stored.unit;
-      const quantity = submitted.quantity ?? toNumber(stored.quantity);
-      const unitPrice = submitted.unitPrice ?? toNumber(stored.unitPrice);
-
-      // A rejected line resolves no SKU and writes no stock movement. Creating one
-      // anyway would leave inventory for something nobody bought.
-      if (!submitted.accepted) {
-        rejected += 1;
-        decisions.push({
-          stored,
-          submitted,
-          inventoryItemId: null,
-          rawName,
-          unit,
-          quantity,
-          unitPrice,
-        });
-        continue;
+      const rawSku = submitted.rawSku ?? stored.rawSku;
+      const codeChain = submitted.codeChain ?? stored.codeChain;
+      const key = productMeasurementKey(rawSku, codeChain);
+      let packageQuantity = submitted.packageQuantity ?? stored.packageQuantity;
+      let packageUnit = submitted.packageUnit ?? stored.packageUnit;
+      let source = packageQuantity != null ? 'receipt-or-confirmation' : 'unresolved';
+      const [saved] = key ? await tx.select().from(productMeasurements).where(and(eq(productMeasurements.shopId, shopId), eq(productMeasurements.productKey, key))).limit(1) : [];
+      if (packageQuantity == null && saved) { packageQuantity = saved.packageQuantity; packageUnit = saved.packageUnit; source = 'shop-confirmed-product'; }
+      const catalogContents = product?.measurement?.measurement;
+      if (packageQuantity == null && catalogContents) { packageQuantity = String(catalogContents.quantity); packageUnit = catalogContents.unit; source = 'exact-catalog'; }
+      const purchase = normalizePurchase({ rawName, quantity: submitted.quantity ?? stored.quantity,
+        unit: submitted.unit ?? stored.unit, unitPrice: submitted.unitPrice ?? stored.unitPrice,
+        totalPrice: submitted.totalPrice ?? stored.totalPrice, packageQuantity, packageUnit,
+        packagesPerPurchase: submitted.packagesPerPurchase ?? stored.packagesPerPurchase,
+        currency: receipt.currency, discountConfirmed: submitted.discountConfirmed ?? (stored.measurementEvidence as { discountConfirmed?: boolean } | null)?.discountConfirmed });
+      // A user confirmation resolves the conflict explicitly; otherwise retain it.
+      if (!submitted.packageQuantity && ((product?.measurement?.reason === 'conflicting_measurements') ||
+        (catalogContents && packageQuantity != null && (Number(packageQuantity) !== catalogContents.quantity || packageUnit !== catalogContents.unit)))) {
+        purchase.state = 'unresolved'; purchase.reason = 'conflicting_measurements'; purchase.measurement = null; purchase.rate = null;
       }
-
-      accepted += 1;
-      const inventoryItemId = await findOrCreateInventoryItem(tx, shopId, rawName, unit);
-
-      // Nothing was applied before this moment, so the whole accepted quantity
-      // is what goes into stock — there is no earlier contribution to net out
-      // against. The vision worker only extracts; it has never moved a unit
-      // since N-28. The 409 on an already-verified receipt above is what keeps
-      // this running at most once per receipt, so there is no second full apply
-      // to worry about either.
-      decisions.push({
-        stored,
-        submitted,
-        inventoryItemId,
-        rawName,
-        unit,
-        quantity,
-        unitPrice,
-      });
+      if (submitted.accepted) accepted++; else rejected++;
+      const inventoryItemId = submitted.accepted && purchase.measurement
+        ? await findOrCreateInventoryItem(tx, shopId, rawName, purchase.measurement.unit) : null;
+      decisions.push({ submitted, stored, rawName, rawSku, codeChain, packageQuantity, packageUnit, key, purchase, inventoryItemId, source });
     }
-
-    // One lock acquisition for the whole receipt, always in ascending id order.
-    // Locking per line as we walked the body would take the same rows in request
-    // order, which is exactly how two receipts listing shared SKUs differently
-    // deadlock each other.
-    const snapshots = await lockInventoryRows(
-      tx,
-      decisions
-        .map((decision) => decision.inventoryItemId)
-        .filter((value): value is string => value !== null),
-    );
-
-    for (const decision of decisions) {
-      if (!decision.inventoryItemId || decision.quantity <= 0) continue;
-
-      // Thread the state forward within the loop. Two accepted lines naming the
-      // same SKU both start from the locked snapshot; without carrying the result
-      // of the first write into the second, the later write would silently drop
-      // the earlier line's quantity and cost.
-      const snapshot = snapshots.get(decision.inventoryItemId);
-      const next = await applyPurchaseFrom(
-        tx,
-        decision.inventoryItemId,
-        decision.quantity,
-        decision.unitPrice,
-        snapshot,
-      );
-
-      if (next) snapshots.set(decision.inventoryItemId, next);
+    const snapshots = await lockInventoryRows(tx, decisions.map(d => d.inventoryItemId).filter((id): id is string => !!id));
+    for (const d of decisions) {
+      const snapshot = d.inventoryItemId ? snapshots.get(d.inventoryItemId) : undefined;
+      if (d.submitted.accepted && d.purchase.measurement && d.inventoryItemId) {
+        if (!snapshot || snapshot.measurementStatus !== 'ready' || snapshot.unit !== d.purchase.measurement.unit) {
+          d.purchase.state = 'unresolved'; d.purchase.reason = snapshot?.measurementStatus !== 'ready' ? 'legacy_reconciliation_required' : 'incompatible_inventory_unit';
+        } else {
+          const next = await applyPurchaseFrom(tx, d.inventoryItemId, d.purchase.measurement.quantity, d.purchase.rate!, snapshot);
+          if (next) { snapshots.set(d.inventoryItemId, next); applied++; }
+        }
+      }
+      const isApplied = d.submitted.accepted && d.purchase.state !== 'unresolved' && !!snapshot;
+      if (d.submitted.accepted && !isApplied) pending++;
+      const evidence = { original: { quantity: d.stored.quantity, unit: d.stored.unit, totalPrice: d.stored.totalPrice },
+        source: d.source, product: enriched.get(d.stored.id)?.evidence, provenance: d.purchase.provenance,
+        paidAmount: d.purchase.paidAmount, confirmedBy: userId, discountConfirmed: d.submitted.discountConfirmed ?? false };
+      await tx.update(receiptItems).set({ rawName: d.rawName, rawSku: d.rawSku, codeChain: d.codeChain,
+        unit: d.submitted.unit ?? d.stored.unit,
+        quantity: d.submitted.quantity == null ? d.stored.quantity : qty(d.submitted.quantity),
+        unitPrice: d.submitted.unitPrice == null ? d.stored.unitPrice : unitCost(d.submitted.unitPrice),
+        totalPrice: d.submitted.totalPrice == null ? d.stored.totalPrice : money(d.submitted.totalPrice),
+        packageQuantity: d.packageQuantity == null ? null : qty(Number(d.packageQuantity)), packageUnit: d.packageUnit,
+        packagesPerPurchase: d.submitted.packagesPerPurchase == null ? d.stored.packagesPerPurchase : qty(d.submitted.packagesPerPurchase),
+        inventoryItemId: d.inventoryItemId, reviewStatus: d.submitted.accepted ? 'accepted' : 'rejected',
+        measurementStatus: d.purchase.state, measurementReason: d.purchase.reason, measurementEvidence: evidence,
+        normalizedQuantity: d.purchase.measurement ? qty(d.purchase.measurement.quantity) : null,
+        normalizedUnit: d.purchase.measurement?.unit ?? null, normalizedRate: d.purchase.rate == null ? null : unitCost(d.purchase.rate),
+        applicationStatus: isApplied ? 'applied' : d.submitted.accepted ? 'pending' : 'rejected',
+        appliedAt: isApplied ? new Date() : null,
+      }).where(and(eq(receiptItems.id, d.stored.id), eq(receiptItems.shopId, shopId)));
+      if ((d.submitted.saveProductMeasurement ?? (d.stored.measurementEvidence as { saveProductMeasurement?: boolean } | null)?.saveProductMeasurement) && d.key && d.packageQuantity != null && d.packageUnit && d.purchase.state !== 'unresolved') {
+        const metadata = { shopId, productKey: d.key, packageQuantity: qty(Number(d.packageQuantity)), packageUnit: d.packageUnit, evidence, updatedAt: new Date() };
+        await tx.insert(productMeasurements).values(metadata).onConflictDoUpdate({ target: [productMeasurements.shopId, productMeasurements.productKey], set: metadata });
+      }
     }
-
-    for (const decision of decisions) {
-      const { stored, submitted } = decision;
-      const patch: Record<string, unknown> = {
-        inventoryItemId: decision.inventoryItemId,
-        reviewStatus: submitted.accepted ? 'accepted' : 'rejected',
-      };
-
-      // Corrections land only when supplied. An omitted field means the reviewer
-      // agreed with the extraction, not that they blanked it out.
-      if (submitted.rawName !== undefined) patch.rawName = decision.rawName;
-      // The column and its partial index exist, but nothing has ever written it.
-      if (submitted.rawSku !== undefined) patch.rawSku = submitted.rawSku;
-      if (submitted.unit !== undefined) patch.unit = decision.unit;
-      if (submitted.quantity !== undefined) patch.quantity = qty(decision.quantity);
-      if (submitted.unitPrice !== undefined) patch.unitPrice = unitCost(decision.unitPrice);
-      if (submitted.totalPrice !== undefined) patch.totalPrice = money(submitted.totalPrice);
-
-      await tx
-        .update(receiptItems)
-        .set(patch)
-        .where(and(eq(receiptItems.id, stored.id), eq(receiptItems.receiptId, receiptId)));
-    }
-
-    const now = new Date();
-    await tx
-      .update(receipts)
-      .set({
-        status: 'verified',
-        verifiedAt: now,
-        verifiedBy: userId,
-        progressStage: 'completed',
-        progressMessage: 'Verified by a user',
-        errorMessage: null,
-        updatedAt: now,
-      })
-      .where(eq(receipts.id, receiptId));
-
-    return { receiptId, status: 'verified' as const, accepted, rejected };
+    await tx.update(receipts).set({ status: 'verified', verifiedAt: receipt.verifiedAt ?? new Date(), verifiedBy: receipt.verifiedBy ?? userId,
+      progressStage: 'completed', progressMessage: pending ? 'Verified; some purchases need measurements' : 'Verified by a user', errorMessage: null, updatedAt: new Date(),
+    }).where(eq(receipts.id, receiptId));
+    return { receiptId, status: 'verified', accepted, rejected, pending, applied };
   });
 }
