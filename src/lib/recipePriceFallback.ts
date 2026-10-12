@@ -33,6 +33,7 @@ export async function linkRecipeFallbackPrices(
     if (!matches.has(query)) {
       try {
         const results = await search(query);
+        console.log(`unlinked ${query} search res:`, results);
         const candidates = results.filter((result) => {
           const name = normalizePriceName(result.name);
           const matchesIngredient = name === query || name.startsWith(`${query} `) || result.barcode === query;
@@ -40,13 +41,16 @@ export async function linkRecipeFallbackPrices(
             Number.isFinite(result.price) && result.price > 0;
         });
         candidates.sort((a, b) => b.score - a.score || a.price - b.price);
+        console.log(`sorted candidates:`, candidates);
         matches.set(query, candidates[0] ?? null);
-      } catch {
+      } catch (error) {
+        console.log('error in fallback prices', error);
         // A catalog outage leaves the line available for manual review.
         matches.set(query, null);
       }
     }
     const product = matches.get(query);
+    console.log('top match', product)
     if (!product) continue;
     const now = new Date();
     const price = {

@@ -86,17 +86,18 @@ const RECEIPT_SCHEMA = `{
         "type": "object",
         "properties": {
           "rawName": { "type": "string" },
+          "rawSku": {"type": "string"},
           "quantity": { "type": "number" },
           "unit": { "type": "string" },
           "unitPrice": { "type": "number" },
           "totalPrice": { "type": "number" },
           "confidence": { "type": "number" }
         },
-        "required": ["rawName"]
+        "required": ["rawName", "rawSku", "quantity", "unit", "unitPrice", "totalPrice", "confidence"]
       }
     }
   },
-  "required": ["items"]
+  "required": ["items", "receiptDate", "merchantName", "totalAmount", "taxAmount", "currency"]
 }`;
 
 const RECIPE_SCHEMA = `{
@@ -118,11 +119,11 @@ const RECIPE_SCHEMA = `{
           "quantity": { "type": "number" },
           "unit": { "type": "string" }
         },
-        "required": ["rawName"]
+        "required": ["rawName", "quantity", "unit"]
       }
     }
   },
-  "required": ["name", "ingredients"]
+  "required": ["name", "ingredients", "instructions", "prepTimeMinutes","yieldQuantity", "yieldUnit", "allergens", "ingredients"]
 }`;
 
 const ORDER_SCHEMA = `{
@@ -146,15 +147,25 @@ const ORDER_SCHEMA = `{
   "required": ["items"]
 }`;
 
+const EXTRACT_RECEIPT_PROMPT = `Extract this shopping receipt.
+Return all the data in the receipt that we need in our response schema.
+Use null for anything you cannot read. Never invent values.`;
+
+const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
+Return all the data in the recipe that we need in our response schema.
+For each ingredient extract the ingredient exact name without any instruction or descriptions attached to it
+(example: bad - "1 cup flour, sifted", good - "flour" and unit will be "cup" quantity will be 1
+bad - 2 eggs large, room temperature, good - "eggs" and unit will be "large" quantity will be 2).
+Use null for anything you cannot read. Never invent values.
+`
+
 const PROMPTS: Record<MediaKind, { instruction: string; schema: string }> = {
   receipt: {
-    instruction:
-      'Extract this shopping receipt. Return the merchant name, purchase date, grand total, tax, currency, and every purchased line item with its quantity, unit, unit price and line total. Use null for anything you cannot read. Never invent values.',
+    instruction: EXTRACT_RECEIPT_PROMPT,
     schema: RECEIPT_SCHEMA,
   },
   recipe: {
-    instruction:
-      'Extract this recipe (handwritten or printed). Return the recipe name, short description, preparation time in minutes, how many portions it yields and their unit, the allergen list, the preparation instructions, and every ingredient with its quantity and unit. Use null for anything you cannot read. Never invent values.',
+    instruction: EXTRACT_RECIPE_PROMPT,
     schema: RECIPE_SCHEMA,
   },
   product: {
@@ -357,9 +368,9 @@ export async function extractRecipe(
     yieldUnit: asString(raw.yieldUnit),
     allergens: Array.isArray(raw.allergens)
       ? raw.allergens
-          .filter((a): a is string => typeof a === 'string')
-          .map((a) => stripHtml(a).trim())
-          .filter((a) => a.length > 0)
+        .filter((a): a is string => typeof a === 'string')
+        .map((a) => stripHtml(a).trim())
+        .filter((a) => a.length > 0)
       : [],
     instructions: asString(raw.instructions),
     ingredients: ingredients.map((entry) => {
