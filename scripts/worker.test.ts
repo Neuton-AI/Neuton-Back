@@ -60,6 +60,7 @@ function harness(options: {
 
   const deps: WorkerDeps = {
     db: db as unknown as WorkerDeps['db'],
+    searchProduct: async () => [],
     getObjectBytes: async () => new Uint8Array([104, 105]),
     extractReceipt: async (input) => {
       record(input.mimeType, input.data);
@@ -498,6 +499,42 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
   const createdCalls = db.callsTo('insert', 'inventoryItems');
   assert.ok(createdCalls.length === 0, 'SKU creation must not happen for recipe path');
 
+});
+
+test('recipe: both extraction paths apply external fallback before committing the recipe', async () => {
+  for (const existing of [false, true]) {
+    const { db, deps, job, jobData } = harness({
+      responses: {
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
+        'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
+        'select:recipeIngredients': [[{ id: 'line-1', rawName: 'Flour', inventoryItemId: null, generalPriceId: null }]],
+        'insert:generalPrices': [[{ id: 'price-1' }]],
+      },
+      extractions: { recipe: { ...RECIPE, ingredients: [RECIPE.ingredients[0]!] } },
+    });
+    const queries: string[] = [];
+    deps.searchProduct = async (query) => {
+      queries.push(query);
+      return [{ name: 'Flour', price: 5, barcode: '123', chain: 'shufersal', score: 9500 }];
+    };
+    await processRecipe(deps, jobData, job);
+    assert.deepEqual(queries, ['flour']);
+    assert.equal(db.onlyCallTo('update', 'recipeIngredients').set?.generalPriceId, 'price-1');
+    assert.equal(db.onlyCallTo('update', 'recipeIngredients').inTransaction, true);
+    assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
+  }
+});
+
+test('recipe: queue redelivery preserves completed extractions and verified recipes', async () => {
+  for (const status of ['unverified', 'verified']) {
+    const { db, deps, job, jobData, extracted } = harness({ responses: {
+      'select:recipes': [[{ id: 'rec-1', status }]],
+    } });
+    await processRecipe(deps, jobData, job);
+    assert.equal(extracted.length, 0);
+    assert.equal(db.callsTo('update', 'recipes').length, 0);
+    assert.equal(db.callsTo('delete', 'recipeIngredients').length, 0);
+  }
 });
 
 test('recipe: a missing or non-positive yield falls back to a single portion', async () => {

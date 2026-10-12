@@ -5,6 +5,7 @@ import { db, type Database } from '../db/client.js';
 import {
   categories,
   inventoryItems,
+  generalPrices,
   recipeIngredients,
   recipes,
 } from '../db/schema/index.js';
@@ -21,6 +22,7 @@ import {
 } from '../lib/pricing.js';
 import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js';
 import { defaultReceiptsDeps } from './receipts.js';
+import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
@@ -82,27 +84,30 @@ const inventorySchema = z.object({
 
 const inventoryPatchSchema = inventorySchema.partial();
 
-async function costRecipe(
+export async function costRecipe(
   shopId: string,
   recipe: typeof recipes.$inferSelect,
   shopMargin: string,
   hourlyLaborCost: string,
+  database: Pick<Database, 'select'> = db,
 ) {
-  const ingredientRows = await db
+  const ingredientRows = await database
     .select({
       inventoryItemId: recipeIngredients.inventoryItemId,
+      generalPriceId: recipeIngredients.generalPriceId,
       rawName: recipeIngredients.rawName,
       unit: recipeIngredients.unit,
       quantity: recipeIngredients.quantity,
-      name: inventoryItems.name,
+      name: sql<string>`coalesce(${inventoryItems.name}, ${generalPrices.name})`,
       currentQuantity: inventoryItems.currentQuantity,
-      averageUnitCost: inventoryItems.averageUnitCost,
+      averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)
     .leftJoin(
       inventoryItems,
       eq(inventoryItems.id, recipeIngredients.inventoryItemId),
     )
+    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
     .where(
       and(
         eq(recipeIngredients.shopId, shopId),
@@ -111,7 +116,7 @@ async function costRecipe(
     )
     .orderBy(asc(recipeIngredients.id));
 
-  const linkedIngredients = ingredientRows.filter((i) => i.inventoryItemId !== null);
+  const linkedIngredients = ingredientRows.filter((i) => i.inventoryItemId != null || i.generalPriceId != null);
   const totalCount = ingredientRows.length;
   const linkedCount = linkedIngredients.length;
 
@@ -167,8 +172,9 @@ async function costRecipe(
         : 0,
       currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
       inventoryItemId: ingredient.inventoryItemId,
+      generalPriceId: ingredient.generalPriceId,
       rawName: ingredient.rawName,
-      linked: ingredient.inventoryItemId !== null,
+      linked: ingredient.inventoryItemId != null || ingredient.generalPriceId != null,
     })),
   };
 }

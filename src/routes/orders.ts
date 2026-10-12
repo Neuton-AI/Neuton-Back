@@ -15,7 +15,8 @@ import {
   calculateRetailPrice,
   calculateUnitCost,
 } from '../lib/pricing.js';
-import { recipeIngredients, inventoryItems } from '../db/schema/index.js';
+import { recipeIngredients, inventoryItems, generalPrices } from '../db/schema/index.js';
+import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const orderItemSchema = z.object({
   recipeId: z.string().uuid(),
@@ -85,10 +86,11 @@ async function priceOrderItems(
     .select({
       recipeId: recipeIngredients.recipeId,
       quantity: recipeIngredients.quantity,
-      averageUnitCost: inventoryItems.averageUnitCost,
+      averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)
-    .innerJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
     .where(eq(recipeIngredients.shopId, shopId));
 
   const byRecipe = new Map<string, typeof ingredientRows>();
