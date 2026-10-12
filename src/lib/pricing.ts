@@ -120,14 +120,14 @@ export function applyWeightedAverage(
   const oldQuantity = Math.max(toNumber(current.currentQuantity), 0);
   const oldAverage = toNumber(current.averageUnitCost);
   const purchased = Math.max(purchase.quantity, 0);
-  const newQuantity = round(oldQuantity + purchased, 3);
+  const newQuantity = round(oldQuantity + purchased, 6);
   const newAverage =
     newQuantity > 0 ? (oldQuantity * oldAverage + purchased * purchase.unitPrice) / newQuantity : oldAverage;
 
   return {
     currentQuantity: newQuantity,
-    lastUnitCost: round(purchase.unitPrice, 4),
-    averageUnitCost: round(newAverage, 4),
+    lastUnitCost: round(purchase.unitPrice, 10),
+    averageUnitCost: round(newAverage, 10),
   };
 }
 
@@ -177,3 +177,4 @@ export function average(values: number[]): number {
   const total = values.reduce((sum, value) => sum + value, 0);
   return round(total / values.length, 2);
 }
+
