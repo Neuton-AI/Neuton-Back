@@ -482,23 +482,45 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       shopId: SHOP_ID,
       recipeId: 'rec-1',
       inventoryItemId: null,
+      rawName: 'Flour',
+      searchAbleName: 'Flour',
       quantity: '2.000',
       unit: 'kg',
-      rawName: 'Flour',
     },
     {
       shopId: SHOP_ID,
       recipeId: 'rec-1',
       inventoryItemId: null,
+      rawName: 'Salt',
+      searchAbleName: 'Salt',
       quantity: '1.000',
       unit: 'kg',
-      rawName: 'Salt',
     },
   ]);
 
   const createdCalls = db.callsTo('insert', 'inventoryItems');
   assert.ok(createdCalls.length === 0, 'SKU creation must not happen for recipe path');
 
+});
+
+test('recipe: a duplicate name is suffixed instead of failing the job', async () => {
+  for (const [duplicates, expected] of [
+    [1, 'Focaccia (2)'],
+    [2, 'Focaccia (3)'],
+  ] as const) {
+    const { db, deps, job, jobData } = harness({
+      responses: {
+        'select:recipes': [[], [{ count: duplicates }]],
+        'insert:recipes': [[{ id: 'rec-2', name: expected }]],
+      },
+      extractions: { recipe: { ...RECIPE, ingredients: [] } },
+    });
+
+    await processRecipe(deps, jobData, job);
+
+    const recipeRow = db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
+    assert.equal(recipeRow.name, expected);
+  }
 });
 
 test('recipe: both extraction paths apply external fallback before committing the recipe', async () => {

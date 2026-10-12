@@ -69,6 +69,7 @@ async function seedShop(): Promise<string> {
     recipeId: recipe.id,
     inventoryItemId: flour.id,
     rawName: 'Flour',
+    searchAbleName: 'Flour',
     quantity: '1.000',
     unit: 'kg',
   });

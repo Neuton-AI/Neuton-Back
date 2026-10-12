@@ -32,6 +32,7 @@ import { env } from './env.js';
 import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
+import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
@@ -353,10 +354,18 @@ export async function processRecipe(
     // Update existing row: replace extracted fields + ingredients + set unverified
     await deps.db.transaction(async (tx) => {
       const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
+      // Re-extraction may yield a name another recipe already holds, so suffix
+      // the duplicate ("Recipe Name (2)") instead of violating the (shopId, name) index.
+      const uniqueName = await resolveUniqueRecipeName(
+        tx,
+        data.shopId,
+        safeName,
+        existingRecipe.id,
+      );
       await tx
         .update(recipes)
         .set({
-          name: safeName,
+          name: uniqueName,
           description,
           prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
           yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
@@ -379,6 +388,7 @@ export async function processRecipe(
           recipeId: existingRecipe.id,
           inventoryItemId,
           rawName: ingredient.rawName,
+          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
           unit: ingredient.unit ?? 'unit',
         };
@@ -400,11 +410,14 @@ export async function processRecipe(
     // Legacy fallback: no row exists, insert directly as 'unverified' with storagePath
     const inserted = await deps.db.transaction(async (tx) => {
       const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
+      // The (shopId, name) unique index rejects a name already in the shop, so
+      // suffix the duplicate ("Recipe Name (2)") instead of failing the job.
+      const uniqueName = await resolveUniqueRecipeName(tx, data.shopId, safeName);
       const newRecipe = await tx
         .insert(recipes)
         .values({
           shopId: data.shopId,
-          name: safeName,
+          name: uniqueName,
           description,
           prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
           yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
@@ -426,6 +439,7 @@ export async function processRecipe(
           recipeId: recipe.id,
           inventoryItemId,
           rawName: ingredient.rawName,
+          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
           unit: ingredient.unit ?? 'unit',
         };
@@ -441,6 +455,7 @@ export async function processRecipe(
       {
         recipeId: inserted.id,
         name: inserted.name,
+        requestedName: safeName,
         hourlyLaborCost: shop?.hourlyLaborCost,
       },
       'recipe drafted from document (legacy fallback)',

@@ -24,16 +24,19 @@ export async function linkRecipeFallbackPrices(
     isNull(recipeIngredients.inventoryItemId),
     isNull(recipeIngredients.generalPriceId),
   ));
+  for (const ingredient of ingredients) {
+    console.log('unlinked ingredient: ', ingredient.rawName, 'searchAbleName:', ingredient.searchAbleName)
+  }
   const matches = new Map<string, PriceResult | null>();
   for (const ingredient of ingredients) {
     // Also guard in memory: retries must never replace an existing price link.
     if (ingredient.inventoryItemId || ingredient.generalPriceId) continue;
-    const query = normalizePriceName(ingredient.rawName);
+    const query = normalizePriceName(ingredient.searchAbleName || ingredient.rawName);
     if (!query) continue;
     if (!matches.has(query)) {
       try {
+        console.log('search for ingredient: ', query)
         const results = await search(query);
-        console.log(`unlinked ${query} search res:`, results);
         const candidates = results.filter((result) => {
           const name = normalizePriceName(result.name);
           const matchesIngredient = name === query || name.startsWith(`${query} `) || result.barcode === query;
@@ -41,7 +44,7 @@ export async function linkRecipeFallbackPrices(
             Number.isFinite(result.price) && result.price > 0;
         });
         candidates.sort((a, b) => b.score - a.score || a.price - b.price);
-        console.log(`sorted candidates:`, candidates);
+        console.log('top candidate: ', candidates[0]);
         matches.set(query, candidates[0] ?? null);
       } catch (error) {
         console.log('error in fallback prices', error);
@@ -50,7 +53,6 @@ export async function linkRecipeFallbackPrices(
       }
     }
     const product = matches.get(query);
-    console.log('top match', product)
     if (!product) continue;
     const now = new Date();
     const price = {

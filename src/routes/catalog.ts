@@ -27,6 +27,7 @@ import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
   rawName: htmlFree(z.string().trim().min(1).max(160)),
+  searchAbleName: htmlFree(z.string().trim().min(1).max(160)).optional(),
   quantity: z.coerce.number().positive(),
   unit: htmlFree(z.string().trim().min(1).max(24)),
 });
@@ -276,6 +277,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           recipeId: recipe.id,
           inventoryItemId: ingredient.inventoryItemId ?? null,
           rawName: ingredient.rawName,
+          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity),
           unit: ingredient.unit,
         })),
@@ -361,6 +363,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
               rawName: ingredient.rawName,
+              searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
             })),
@@ -677,6 +680,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
               rawName: ingredient.rawName,
+              searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
               unit: ingredient.unit,
             })),

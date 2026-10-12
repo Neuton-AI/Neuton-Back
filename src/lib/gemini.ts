@@ -55,6 +55,13 @@ export interface ReceiptExtraction {
   items: ExtractedLineItem[];
 }
 
+export interface RecipeIngredient {
+  rawName: string;
+  searchAbleName?: string | null;
+  quantity: number | null;
+  unit: string | null;
+}
+
 export interface RecipeExtraction {
   name: string | null;
   description: string | null;
@@ -63,7 +70,7 @@ export interface RecipeExtraction {
   yieldUnit: string | null;
   allergens: string[];
   instructions: string | null;
-  ingredients: { rawName: string; quantity: number | null; unit: string | null }[];
+  ingredients: RecipeIngredient[];
 }
 
 export interface OrderExtraction {
@@ -116,10 +123,11 @@ const RECIPE_SCHEMA = `{
         "type": "object",
         "properties": {
           "rawName": { "type": "string" },
+          "searchAbleName": { "type": "string" },
           "quantity": { "type": "number" },
           "unit": { "type": "string" }
         },
-        "required": ["rawName", "quantity", "unit"]
+        "required": ["rawName", "searchAbleName", "quantity", "unit"]
       }
     }
   },
@@ -153,9 +161,13 @@ Use null for anything you cannot read. Never invent values.`;
 
 const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
 Return all the data in the recipe that we need in our response schema.
-For each ingredient extract the ingredient exact name without any instruction or descriptions attached to it
-(example: bad - "1 cup flour, sifted", good - "flour" and unit will be "cup" quantity will be 1
-bad - 2 eggs large, room temperature, good - "eggs" and unit will be "large" quantity will be 2).
+For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our searchAbleName.
+The searchAbleName should be:
+- firm and not ambiguous, not "or" or "maybe" a firm determination of what is the ingredient.
+- clean without any instructions or measures.
+Example of standartize 1: bad - "1 cup flour, sifted or raw", good - "flour" and unit will be "cup" quantity will be 1.
+Example of standartize 2: bad - "2 large eggs, room temperature", good - "eggs" and unit will be "large" quantity will be 2.
+Example of standartize 3: bad - "chocolate chips or chopped chocolate", good - "chocolate chips"
 Use null for anything you cannot read. Never invent values.
 `
 
@@ -359,6 +371,8 @@ export async function extractRecipe(
 ): Promise<RecipeExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
 
+  console.log('raw receipe extraction', raw);
+  console.log('raw.ingredients', raw.ingredients)
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
     name: asString(raw.name),
@@ -377,6 +391,7 @@ export async function extractRecipe(
       const item = (entry ?? {}) as Record<string, unknown>;
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
+        searchAbleName: asString(item.searchAbleName),
         quantity: asNumber(item.quantity),
         unit: asString(item.unit),
       };

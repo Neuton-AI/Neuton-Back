@@ -119,15 +119,11 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
     onDelete: 'restrict',
   }),
-  /**
-   * External fallback price for a material the shop does not stock. Mutually
-   * exclusive with `inventoryItemId`: a line links to at most one price source,
-   * and both null means it is truly unpriced.
-   */
   generalPriceId: uuid('general_price_id').references(() => generalPrices.id, {
     onDelete: 'set null',
   }),
   rawName: text('raw_name').notNull(),
+  searchAbleName: text('search_able_name').notNull(),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
   unit: text('unit').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
