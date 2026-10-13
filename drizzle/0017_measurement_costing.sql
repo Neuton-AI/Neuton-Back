@@ -52,7 +52,8 @@ UPDATE receipt_items i SET application_status = 'legacy_applied'
 FROM receipts r WHERE r.id = i.receipt_id AND r.status = 'verified';
 --> statement-breakpoint
 ALTER TABLE orders ALTER COLUMN total_cost DROP NOT NULL;
-ALTER TABLE orders ADD COLUMN currency text;
+-- Older deployments already have char(3) currency from 0006_currency_per_line_item.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS currency text;
 ALTER TABLE orders ADD COLUMN costing_status text NOT NULL DEFAULT 'unresolved';
 UPDATE orders SET costing_status = 'legacy_snapshot';
 ALTER TABLE order_items ALTER COLUMN unit_cost DROP NOT NULL;
