@@ -32,6 +32,7 @@ ALTER TABLE general_prices ADD COLUMN measurement_status text NOT NULL DEFAULT '
 ALTER TABLE general_prices ADD COLUMN measurement_reason text;
 ALTER TABLE general_prices ADD COLUMN measurement_evidence jsonb;
 ALTER TABLE general_prices ALTER COLUMN price_per_base_unit TYPE numeric(24,10);
+ALTER TABLE general_prices ALTER COLUMN package_quantity TYPE numeric(20,6);
 --> statement-breakpoint
 ALTER TABLE receipt_items ALTER COLUMN quantity TYPE numeric(20,6);
 ALTER TABLE receipt_items ADD COLUMN code_chain text;

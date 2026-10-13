@@ -710,7 +710,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           shop.targetProfitMargin,
           shop.hourlyLaborCost,
         );
-        return { ...row, unitCost: costing.unitCost, retailPrice: costing.retailPrice, costingStatus: costing.measurementState, reasons: costing.reasons };
+        return { ...row, currency: shop.currency, unitCost: costing.unitCost, retailPrice: costing.retailPrice, costingStatus: costing.measurementState, reasons: costing.reasons };
       }),
     );
 

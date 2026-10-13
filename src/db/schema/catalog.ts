@@ -107,7 +107,7 @@ export const generalPrices = pgTable('general_prices', {
   manufacturer: text('manufacturer'),
   chain: text('chain', { enum: PRICE_CHAINS }).notNull(),
   priceIls: numeric('price_ils', { precision: 12, scale: 2 }).notNull(),
-  packageQuantity: numeric('package_quantity', { precision: 12, scale: 3 }),
+  packageQuantity: numeric('package_quantity', { precision: 20, scale: 6 }),
   packageUnit: text('package_unit'),
   pricePerBaseUnit: numeric('price_per_base_unit', { precision: 24, scale: 10 }),
   sourceUrl: text('source_url'),

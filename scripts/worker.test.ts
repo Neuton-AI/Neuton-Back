@@ -517,7 +517,7 @@ test('recipe: both extraction paths fetch external fallback after the recipe com
   for (const existing of [false, true]) {
     const { db, deps, job, jobData } = harness({
       responses: {
-        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }], [{ id: 'rec-1', status: 'processing' }]] : [[]],
         'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
         'select:recipeIngredients': [[{ id: 'line-1', rawName: 'Flour', searchAbleName: 'Flour', inventoryItemId: null, generalPriceId: null }]],
         'insert:generalPrices': [[{ id: 'price-1' }]],
@@ -546,6 +546,19 @@ test('recipe: queue redelivery preserves completed extractions and verified reci
     assert.equal(extracted.length, 0);
     assert.equal(db.callsTo('update', 'recipes').length, 0);
     assert.equal(db.callsTo('delete', 'recipeIngredients').length, 0);
+  }
+});
+
+test('recipe: extraction finishing after another delivery preserves reviewed measurements', async () => {
+  for (const status of ['unverified', 'verified']) {
+    const { db, deps, job, jobData } = harness({ responses: {
+      'select:recipes': [[{ id: 'rec-1', status: 'processing' }], [{ id: 'rec-1', status }]],
+    }, extractions: { recipe: RECIPE } });
+    await processRecipe(deps, jobData, job);
+    assert.equal(db.callsTo('delete', 'recipeIngredients').length, 0);
+    assert.equal(db.callsTo('insert', 'recipeIngredients').length, 0);
+    assert.equal(db.callsTo('update', 'recipes').length, 1, 'only the guarded processing claim is attempted');
+    assert.equal(db.callsTo('select', 'recipeIngredients').length, 0, 'no stale fallback writes');
   }
 });
 
@@ -636,7 +649,7 @@ test('recipe: a job that fails its transaction leaves no orphan inventory rows',
 test('recipe: retrying over an existing row clears a stale failure and resolves inventory in-transaction', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:recipes': [[{ id: 'rec-1' }]],
+      'select:recipes': [[{ id: 'rec-1', status: 'failed' }], [{ id: 'rec-1', status: 'processing' }]],
       'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
       'select:inventoryItems': [[{ id: 'inv-flour', name: 'Flour' }]],
       'insert:inventoryItems': [],

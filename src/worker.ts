@@ -301,7 +301,7 @@ export async function processRecipe(
     await deps.db
       .update(recipes)
       .set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
-      .where(eq(recipes.id, existingRecipe.id));
+      .where(and(eq(recipes.id, existingRecipe.id), eq(recipes.shopId, data.shopId), notInArray(recipes.status, ['verified', 'unverified'])));
   }
 
   const bytes = await deps.getObjectBytes(storagePath);
@@ -359,7 +359,13 @@ export async function processRecipe(
 
   if (existingRecipe) {
     // Update existing row: replace extracted fields + ingredients + set unverified
-    await deps.db.transaction(async (tx) => {
+    const applied = await deps.db.transaction(async (tx) => {
+      // Another delivery may finish while this job is waiting on extraction.
+      // Lock and recheck before replacing any reviewed measurements or links.
+      const [lockedRecipe] = await tx.select({ id: recipes.id, status: recipes.status })
+        .from(recipes).where(and(eq(recipes.id, existingRecipe.id), eq(recipes.shopId, data.shopId)))
+        .limit(1).for('update');
+      if (!lockedRecipe || lockedRecipe.status === 'verified' || lockedRecipe.status === 'unverified') return;
       const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
       // Re-extraction may yield a name another recipe already holds, so suffix
       // the duplicate ("Recipe Name (2)") instead of violating the (shopId, name) index.
@@ -403,9 +409,9 @@ export async function processRecipe(
       });
 
       if (bill.length) await tx.insert(recipeIngredients).values(bill);
-
+      return true;
     });
-
+    if (!applied) return;
     await linkRecipeFallbackPrices(deps.db, data.shopId, existingRecipe.id, deps.searchProduct);
     jobLogger.info(
       {
