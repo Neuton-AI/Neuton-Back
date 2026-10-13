@@ -9,7 +9,8 @@
  */
 import { config as loadDotenv } from 'dotenv';
 
-loadDotenv();
+const offline = process.env.NEUTON_OFFLINE_TESTS === '1';
+if (!offline) loadDotenv();
 
 process.env.NODE_ENV = 'test';
 
@@ -31,7 +32,13 @@ export const placeholderKeys: string[] = [];
 const definedBeforeFaking = new Set(Object.keys(process.env));
 
 for (const [key, value] of Object.entries(PLACEHOLDERS)) {
-  if (process.env[key]) continue;
+  if (key === 'DATABASE_URL' && process.env.NEUTON_TEST_DATABASE_URL) {
+    const target = new URL(process.env.NEUTON_TEST_DATABASE_URL);
+    if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Isolated test database must be local');
+    process.env.DATABASE_URL = process.env.NEUTON_TEST_DATABASE_URL;
+    continue;
+  }
+  if (!offline && process.env[key]) continue;
   process.env[key] = value;
   placeholderKeys.push(key);
 }

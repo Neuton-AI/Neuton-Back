@@ -1,6 +1,8 @@
+import { costRecipe } from './lib/recipeCosting.js';
+import { calculateOrderTotals } from './lib/pricing.js';
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, notInArray } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -23,7 +25,6 @@ import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { isHtmlSafe } from './lib/safeText.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
-import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import {
   findOrCreateInventoryItem as findOrCreateInventoryItemOn,
   type InventoryDb,
@@ -34,7 +35,6 @@ import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js'
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { searchProduct } from './lib/supermarket/prices.js';
-import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
 /**
@@ -143,7 +143,7 @@ export async function processReceipt(
       processingDeadline: deadline,
       updatedAt: new Date(),
     })
-    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath), notInArray(receipts.status, ['verified', 'unverified'])));
 
   const bytes = await deps.getObjectBytes(storagePath);
   checkDeadline(deadline);
@@ -169,29 +169,31 @@ export async function processReceipt(
 
   await deps.db.transaction(async (tx) => {
     const receiptRows = await tx
-      .select({ id: receipts.id })
+      .select({ id: receipts.id, status: receipts.status })
       .from(receipts)
       .where(
         and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)),
       )
-      .limit(1);
+      .limit(1).for('update');
     const receiptId = receiptRows[0]?.id;
+    if (receiptRows[0]?.status === 'verified' || receiptRows[0]?.status === 'unverified') return;
     if (!receiptId) {
       jobLogger.warn('receipt row missing for storage path');
       return;
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Clearing previous line items');
+    await updateReceiptProgress({ ...deps, db: tx as unknown as Database }, data.shopId, storagePath, 'validating', 'Clearing previous line items');
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
+    const lineTotals: (number | null)[] = [];
     for (let i = 0; i < extraction.items.length; i++) {
       checkDeadline(deadline);
       const item = extraction.items[i]!;
       const progress = 40 + Math.floor((i / extraction.items.length) * 40);
       await updateReceiptProgress(
-        deps,
+        { ...deps, db: tx as unknown as Database },
         data.shopId,
         storagePath,
         'validating',
@@ -216,11 +218,16 @@ export async function processReceipt(
       } else if (unitPrice === null && quantity !== null && quantity !== 0 && totalPrice !== null) {
         unitPrice = totalPrice / quantity;
       }
+      lineTotals.push(totalPrice);
       await tx.insert(receiptItems).values({
         shopId: data.shopId,
         receiptId,
         inventoryItemId: null,
         rawName: item.rawName,
+        rawSku: item.rawSku ?? null,
+        packageQuantity: item.packageQuantity == null ? null : qty(item.packageQuantity),
+        packageUnit: item.packageUnit ?? null,
+        packagesPerPurchase: item.packagesPerPurchase == null ? null : qty(item.packagesPerPurchase),
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),
@@ -230,12 +237,12 @@ export async function processReceipt(
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Saving receipt');
+    await updateReceiptProgress({ ...deps, db: tx as unknown as Database }, data.shopId, storagePath, 'validating', 'Saving receipt');
     await job.updateProgress(85);
 
-    const derivedTotal =
-      extraction.totalAmount ??
-      extraction.items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
+    const derivedTotal = extraction.totalAmount ??
+      (lineTotals.length > 0 && lineTotals.every(total => total !== null)
+        ? lineTotals.reduce<number>((sum, total) => sum + total!, 0) : null);
 
     // `status` and `progressStage` deliberately part ways here: the worker is
     // finished (progress stage `completed`) but the receipt is only extracted,
@@ -246,7 +253,7 @@ export async function processReceipt(
       .set({
         merchantName: extraction.merchantName,
         receiptDate: extraction.receiptDate,
-        totalAmount: money(derivedTotal),
+        totalAmount: derivedTotal === null ? null : money(derivedTotal),
         taxAmount: extraction.taxAmount === null ? null : money(extraction.taxAmount),
         currency: extraction.currency,
         status: 'unverified',
@@ -294,7 +301,7 @@ export async function processRecipe(
     await deps.db
       .update(recipes)
       .set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
-      .where(eq(recipes.id, existingRecipe.id));
+      .where(and(eq(recipes.id, existingRecipe.id), eq(recipes.shopId, data.shopId), notInArray(recipes.status, ['verified', 'unverified'])));
   }
 
   const bytes = await deps.getObjectBytes(storagePath);
@@ -341,18 +348,24 @@ export async function processRecipe(
       const found = await findOrCreateInventoryItemOn(
         handle,
         data.shopId,
-        ingredient.rawName,
+        ingredient.searchAbleName ?? ingredient.rawName,
         ingredient.unit,
         'recipe',
       );
-      if (found) linked.set(ingredient.rawName, found);
+      if (found && !ingredient.alternatives?.length) linked.set(ingredient.rawName, found);
     }
     return linked;
   };
 
   if (existingRecipe) {
     // Update existing row: replace extracted fields + ingredients + set unverified
-    await deps.db.transaction(async (tx) => {
+    const applied = await deps.db.transaction(async (tx) => {
+      // Another delivery may finish while this job is waiting on extraction.
+      // Lock and recheck before replacing any reviewed measurements or links.
+      const [lockedRecipe] = await tx.select({ id: recipes.id, status: recipes.status })
+        .from(recipes).where(and(eq(recipes.id, existingRecipe.id), eq(recipes.shopId, data.shopId)))
+        .limit(1).for('update');
+      if (!lockedRecipe || lockedRecipe.status === 'verified' || lockedRecipe.status === 'unverified') return;
       const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
       // Re-extraction may yield a name another recipe already holds, so suffix
       // the duplicate ("Recipe Name (2)") instead of violating the (shopId, name) index.
@@ -368,7 +381,7 @@ export async function processRecipe(
           name: uniqueName,
           description,
           prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
-          yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
+          yieldQuantity: yieldQuantity && yieldQuantity > 0 ? qty(yieldQuantity) : null,
           yieldUnit: yieldUnit ?? 'portion',
           allergens,
           instructions,
@@ -389,15 +402,17 @@ export async function processRecipe(
           inventoryItemId,
           rawName: ingredient.rawName,
           searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
-          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          unit: ingredient.unit ?? 'unit',
+          quantity: ingredient.quantity && ingredient.quantity > 0 ? qty(ingredient.quantity) : null,
+          unit: ingredient.unit,
+          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, conventionEvidence: ingredient.conventionEvidence, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
         };
       });
 
-      await tx.insert(recipeIngredients).values(bill);
-      await linkRecipeFallbackPrices(tx, data.shopId, existingRecipe.id, deps.searchProduct);
+      if (bill.length) await tx.insert(recipeIngredients).values(bill);
+      return true;
     });
-
+    if (!applied) return;
+    await linkRecipeFallbackPrices(deps.db, data.shopId, existingRecipe.id, deps.searchProduct);
     jobLogger.info(
       {
         recipeId: existingRecipe.id,
@@ -420,7 +435,7 @@ export async function processRecipe(
           name: uniqueName,
           description,
           prepTimeMinutes: Math.max(Math.round(prepTimeMinutes ?? 0), 0),
-          yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
+          yieldQuantity: yieldQuantity && yieldQuantity > 0 ? qty(yieldQuantity) : null,
           yieldUnit: yieldUnit ?? 'portion',
           allergens,
           instructions,
@@ -440,17 +455,19 @@ export async function processRecipe(
           inventoryItemId,
           rawName: ingredient.rawName,
           searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
-          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          unit: ingredient.unit ?? 'unit',
+          quantity: ingredient.quantity && ingredient.quantity > 0 ? qty(ingredient.quantity) : null,
+          unit: ingredient.unit,
+          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, conventionEvidence: ingredient.conventionEvidence, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
         };
       });
 
-      await tx.insert(recipeIngredients).values(bill);
-      await linkRecipeFallbackPrices(tx, data.shopId, recipe.id, deps.searchProduct);
+      if (bill.length) await tx.insert(recipeIngredients).values(bill);
+
 
       return recipe;
     });
 
+    await linkRecipeFallbackPrices(deps.db, data.shopId, inserted.id, deps.searchProduct);
     jobLogger.info(
       {
         recipeId: inserted.id,
@@ -497,7 +514,7 @@ export async function processOrderDocument(
     .where(and(eq(orders.id, data.orderId), eq(orders.shopId, data.shopId), isNull(orders.deletedAt)))
     .limit(1);
   const order = orderRows[0];
-  if (!order) {
+  if (!order || order.status !== 'processing') {
     jobLogger.warn({ orderId: data.orderId }, 'target order not found');
     return;
   }
@@ -522,7 +539,8 @@ export async function processOrderDocument(
     .map((item) => {
       const recipe = byName.get(item.name.trim().toLowerCase());
       if (!recipe) return null;
-      const quantity = item.quantity && item.quantity > 0 ? item.quantity : 1;
+      if (item.quantity == null || item.quantity <= 0) return null;
+      const quantity = item.quantity;
       return { recipe, quantity, unitPrice: item.unitPrice };
     })
     .filter((row): row is NonNullable<typeof row> => row !== null);
@@ -532,47 +550,19 @@ export async function processOrderDocument(
     return;
   }
 
-  const ingredientRows = await deps.db
-    .select({
-      recipeId: recipeIngredients.recipeId,
-      quantity: recipeIngredients.quantity,
-      averageUnitCost: recipeIngredientUnitCost,
-    })
-    .from(recipeIngredients)
-    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
-    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-    .where(eq(recipeIngredients.shopId, data.shopId));
-  const byRecipe = new Map<string, typeof ingredientRows>();
-  for (const row of ingredientRows) {
-    byRecipe.set(row.recipeId, [...(byRecipe.get(row.recipeId) ?? []), row]);
+  const priced = await Promise.all(matched.map(async row => {
+    const costing = await costRecipe(data.shopId, row.recipe, shop?.targetProfitMargin ?? '0', shop?.hourlyLaborCost ?? '0', deps.db);
+    return { recipeId: row.recipe.id, name: row.recipe.name, quantity: row.quantity,
+      unitCost: costing.unitCost, unitPrice: row.unitPrice ?? costing.retailPrice, costingSnapshot: costing };
+  }));
+  if (priced.some(row => row.unitPrice === null)) {
+    jobLogger.info('manual selling price required for incomplete recipes');
+    return;
   }
 
-  const priced = matched.map((row) => {
-    const breakdown = calculateUnitCost({
-      ingredients: (byRecipe.get(row.recipe.id) ?? []).map((i) => ({
-        quantity: i.quantity,
-        averageUnitCost: i.averageUnitCost ?? '0',
-      })),
-      prepTimeMinutes: row.recipe.prepTimeMinutes,
-      hourlyLaborCost: shop?.hourlyLaborCost ?? '0',
-      yieldQuantity: row.recipe.yieldQuantity,
-    });
-    const { retailPrice } = calculateRetailPrice(
-      breakdown.unitCost,
-      shop?.targetProfitMargin ?? '0',
-      row.recipe.targetMarginPct,
-    );
-    return {
-      recipeId: row.recipe.id,
-      // Snapshotted with the line: order history must survive renames (N-107).
-      name: row.recipe.name,
-      quantity: row.quantity,
-      unitCost: breakdown.unitCost,
-      unitPrice: row.unitPrice ?? retailPrice,
-    };
-  });
-
   await deps.db.transaction(async (tx) => {
+    const [lockedOrder] = await tx.select().from(orders).where(and(eq(orders.id, order.id), eq(orders.shopId, data.shopId))).for('update').limit(1);
+    if (!lockedOrder || lockedOrder.status !== 'processing') return;
     await tx.delete(orderItems).where(eq(orderItems.orderId, order.id));
     await tx.insert(orderItems).values(
       priced.map((row) => ({
@@ -581,13 +571,13 @@ export async function processOrderDocument(
         recipeId: row.recipeId,
         recipeName: row.name,
         quantity: qty(row.quantity),
-        unitCost: money(row.unitCost),
-        unitPrice: money(row.unitPrice),
+        unitCost: row.unitCost === null ? null : row.unitCost.toFixed(6),
+        costingSnapshot: row.costingSnapshot,
+        unitPrice: money(row.unitPrice!),
       })),
     );
 
-    const totalCost = priced.reduce((sum, row) => sum + row.quantity * row.unitCost, 0);
-    const subtotal = priced.reduce((sum, row) => sum + row.quantity * row.unitPrice, 0);
+    const totals = calculateOrderTotals({ items: priced, deliveryFee: toNumber(order.deliveryFee) });
 
     await tx
       .update(orders)
@@ -604,8 +594,9 @@ export async function processOrderDocument(
           isHtmlSafe(extraction.destinationAddress)
           ? { destinationAddress: extraction.destinationAddress }
           : {}),
-        totalCost: money(totalCost),
-        totalAmount: money(subtotal + toNumber(order.deliveryFee)),
+        totalCost: totals.totalCost === null ? null : money(totals.totalCost),
+        costingStatus: totals.totalCost === null ? 'unresolved' : priced.some(i => i.costingSnapshot.measurementState === 'estimated') ? 'estimated' : 'ready',
+        totalAmount: money(totals.totalAmount!),
       })
       .where(eq(orders.id, order.id));
   });

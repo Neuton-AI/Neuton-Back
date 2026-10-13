@@ -1,3 +1,4 @@
+import { parseNumber } from './measurements.js';
 import { round, toNumber } from './money.js';
 
 export interface RecipeIngredientInput {
@@ -18,10 +19,10 @@ export interface UnitCostBreakdown {
   /** (prep minutes ÷ 60) × hourly labor cost */
   laborCost: number;
   /** materials + labor */
-  batchCost: number;
+  batchCost: number | null;
   /** batchCost ÷ yield quantity */
-  unitCost: number;
-  yieldQuantity: number;
+  unitCost: number | null;
+  yieldQuantity: number | null;
 }
 
 export interface StockCheckInput {
@@ -38,6 +39,7 @@ export interface StockCheck {
 }
 
 /**
+ * Inputs must already share a verified quantity/rate basis. Use recipeCosting for raw measurements.
  * Unit Cost = ( Σ(ingredient qty × average_unit_cost) + (prep_minutes ÷ 60 × hourly_labor_cost) ) ÷ yield_quantity
  */
 export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
@@ -46,14 +48,15 @@ export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
     0,
   );
   const laborCost = (input.prepTimeMinutes / 60) * toNumber(input.hourlyLaborCost);
-  const batchCost = ingredientsCost + laborCost;
-  const yieldQuantity = Math.max(toNumber(input.yieldQuantity), 0.000001);
+  const yieldQuantity = parseNumber(input.yieldQuantity);
+  const complete = yieldQuantity !== null && yieldQuantity > 0 && input.ingredients.every(i => parseNumber(i.quantity) !== null && Number(i.quantity) > 0 && parseNumber(i.averageUnitCost) !== null && Number(i.averageUnitCost) >= 0);
+  const batchCost = complete ? ingredientsCost + laborCost : null;
 
   return {
     ingredientsCost: round(ingredientsCost, 4),
     laborCost: round(laborCost, 4),
-    batchCost: round(batchCost, 4),
-    unitCost: round(batchCost / yieldQuantity, 4),
+    batchCost: batchCost === null ? null : round(batchCost, 6),
+    unitCost: batchCost === null ? null : round(batchCost / yieldQuantity!, 6),
     yieldQuantity,
   };
 }
@@ -120,43 +123,47 @@ export function applyWeightedAverage(
   const oldQuantity = Math.max(toNumber(current.currentQuantity), 0);
   const oldAverage = toNumber(current.averageUnitCost);
   const purchased = Math.max(purchase.quantity, 0);
-  const newQuantity = round(oldQuantity + purchased, 3);
+  const newQuantity = round(oldQuantity + purchased, 6);
   const newAverage =
     newQuantity > 0 ? (oldQuantity * oldAverage + purchased * purchase.unitPrice) / newQuantity : oldAverage;
 
   return {
     currentQuantity: newQuantity,
-    lastUnitCost: round(purchase.unitPrice, 4),
-    averageUnitCost: round(newAverage, 4),
+    lastUnitCost: round(purchase.unitPrice, 10),
+    averageUnitCost: round(newAverage, 10),
   };
 }
 
 export interface OrderTotalsInput {
-  items: { quantity: number; unitCost: number; unitPrice: number }[];
+  items: { quantity: number; unitCost: number | null; unitPrice: number | null }[];
   deliveryFee: number;
 }
 
 /** Net profit = billed amount − delivery fee − production cost. */
 export function calculateOrderTotals(input: OrderTotalsInput) {
   const totalCost = input.items.reduce(
-    (sum, item) => sum + item.quantity * item.unitCost,
+    (sum, item) => sum + item.quantity * (item.unitCost ?? 0),
     0,
   );
   const itemsSubtotal = input.items.reduce(
-    (sum, item) => sum + item.quantity * item.unitPrice,
+    (sum, item) => sum + item.quantity * (item.unitPrice ?? 0),
     0,
   );
-  const totalAmount = round(itemsSubtotal + input.deliveryFee, 2);
+  const costsComplete = input.items.every(i => i.unitCost !== null);
+  const pricesComplete = input.items.every(i => i.unitPrice !== null);
+  const totalAmount = pricesComplete ? round(itemsSubtotal + input.deliveryFee, 2) : null;
   const deliveryFee = round(input.deliveryFee, 2);
-  const netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  const netProfit = costsComplete && totalAmount !== null ? round(totalAmount - deliveryFee - totalCost, 2) : null;
 
   return {
-    totalCost: round(totalCost, 2),
+    totalCost: costsComplete ? round(totalCost, 2) : null,
+    knownCostSubtotal: round(totalCost, 2),
+    costingComplete: costsComplete,
     totalAmount,
     deliveryFee,
     netProfit,
     profitMarginPercent:
-      totalAmount > 0 ? round((netProfit / totalAmount) * 100, 2) : 0,
+      netProfit !== null && totalAmount !== null ? totalAmount > 0 ? round((netProfit / totalAmount) * 100, 2) : 0 : null,
   };
 }
 
@@ -177,3 +184,4 @@ export function average(values: number[]): number {
   const total = values.reduce((sum, value) => sum + value, 0);
   return round(total / values.length, 2);
 }
+

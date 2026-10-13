@@ -4,6 +4,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -35,10 +36,12 @@ export const inventoryItems = pgTable('inventory_items', {
   sku: text('sku'),
   imageUrl: text('image_url'),
   unit: text('unit', { enum: INVENTORY_UNITS }).notNull(),
-  currentQuantity: numeric('current_quantity', { precision: 12, scale: 3 }).notNull().default('0'),
+  currentQuantity: numeric('current_quantity', { precision: 20, scale: 6 }).notNull().default('0'),
+  measurementStatus: text('measurement_status').notNull().default('ready'),
+  measurementEvidence: jsonb('measurement_evidence'),
   reorderLevel: numeric('reorder_level', { precision: 12, scale: 3 }),
-  lastUnitCost: numeric('last_unit_cost', { precision: 12, scale: 4 }),
-  averageUnitCost: numeric('average_unit_cost', { precision: 12, scale: 4 }),
+  lastUnitCost: numeric('last_unit_cost', { precision: 24, scale: 10 }),
+  averageUnitCost: numeric('average_unit_cost', { precision: 24, scale: 10 }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -59,7 +62,7 @@ export const recipes = pgTable('recipes', {
   description: text('description'),
   imageUrl: text('image_url'),
   prepTimeMinutes: integer('prep_time_minutes').notNull().default(0),
-  yieldQuantity: numeric('yield_quantity', { precision: 12, scale: 3 }).notNull().default('1'),
+  yieldQuantity: numeric('yield_quantity', { precision: 20, scale: 6 }),
   yieldUnit: text('yield_unit').notNull().default('portion'),
   targetMarginPct: numeric('target_margin_pct', { precision: 5, scale: 2 }),
   allergens: text('allergens').array(),
@@ -91,20 +94,29 @@ export const recipes = pgTable('recipes', {
 export const generalPrices = pgTable('general_prices', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   normalizedName: text('normalized_name').notNull(),
+  offerKey: text('offer_key').notNull(),
+  chainId: text('chain_id'),
+  subchainId: text('subchain_id'),
+  storeId: text('store_id'),
+  sourceUpdatedAt: text('source_updated_at'),
+  measurementStatus: text('measurement_status').notNull().default('unresolved'),
+  measurementReason: text('measurement_reason'),
+  measurementEvidence: jsonb('measurement_evidence'),
   barcode: text('barcode'),
   name: text('name').notNull(),
   manufacturer: text('manufacturer'),
   chain: text('chain', { enum: PRICE_CHAINS }).notNull(),
   priceIls: numeric('price_ils', { precision: 12, scale: 2 }).notNull(),
-  packageQuantity: numeric('package_quantity', { precision: 12, scale: 3 }),
+  packageQuantity: numeric('package_quantity', { precision: 20, scale: 6 }),
   packageUnit: text('package_unit'),
-  pricePerBaseUnit: numeric('price_per_base_unit', { precision: 12, scale: 4 }),
+  pricePerBaseUnit: numeric('price_per_base_unit', { precision: 24, scale: 10 }),
   sourceUrl: text('source_url'),
   fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  normalizedNameUnique: uniqueIndex('general_prices_normalized_name_unique').on(t.normalizedName),
+  offerUnique: uniqueIndex('general_prices_offer_key_unique').on(t.offerKey),
+  nameIdx: index('general_prices_normalized_name_idx').on(t.normalizedName),
   barcodeIdx: index('general_prices_barcode_idx').on(t.barcode),
 }));
 
@@ -124,24 +136,37 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   }),
   rawName: text('raw_name').notNull(),
   searchAbleName: text('search_able_name').notNull(),
-  quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
-  unit: text('unit').notNull(),
+  quantity: numeric('quantity', { precision: 20, scale: 6 }),
+  unit: text('unit'),
+  measurementContext: jsonb('measurement_context'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  recipeItemUnique: uniqueIndex('recipe_ingredients_recipe_id_inventory_item_id_unique').on(
-    t.recipeId,
-    t.inventoryItemId,
-  ),
-  recipeRawNameUnique: uniqueIndex('recipe_ingredients_recipe_id_raw_name_unique').on(
-    t.recipeId,
-    t.rawName,
-  ),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
   priceLinkCheck: check(
     'recipe_ingredients_price_link_check',
     sql`num_nonnulls(${t.inventoryItemId}, ${t.generalPriceId}) <= 1`,
   ),
 }));
+
+/** Shop-confirmed metadata is separate from public, changing price observations. */
+export const productMeasurements = pgTable('product_measurements', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'cascade' }),
+  productKey: text('product_key').notNull(),
+  packageQuantity: numeric('package_quantity', { precision: 20, scale: 6 }).notNull(),
+  packageUnit: text('package_unit').notNull(),
+  packagesPerPurchase: numeric('packages_per_purchase', { precision: 20, scale: 6 }).notNull().default('1'),
+  evidence: jsonb('evidence').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({ productUnique: uniqueIndex('product_measurements_shop_product_unique').on(t.shopId, t.productKey) }));
+
+export const ingredientConversions = pgTable('ingredient_conversions', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'cascade' }),
+  scopeKey: text('scope_key').notNull(),
+  profile: jsonb('profile').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => ({ scopeUnique: uniqueIndex('ingredient_conversions_shop_scope_unique').on(t.shopId, t.scopeKey) }));
 
 export type Category = typeof categories.$inferSelect;
 export type InventoryItem = typeof inventoryItems.$inferSelect;

@@ -16,14 +16,14 @@ export function money(value: number): string {
   return round(value, 2).toFixed(2);
 }
 
-/** Unit costs need 4dp precision in storage. */
+/** Rates use 10dp; round money only at accounting/display boundaries. */
 export function unitCost(value: number): string {
-  return round(value, 4).toFixed(4);
+  return round(value, 10).toFixed(10);
 }
 
-/** Quantities use 3dp precision in storage. */
+/** Normalized quantities use 6dp (sub-milligram/ml precision). */
 export function quantity(value: number): string {
-  return round(value, 3).toFixed(3);
+  return round(value, 6).toFixed(6);
 }
 
 export function marginPercent(value: string | number | null | undefined): number {

@@ -89,7 +89,7 @@ test('POST /orders stores plain text verbatim — the guard rejects, it never re
     'select:recipes': [
       [{ id: RECIPE_ID, name: 'Focaccia', prepTimeMinutes: 30, yieldQuantity: '4', targetMarginPct: null }],
     ],
-    'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '1.000', averageUnitCost: '2.00' }]],
+    'select:recipeIngredients': [[{ recipeId: RECIPE_ID, rawName: 'Flour', unit: 'kg', inventoryItemId: 'inv', generalPriceId: null, inventoryUnit: 'g', inventoryStatus: 'ready', quantity: '1.000', averageUnitCost: '.002', currentQuantity: '10000' }]],
     'update:shops': [[{ lastOrderNumber: 1 }]],
     'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
     'insert:orderItems': [[]],

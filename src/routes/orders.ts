@@ -1,3 +1,4 @@
+import { costRecipe } from '../lib/recipeCosting.js';
 import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -12,11 +13,8 @@ import { money, quantity as qty, toNumber } from '../lib/money.js';
 import {
   calculateDeliveryFee,
   calculateOrderTotals,
-  calculateRetailPrice,
-  calculateUnitCost,
 } from '../lib/pricing.js';
 import { recipeIngredients, inventoryItems, generalPrices } from '../db/schema/index.js';
-import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const orderItemSchema = z.object({
   recipeId: z.string().uuid(),
@@ -67,7 +65,7 @@ export const defaultOrdersDeps: OrdersDeps = { db };
 
 type PriceDb = Pick<Database, 'select'>;
 
-async function priceOrderItems(
+export async function priceOrderItems(
   database: PriceDb,
   shopId: string,
   shopMargin: string,
@@ -82,54 +80,15 @@ async function priceOrderItems(
     .from(recipes)
     .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)));
 
-  const ingredientRows = await database
-    .select({
-      recipeId: recipeIngredients.recipeId,
-      quantity: recipeIngredients.quantity,
-      averageUnitCost: recipeIngredientUnitCost,
-    })
-    .from(recipeIngredients)
-    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
-    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-    .where(eq(recipeIngredients.shopId, shopId));
-
-  const byRecipe = new Map<string, typeof ingredientRows>();
-  for (const row of ingredientRows) {
-    const list = byRecipe.get(row.recipeId) ?? [];
-    list.push(row);
-    byRecipe.set(row.recipeId, list);
-  }
-
-  return items.map((item) => {
-    const recipe = recipeRows.find((row) => row.id === item.recipeId);
-    if (!recipe) throw notFound(`Recipe ${item.recipeId} not found`);
-
-    const breakdown = calculateUnitCost({
-      ingredients: (byRecipe.get(recipe.id) ?? []).map((row) => ({
-        quantity: row.quantity,
-        averageUnitCost: row.averageUnitCost,
-      })),
-      prepTimeMinutes: recipe.prepTimeMinutes,
-      hourlyLaborCost,
-      yieldQuantity: recipe.yieldQuantity,
-    });
-
-    const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
-      breakdown.unitCost,
-      shopMargin,
-      recipe.targetMarginPct,
-    );
-
-    return {
-      recipeId: recipe.id,
-      name: recipe.name,
-      quantity: item.quantity,
-      unitCost: breakdown.unitCost,
-      unitPrice: item.unitPrice ?? retailPrice,
-      appliedProfitMargin: appliedMarginPercent,
-      retailPrice,
-    };
-  });
+  return Promise.all(items.map(async item => {
+    const recipe = recipeRows.find(row => row.id === item.recipeId);
+    if (!recipe) throw notFound('Recipe not found');
+    const costing = await costRecipe(shopId, recipe, shopMargin, hourlyLaborCost, database);
+    return { currency: costing.currency, recipeId: recipe.id, name: recipe.name, quantity: item.quantity,
+      unitCost: costing.unitCost, unitPrice: item.unitPrice ?? costing.retailPrice,
+      appliedProfitMargin: costing.appliedMarginPercent, retailPrice: costing.retailPrice,
+      costingStatus: costing.measurementState, reasons: costing.reasons, costingSnapshot: costing };
+  }));
 }
 
 export const orderRoutes: FastifyPluginAsync = async (app) => {
@@ -179,7 +138,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     return {
       orders: rows.map((order) => ({
         ...order,
-        netProfit: toNumber(order.totalAmount) - toNumber(order.deliveryFee) - toNumber(order.totalCost),
+        netProfit: order.totalCost === null ? null : toNumber(order.totalAmount) - toNumber(order.deliveryFee) - toNumber(order.totalCost),
       })),
       total: totalRows[0]?.count ?? 0,
     };
@@ -209,6 +168,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
         quantity: orderItems.quantity,
         unitCost: orderItems.unitCost,
         unitPrice: orderItems.unitPrice,
+        costingSnapshot: orderItems.costingSnapshot,
       })
       .from(orderItems)
       .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
@@ -219,7 +179,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       order: {
         ...order,
         items,
-        netProfit:
+        netProfit: order.totalCost === null ? null :
           toNumber(order.totalAmount) -
           toNumber(order.deliveryFee) -
           toNumber(order.totalCost),
@@ -262,7 +222,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return {
-      items: priced,
+      currency: shop.currency, items: priced,
       deliveryDistanceKm: body.deliveryDistanceKm,
       baseFee: toNumber(shop.deliveryBaseFee),
       ratePerKm: toNumber(shop.deliveryRatePerKm),
@@ -299,6 +259,8 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       deliveryFee,
     });
 
+    if (priced.some(item => item.unitPrice === null)) throw badRequest('Enter a manual selling price for recipes with incomplete costs');
+
     const created = await deps.db.transaction(async (tx) => {
       // One `UPDATE … RETURNING` both claims the next number and locks the
       // shop row until this transaction ends (N-105): concurrent creates queue
@@ -315,7 +277,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       const inserted = await tx
         .insert(orders)
         .values({
-          orderNumber: counter.lastOrderNumber,
+          currency: shop.currency, orderNumber: counter.lastOrderNumber,
           shopId: shop.id,
           userId: user.id,
           customerName: body.customerName ?? null,
@@ -324,11 +286,12 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
           deliveryDistanceKm: toNumber(body.deliveryDistanceKm).toFixed(2),
           deliveryFee: money(deliveryFee),
           appliedProfitMargin:
-            priced[0]?.appliedProfitMargin !== undefined
+            priced[0]?.appliedProfitMargin != null
               ? priced[0].appliedProfitMargin.toFixed(2)
               : null,
-          totalCost: money(totals.totalCost),
-          totalAmount: money(totals.totalAmount),
+          totalCost: totals.totalCost === null ? null : money(totals.totalCost),
+          costingStatus: totals.totalCost === null ? 'unresolved' : priced.some(i => i.costingStatus === 'estimated') ? 'estimated' : 'ready',
+          totalAmount: money(totals.totalAmount!),
           documentUrl: body.documentUrl ?? null,
           // The client can never set the lifecycle state on create:
           // every order starts as `processing`.
@@ -348,8 +311,9 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
           // prefers this over the live name (N-107).
           recipeName: item.name,
           quantity: qty(item.quantity),
-          unitCost: money(item.unitCost),
-          unitPrice: money(item.unitPrice),
+          unitCost: item.unitCost === null ? null : item.unitCost.toFixed(6),
+          costingSnapshot: item.costingSnapshot,
+          unitPrice: money(item.unitPrice!),
         })),
       );
 

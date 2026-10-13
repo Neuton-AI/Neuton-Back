@@ -153,30 +153,17 @@ test('inventory lookup: an unknown name is created at zero stock', async () => {
   assert.deepEqual(db.onlyCallTo('insert', 'inventoryItems').values, {
     shopId: SHOP_ID,
     name: 'Tahini',
-    unit: 'kg',
-    currentQuantity: '0.000',
+    unit: 'g',
+    currentQuantity: '0',
+    measurementStatus: 'ready',
   });
 });
 
-test('inventory lookup: only the six known units are stored, anything else becomes "unit"', async () => {
-  const cases: Array<[string | null, string]> = [
-    ['kg', 'kg'],
-    ['g', 'g'],
-    ['ml', 'ml'],
-    ['pack', 'pack'],
-    ['lbs', 'unit'],
-    ['null', 'unit'],
-    ['', 'unit'],
-    [null, 'unit'],
-  ];
-
-  for (const [supplied, expected] of cases) {
-    const { db, deps } = harness({
-      responses: { 'select:inventoryItems': [[]], 'insert:inventoryItems': [[{ id: 'inv-4' }]] },
-    });
-    await findOrCreateInventoryItem(deps, SHOP_ID, 'Saffron', supplied);
-    const created = db.onlyCallTo('insert', 'inventoryItems').values as { unit: string };
-    assert.equal(created.unit, expected, `unit ${String(supplied)} became ${created.unit}`);
+test('inventory lookup: unsupported units do not become invented counts', async () => {
+  for (const supplied of ['pack', 'null', '', null]) {
+    const { db, deps } = harness({ responses: { 'select:inventoryItems': [[]] } });
+    assert.equal(await findOrCreateInventoryItem(deps, SHOP_ID, 'Saffron', supplied), null);
+    assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
   }
 });
 
@@ -206,8 +193,9 @@ test('receipt: replaces the stored lines and hands a receipt to review inside on
     // marker `POST /receipts/:id/verify` reads.
     inventoryItemId: null,
     rawName: 'Flour',
-    quantity: '2.000',
-    unitPrice: '3.5000',
+    rawSku: null, packageQuantity: null, packageUnit: null, packagesPerPurchase: null,
+    quantity: '2.000000',
+    unitPrice: '3.5000000000',
     totalPrice: '7.00',
     unit: 'kg',
     confidence: '0.912',
@@ -226,7 +214,7 @@ test('receipt: replaces the stored lines and hands a receipt to review inside on
   assert.equal(patch.errorMessage, null, 'a previous failure message must be cleared');
 });
 
-test('receipt: the header total falls back to the sum of the line totals', async () => {
+test('receipt: the header total uses all readable and derivable line totals', async () => {
   const { db, deps, job, jobData } = harness({
     responses: { 'select:receipts': [[{ id: 'rcpt-1' }]], ...ONE_ITEM_EXTRACTED },
     extractions: {
@@ -242,7 +230,7 @@ test('receipt: the header total falls back to the sum of the line totals', async
   await processReceipt(deps, jobData, job);
 
   const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!.set as Record<string, unknown>;
-  assert.equal(patch.totalAmount, '7.00');
+  assert.equal(patch.totalAmount, '17.00');
 });
 
 test('receipt: a total reported by the model wins over the derived sum', async () => {
@@ -299,7 +287,7 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
 
   const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'unverified')!.set as Record<string, unknown>;
   assert.equal(patch.taxAmount, null);
-  assert.equal(patch.totalAmount, '0.00');
+  assert.equal(patch.totalAmount, null);
 });
 
 test('receipt: a missing line total is derived from quantity x unit price', async () => {
@@ -322,7 +310,7 @@ test('receipt: a missing line total is derived from quantity x unit price', asyn
 
   const line = db.onlyCallTo('insert', 'receiptItems').values as Record<string, unknown>;
   assert.equal(line.totalPrice, '7.00');
-  assert.equal(line.unitPrice, '3.5000');
+  assert.equal(line.unitPrice, '3.5000000000');
 });
 
 test('receipt: a missing unit price is derived from total / quantity', async () => {
@@ -344,7 +332,7 @@ test('receipt: a missing unit price is derived from total / quantity', async () 
   await processReceipt(deps, jobData, job);
 
   const line = db.onlyCallTo('insert', 'receiptItems').values as Record<string, unknown>;
-  assert.equal(line.unitPrice, '3.5000');
+  assert.equal(line.unitPrice, '3.5000000000');
   assert.equal(line.totalPrice, '7.00');
 });
 
@@ -472,7 +460,7 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
 
   const recipeRow = db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
   assert.equal(recipeRow.name, 'Focaccia');
-  assert.equal(recipeRow.yieldQuantity, '8.000');
+  assert.equal(recipeRow.yieldQuantity, '8.000000');
   assert.equal(recipeRow.yieldUnit, 'trays');
   assert.equal(recipeRow.prepTimeMinutes, 30);
 
@@ -484,7 +472,8 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       inventoryItemId: null,
       rawName: 'Flour',
       searchAbleName: 'Flour',
-      quantity: '2.000',
+      measurementContext: { qualifier: undefined, convention: undefined, conventionEvidence: undefined, alternatives: undefined, alternateMeasurements: undefined },
+      quantity: '2.000000',
       unit: 'kg',
     },
     {
@@ -493,7 +482,8 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       inventoryItemId: null,
       rawName: 'Salt',
       searchAbleName: 'Salt',
-      quantity: '1.000',
+      measurementContext: { qualifier: undefined, convention: undefined, conventionEvidence: undefined, alternatives: undefined, alternateMeasurements: undefined },
+      quantity: null,
       unit: 'kg',
     },
   ]);
@@ -523,11 +513,11 @@ test('recipe: a duplicate name is suffixed instead of failing the job', async ()
   }
 });
 
-test('recipe: both extraction paths apply external fallback before committing the recipe', async () => {
+test('recipe: both extraction paths fetch external fallback after the recipe commits', async () => {
   for (const existing of [false, true]) {
     const { db, deps, job, jobData } = harness({
       responses: {
-        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }], [{ id: 'rec-1', status: 'processing' }]] : [[]],
         'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
         'select:recipeIngredients': [[{ id: 'line-1', rawName: 'Flour', searchAbleName: 'Flour', inventoryItemId: null, generalPriceId: null }]],
         'insert:generalPrices': [[{ id: 'price-1' }]],
@@ -542,7 +532,7 @@ test('recipe: both extraction paths apply external fallback before committing th
     await processRecipe(deps, jobData, job);
     assert.deepEqual(queries, ['flour']);
     assert.equal(db.onlyCallTo('update', 'recipeIngredients').set?.generalPriceId, 'price-1');
-    assert.equal(db.onlyCallTo('update', 'recipeIngredients').inTransaction, true);
+    assert.equal(db.onlyCallTo('update', 'recipeIngredients').inTransaction, false);
     assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
   }
 });
@@ -559,7 +549,20 @@ test('recipe: queue redelivery preserves completed extractions and verified reci
   }
 });
 
-test('recipe: a missing or non-positive yield falls back to a single portion', async () => {
+test('recipe: extraction finishing after another delivery preserves reviewed measurements', async () => {
+  for (const status of ['unverified', 'verified']) {
+    const { db, deps, job, jobData } = harness({ responses: {
+      'select:recipes': [[{ id: 'rec-1', status: 'processing' }], [{ id: 'rec-1', status }]],
+    }, extractions: { recipe: RECIPE } });
+    await processRecipe(deps, jobData, job);
+    assert.equal(db.callsTo('delete', 'recipeIngredients').length, 0);
+    assert.equal(db.callsTo('insert', 'recipeIngredients').length, 0);
+    assert.equal(db.callsTo('update', 'recipes').length, 1, 'only the guarded processing claim is attempted');
+    assert.equal(db.callsTo('select', 'recipeIngredients').length, 0, 'no stale fallback writes');
+  }
+});
+
+test('recipe: a missing or non-positive yield remains unresolved', async () => {
   for (const yieldQuantity of [null, 0, -4]) {
     const { db, deps, job, jobData } = harness({
       responses: {
@@ -574,7 +577,7 @@ test('recipe: a missing or non-positive yield falls back to a single portion', a
     await processRecipe(deps, jobData, job);
 
     const recipeRow = db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
-    assert.equal(recipeRow.yieldQuantity, '1.000');
+    assert.equal(recipeRow.yieldQuantity, null);
     assert.equal(recipeRow.yieldUnit, 'portion');
   }
 });
@@ -646,7 +649,7 @@ test('recipe: a job that fails its transaction leaves no orphan inventory rows',
 test('recipe: retrying over an existing row clears a stale failure and resolves inventory in-transaction', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:recipes': [[{ id: 'rec-1' }]],
+      'select:recipes': [[{ id: 'rec-1', status: 'failed' }], [{ id: 'rec-1', status: 'processing' }]],
       'select:shops': [[{ hourlyLaborCost: '12.00', targetProfitMargin: '30.00' }]],
       'select:inventoryItems': [[{ id: 'inv-flour', name: 'Flour' }]],
       'insert:inventoryItems': [],
@@ -672,6 +675,7 @@ test('recipe: retrying over an existing row clears a stale failure and resolves 
 // ---------------------------------------------------------------------------
 
 const ORDER = {
+  status: 'processing',
   id: 'order-1',
   shopId: SHOP_ID,
   customerName: null,
@@ -685,17 +689,17 @@ const CATALOG_RECIPE = {
   id: 'rec-1',
   name: 'Focaccia',
   prepTimeMinutes: 0,
-  yieldQuantity: '1.000',
+  yieldQuantity: '1.000000',
   targetMarginPct: null,
 };
 
 test('order: prices matched lines from the catalog and folds in the delivery fee', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER }]],
+      'select:orders': [[{ ...ORDER }], [{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
-      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '2.000', averageUnitCost: '3.0000' }]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', rawName: 'Flour', quantity: '2.000000', unit: 'kg', inventoryItemId: 'inv', generalPriceId: null, inventoryUnit: 'g', inventoryStatus: 'ready', averageUnitCost: '.003', currentQuantity: '10000' }]],
       'insert:orderItems': [[]],
     },
     data: { kind: 'order', orderId: 'order-1' },
@@ -711,10 +715,10 @@ test('order: prices matched lines from the catalog and folds in the delivery fee
   await processOrderDocument(deps, jobData, job);
 
   const lines = db.onlyCallTo('insert', 'orderItems').values as Array<Record<string, unknown>>;
-  assert.deepEqual(lines, [
+  assert.deepEqual(lines.map(({ costingSnapshot, ...line }) => line), [
     // `recipeName` rides along with the line so renames never rewrite this
     // order (N-107).
-    { shopId: SHOP_ID, orderId: 'order-1', recipeId: 'rec-1', recipeName: 'Focaccia', quantity: '2.000', unitCost: '6.00', unitPrice: '9.00' },
+    { shopId: SHOP_ID, orderId: 'order-1', recipeId: 'rec-1', recipeName: 'Focaccia', quantity: '2.000000', unitCost: '6.000000', unitPrice: '9.00' },
   ]);
 
   const patch = db.onlyCallTo('update', 'orders').set as Record<string, unknown>;
@@ -727,7 +731,7 @@ test('order: prices matched lines from the catalog and folds in the delivery fee
 test('order: a stated unit price overrides the derived retail price', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER }]],
+      'select:orders': [[{ ...ORDER }], [{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
       'select:recipeIngredients': [[]],
@@ -748,7 +752,7 @@ test('order: a stated unit price overrides the derived retail price', async () =
 test('order: an existing customer name is never overwritten by the model', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER, customerName: 'Already Known', destinationAddress: 'Kept' }]],
+      'select:orders': [[{ ...ORDER, customerName: 'Already Known', destinationAddress: 'Kept' }], [{ ...ORDER, customerName: 'Already Known', destinationAddress: 'Kept' }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
       'select:recipeIngredients': [[]],
@@ -756,7 +760,7 @@ test('order: an existing customer name is never overwritten by the model', async
     },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: {
-      order: { customerName: 'Dana', destinationAddress: 'New address', items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }] },
+      order: { customerName: 'Dana', destinationAddress: 'New address', items: [{ name: 'Focaccia', quantity: 1, unitPrice: 20 }] },
     },
   });
 
@@ -770,7 +774,7 @@ test('order: an existing customer name is never overwritten by the model', async
 test('order: extracted text carrying HTML is never written (#116)', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER }]],
+      'select:orders': [[{ ...ORDER }], [{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
       'select:recipeIngredients': [[]],
@@ -784,7 +788,7 @@ test('order: extracted text carrying HTML is never written (#116)', async () => 
       order: {
         customerName: '<script>alert(1)</script>',
         destinationAddress: '<svg onload=alert(3)>',
-        items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }],
+        items: [{ name: 'Focaccia', quantity: 1, unitPrice: 20 }],
       },
     },
   });
@@ -796,10 +800,10 @@ test('order: extracted text carrying HTML is never written (#116)', async () => 
   assert.equal('destinationAddress' in patch, false, 'unsafe address leaves the order untouched');
 });
 
-test('order: a missing quantity is sold as one', async () => {
+test('order: a missing quantity remains unpriced', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER }]],
+      'select:orders': [[{ ...ORDER }], [{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
       'select:recipeIngredients': [[]],
@@ -811,8 +815,7 @@ test('order: a missing quantity is sold as one', async () => {
 
   await processOrderDocument(deps, jobData, job);
 
-  const lines = db.onlyCallTo('insert', 'orderItems').values as Array<Record<string, unknown>>;
-  assert.equal(lines[0]?.quantity, '1.000');
+  assert.equal(db.callsTo('insert', 'orderItems').length, 0);
 });
 
 test('order: a document with no target order writes nothing', async () => {
@@ -841,7 +844,7 @@ test('order: an unknown order is a no-op, not a crash', async () => {
 
 test('order: lines that match no recipe leave the order untouched', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
+    responses: { 'select:orders': [[{ ...ORDER }], [{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Mystery', quantity: 1, unitPrice: null }] } },
   });
@@ -941,7 +944,7 @@ test('terminal failure: a failing update is swallowed so the job still reports i
 
 test('runJob: routes every media kind to its handler', async () => {
   const orderRun = harness({
-    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
+    responses: { 'select:orders': [[{ ...ORDER }], [{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }] } },
   });

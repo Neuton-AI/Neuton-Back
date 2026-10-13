@@ -1,3 +1,6 @@
+import { resolveCatalogMeasurement, isFoodCandidate, type CatalogRecord } from './measurements.js';
+import type { Resolution } from '../measurements.js';
+import { isGlobalProductCode } from '../productIdentity.js';
 import {
   decodeHtmlEntities,
   extractHtmlBlocks,
@@ -16,6 +19,15 @@ export interface PriceResult {
   barcode: string;
   manufacturer?: string;
   score: number;
+  measurement?: Resolution;
+  evidence?: CatalogRecord;
+  sourceUrl?: string;
+  chainId?: string;
+  subchainId?: string;
+  storeId?: string;
+  sourceUpdatedAt?: string;
+  fetchedAt?: Date;
+  foodCandidate?: boolean;
 }
 
 export interface ShufersalFileEntry {
@@ -25,6 +37,7 @@ export interface ShufersalFileEntry {
 }
 
 const PRICE_ITEM_FIELDS = [
+  'UnitQty', 'bIsWeighted', 'QtyInPackage', 'ManufactureName',
   'ItemCode',
   'ItemName',
   'ManufacturerName',
@@ -283,112 +296,68 @@ function scoreMatch(name: string, barcode: string, manufacturer: string, query: 
   return Math.max(0, score);
 }
 
-export function parseXmlItems(xml: string): Array<{
-  ItemCode: string;
-  ItemName: string;
-  ManufacturerName: string;
-  ItemPrice: string;
-}> {
-  const blocks = extractXmlBlocks(xml, 'Item', PRICE_ITEM_FIELDS);
-  const items: Array<{
-    ItemCode: string;
-    ItemName: string;
-    ManufacturerName: string;
-    ItemPrice: string;
-  }> = [];
-  for (const block of blocks) {
-    const code = extractXmlElement(block, 'ItemCode');
-    const name = extractXmlElement(block, 'ItemName');
-    const man = extractXmlElement(block, 'ManufacturerName');
-    const price = extractXmlElement(block, 'ItemPrice');
-    if (code && name && price) {
-      items.push({
-        ItemCode: code,
-        ItemName: name,
-        ManufacturerName: man ?? '',
-        ItemPrice: price,
-      });
-    }
-  }
-  return items;
+export function parseXmlItems(xml: string): CatalogRecord[] {
+  return extractXmlBlocks(xml, 'Item', PRICE_ITEM_FIELDS).map(block => {
+    const record: CatalogRecord = {};
+    for (const field of PRICE_ITEM_FIELDS) record[field] = extractXmlElement(block, field) ?? '';
+    record.ManufacturerName = record.ManufacturerName || record.ManufactureName || '';
+    return record;
+  }).filter(r => r.ItemCode && r.ItemName && r.ItemPrice);
+}
+
+const catalogs = new Map<PriceChain, { expires: number; rows: PriceResult[] }>();
+const loading = new Map<PriceChain, Promise<PriceResult[]>>();
+async function loadCatalog(chain: PriceChain): Promise<PriceResult[]> {
+  const cached = catalogs.get(chain);
+  if (cached && cached.expires > Date.now()) return cached.rows;
+  const pending = loading.get(chain);
+  if (pending) return pending;
+  const promise = (async () => {
+    const url = await (chain === 'shufersal' ? getLatestShufersalFileUrl() : getLatestCarrefourFileUrl());
+    const xml = await fetchXml(url);
+    const context = { chainId: extractXmlElement(xml, 'ChainId') ?? undefined,
+      subchainId: extractXmlElement(xml, 'SubChainId') ?? undefined,
+      storeId: extractXmlElement(xml, 'StoreId') ?? undefined };
+    const fetchedAt = new Date();
+    const rows = parseXmlItems(xml).map(record => ({
+      chain, ...context, name: record.ItemName!, barcode: record.ItemCode!,
+      manufacturer: record.ManufacturerName, price: Number(record.ItemPrice), score: 0,
+      measurement: resolveCatalogMeasurement(record), evidence: record, sourceUrl: url,
+      sourceUpdatedAt: record.PriceUpdateDate, fetchedAt, foodCandidate: isFoodCandidate(record.ItemName!),
+    })).filter(row => Number.isFinite(row.price) && row.price >= 0);
+    catalogs.set(chain, { expires: Date.now() + getCacheTtlMs(), rows });
+    return rows;
+  })();
+  loading.set(chain, promise);
+  try { return await promise; } finally { loading.delete(chain); }
 }
 
 export async function searchProduct(query: string, limitPerChain = 15): Promise<PriceResult[]> {
-  if (!query || query.trim().length === 0) return [];
+  if (!query.trim()) return [];
+  const results = await Promise.allSettled((['shufersal', 'carrefour'] as const).map(async chain => {
+    const rows = await loadCatalog(chain);
+    return rows.filter(row => row.foodCandidate).map(row => ({ ...row,
+      score: scoreMatch(row.name, row.barcode, row.manufacturer ?? '', query),
+    })).filter(row => row.score > 0).sort((a,b) => b.score - a.score).slice(0, limitPerChain);
+  }));
+  return results.flatMap(r => r.status === 'fulfilled' ? r.value : []).sort((a,b) => b.score - a.score);
+}
 
-  const results: PriceResult[] = [];
-
-  const tasks: Array<Promise<void>> = [];
-
-  tasks.push(
-    (async () => {
-      try {
-        const url = await getLatestShufersalFileUrl();
-        const xml = await fetchXml(url);
-        const items = parseXmlItems(xml);
-        const scored = items
-          .map((item) => ({
-            item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufacturerName, query),
-          }))
-          .filter((s) => s.score > 0);
-        scored.sort((a, b) => b.score - a.score);
-        const top = scored.slice(0, limitPerChain);
-        for (const s of top) {
-          const price = parseFloat(s.item.ItemPrice);
-          if (Number.isFinite(price)) {
-            results.push({
-              chain: 'shufersal',
-              name: s.item.ItemName,
-              price,
-              barcode: s.item.ItemCode,
-              score: s.score,
-              ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
-            });
-          }
-        }
-      } catch (err) {
-        // ignore per-chain errors
-      }
-    })(),
-  );
-
-  tasks.push(
-    (async () => {
-      try {
-        const url = await getLatestCarrefourFileUrl();
-        const xml = await fetchXml(url);
-        const items = parseXmlItems(xml);
-        const scored = items
-          .map((item) => ({
-            item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufacturerName, query),
-          }))
-          .filter((s) => s.score > 0);
-        scored.sort((a, b) => b.score - a.score);
-        const top = scored.slice(0, limitPerChain);
-        for (const s of top) {
-          const price = parseFloat(s.item.ItemPrice);
-          if (Number.isFinite(price)) {
-            results.push({
-              chain: 'carrefour',
-              name: s.item.ItemName,
-              price,
-              barcode: s.item.ItemCode,
-              score: s.score,
-              ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
-            });
-          }
-        }
-      } catch (err) {
-        // ignore per-chain errors
-      }
-    })(),
-  );
-
-  await Promise.allSettled(tasks);
-
-  results.sort((a, b) => b.score - a.score);
-
-  return results;
+/** Exact product identity; local codes must be scoped to their retailer. */
+export function selectExactProduct(rows: PriceResult[], code: string, chain?: PriceChain): PriceResult | null {
+  if (!isGlobalProductCode(code) && !chain) return null;
+  const matches = rows.filter(row => row.barcode === code && (!chain || row.chain === chain));
+  const usable = matches.filter(row => row.measurement?.measurement);
+  if (!usable.length) return matches[0] ?? null;
+  const first = usable[0]!;
+  if (usable.some(row => row.measurement!.measurement!.unit !== first.measurement!.measurement!.unit ||
+    Math.abs(row.measurement!.measurement!.quantity - first.measurement!.measurement!.quantity) > .01)) {
+    return { ...first, measurement: { state: 'unresolved', reason: 'conflicting_measurements', measurement: null, provenance: [] } };
+  }
+  return first;
+}
+export async function lookupExactProduct(code: string, chain?: PriceChain): Promise<PriceResult | null> {
+  if (!isGlobalProductCode(code) && !chain) return null;
+  const results = await Promise.allSettled((chain ? [chain] : ['shufersal', 'carrefour'] as PriceChain[]).map(loadCatalog));
+  return selectExactProduct(results.flatMap(r => r.status === 'fulfilled' ? r.value : []), code, chain);
 }

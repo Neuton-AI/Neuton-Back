@@ -1,3 +1,4 @@
+import { canonicalUnit, parseNumber } from './measurements.js';
 import { GoogleGenAI, type Part } from '@google/genai';
 import { env } from '../env.js';
 import { geminiLogger } from './logger/index.js';
@@ -38,6 +39,10 @@ if (MODELS.length === 0) {
 }
 
 export interface ExtractedLineItem {
+  rawSku?: string | null;
+  packageQuantity?: number | null;
+  packageUnit?: string | null;
+  packagesPerPurchase?: number | null;
   rawName: string;
   quantity: number | null;
   unit: string | null;
@@ -56,6 +61,11 @@ export interface ReceiptExtraction {
 }
 
 export interface RecipeIngredient {
+  qualifier?: string | null;
+  convention?: string | null;
+  conventionEvidence?: string | null;
+  alternatives?: string[];
+  alternateMeasurements?: { quantity: number | null; unit: string | null }[];
   rawName: string;
   searchAbleName?: string | null;
   quantity: number | null;
@@ -94,6 +104,9 @@ const RECEIPT_SCHEMA = `{
         "properties": {
           "rawName": { "type": "string" },
           "rawSku": {"type": "string"},
+          "packageQuantity": {"type": "number"},
+          "packageUnit": {"type": "string"},
+          "packagesPerPurchase": {"type": "number"},
           "quantity": { "type": "number" },
           "unit": { "type": "string" },
           "unitPrice": { "type": "number" },
@@ -124,6 +137,11 @@ const RECIPE_SCHEMA = `{
         "properties": {
           "rawName": { "type": "string" },
           "searchAbleName": { "type": "string" },
+          "qualifier": {"type": "string"},
+          "convention": {"type": "string", "enum": ["us", "metric", "imperial"]},
+          "conventionEvidence": {"type": "string", "description": "Exact source quotation explicitly establishing the measurement convention; null when not stated"},
+          "alternatives": {"type": "array", "items": {"type": "string"}},
+          "alternateMeasurements": {"type": "array", "items": {"type": "object", "properties": {"quantity": {"type": "number"}, "unit": {"type": "string"}}}},
           "quantity": { "type": "number" },
           "unit": { "type": "string" }
         },
@@ -131,7 +149,7 @@ const RECIPE_SCHEMA = `{
       }
     }
   },
-  "required": ["name", "ingredients", "instructions", "prepTimeMinutes","yieldQuantity", "yieldUnit", "allergens", "ingredients"]
+  "required": ["name", "ingredients", "instructions", "prepTimeMinutes", "yieldQuantity", "yieldUnit", "allergens"]
 }`;
 
 const ORDER_SCHEMA = `{
@@ -156,20 +174,20 @@ const ORDER_SCHEMA = `{
 }`;
 
 const EXTRACT_RECEIPT_PROMPT = `Extract this shopping receipt.
-Return all the data in the receipt that we need in our response schema.
+Read every purchased line, including Hebrew right-to-left receipts. Keep each product name paired with its own code, quantity, price and paid total; the code and quantity/price can appear directly below the name. Never attach that row to the following product.
+Copy the full product name in the document's language. Exclude transaction, card and merchant identifiers from product codes.
+Preserve rawSku as a string, including leading zeros. Separate package count, packageQuantity/packageUnit (contents per inner package), and packagesPerPurchase (multipack count). For weighed purchases keep the measured quantity and its unit. Never infer package contents from price. Return all receipt fields.
+The receipt quantity "units" describes purchased packages, not the weight or volume inside them. Leave package contents null unless printed explicitly. Do not turn an unknown food package into contents 1 each. Contents printed in a product name belong only to that product.
+Check the alignment across the entire row: name on the right, code near the middle, price and paid total on the left. A quantity × price continuation immediately below belongs to the product above it, not to the next name. Reconcile the sum of paid line totals with the receipt total. Numeric-only text is not an additional product. Missing quantity is null, never default 1.
 Use null for anything you cannot read. Never invent values.`;
 
-const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
-Return all the data in the recipe that we need in our response schema.
-For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our searchAbleName.
-The searchAbleName should be:
-- firm and not ambiguous, not "or" or "maybe" a firm determination of what is the ingredient.
-- clean without any instructions or measures.
-Example of standartize 1: bad - "1 cup flour, sifted or raw", good - "flour" and unit will be "cup" quantity will be 1.
-Example of standartize 2: bad - "2 large eggs, room temperature", good - "eggs" and unit will be "large" quantity will be 2.
-Example of standartize 3: bad - "chocolate chips or chopped chocolate", good - "chocolate chips"
-Use null for anything you cannot read. Never invent values.
-`
+const EXTRACT_RECIPE_PROMPT = `Extract the recipe without inventing missing values. Preserve all separate ingredient lines.
+Read every bullet under the ingredient heading (including Hebrew מצרכים), even when fractions or units are visually split by right-to-left layout. Return a populated ingredients array for a readable ingredient list. Copy ingredient names in the document's language.
+Use an explicit gram weight in preference to an accompanying cup measurement; preserve alternateMeasurements.
+Preserve numeric fractions exactly: 1/4 = 0.25. Two large eggs = quantity 2, unit each, qualifier large.
+Separate preparation/size qualifiers from the measurement unit. Preserve all alternatives as an array including the first named choice, never silently select a substitute.
+Keep searchAbleName clean of measures/instructions, retaining ingredient attributes. When alternatives are not chosen leave searchAbleName null.
+Record a measurement convention only if the document explicitly establishes it, and quote that text in conventionEvidence; otherwise both are null. The document's language or ingredient weights do not establish a cup/spoon convention. Missing quantity, unit or yield stays null.`;
 
 const PROMPTS: Record<MediaKind, { instruction: string; schema: string }> = {
   receipt: {
@@ -206,10 +224,8 @@ export function asNumber(value: unknown): number | null {
     return Number.isFinite(value) ? value : null;
   }
   if (typeof value === 'string') {
-    const cleaned = value.replace(/[^0-9.\-]/g, '');
-    if (!cleaned || cleaned === '.' || cleaned === '-' || cleaned === '-.') return null;
-    const parsed = Number.parseFloat(cleaned);
-    return Number.isFinite(parsed) ? parsed : null;
+    const cleaned = value.trim().replace(/^(?:[₪$€£]|ILS|NIS|USD)\s*/, '').replace(/\s*(?:ILS|NIS|USD|₪)$/, '');
+    return parseNumber(cleaned.replace(/(?<=\d),(?=\d{3}(?:,|\.|$))/g, ''));
   }
   return null;
 }
@@ -326,7 +342,10 @@ async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContex
 
       const text = response.text;
       if (!text) throw new UnusableResponseError(model, 'returned no text');
-      return parseJson<T>(text);
+      const parsed = parseJson<T>(text);
+      const lines = (parsed as Record<string, unknown>)[kind === 'recipe' || kind === 'product' ? 'ingredients' : 'items'];
+      if (!Array.isArray(lines) || lines.length === 0) throw new UnusableResponseError(model, 'returned no document lines');
+      return parsed;
     },
     context,
   );
@@ -344,6 +363,10 @@ export async function extractReceipt(
     context,
   );
 
+  return mapReceiptExtraction(raw);
+}
+
+export function mapReceiptExtraction(raw: Record<string, unknown>): ReceiptExtraction {
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {
     merchantName: asString(raw.merchantName),
@@ -355,6 +378,10 @@ export async function extractReceipt(
       const item = (entry ?? {}) as Record<string, unknown>;
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
+        rawSku: asString(item.rawSku),
+        packageQuantity: asNumber(item.packageQuantity),
+        packageUnit: asString(item.packageUnit),
+        packagesPerPurchase: asNumber(item.packagesPerPurchase),
         quantity: asNumber(item.quantity),
         unit: asString(item.unit),
         unitPrice: asNumber(item.unitPrice),
@@ -371,6 +398,10 @@ export async function extractRecipe(
 ): Promise<RecipeExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
 
+  return mapRecipeExtraction(raw);
+}
+
+export function mapRecipeExtraction(raw: Record<string, unknown>): RecipeExtraction {
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
     name: asString(raw.name),
@@ -387,11 +418,45 @@ export async function extractRecipe(
     instructions: asString(raw.instructions),
     ingredients: ingredients.map((entry) => {
       const item = (entry ?? {}) as Record<string, unknown>;
+      let quantity = asNumber(item.quantity);
+      let unit = asString(item.unit);
+      let qualifier = asString(item.qualifier);
+      const conventionEvidence = asString(item.conventionEvidence);
+      const convention = conventionEvidence && ['us', 'metric', 'imperial'].includes(String(item.convention)) ? asString(item.convention) : null;
+      const alternatives = Array.isArray(item.alternatives) ? item.alternatives.map(asString).filter((v): v is string => v !== null) : [];
+      const primaryName = asString(item.searchAbleName);
+      if (alternatives.length && primaryName && !alternatives.includes(primaryName)) alternatives.unshift(primaryName);
+      const alternateMeasurements = Array.isArray(item.alternateMeasurements)
+        ? item.alternateMeasurements.map(value => {
+          const alternate = (value ?? {}) as Record<string, unknown>;
+          return { quantity: asNumber(alternate.quantity), unit: asString(alternate.unit) };
+        }) : [];
+      // Printed mass takes precedence over a model-selected cup/spoon equivalent.
+      // Keep both weights if they disagree so costing can require review.
+      const explicitWeight = alternateMeasurements.find(value => value.quantity !== null &&
+        value.quantity > 0 && ['g', 'kg', 'oz', 'lb'].includes(canonicalUnit(value.unit) ?? ''));
+      if (explicitWeight && !['g', 'kg', 'oz', 'lb'].includes(canonicalUnit(unit) ?? '')) {
+        alternateMeasurements.unshift({ quantity, unit });
+        alternateMeasurements.splice(alternateMeasurements.indexOf(explicitWeight), 1);
+        quantity = explicitWeight.quantity;
+        unit = explicitWeight.unit;
+      }
+      // Older model responses used egg size as the unit. Size is a qualifier.
+      if (/^(?:small|medium|large|extra large)$/i.test(unit ?? '') &&
+        /(?:\beggs?\b|ביצ)/i.test(asString(item.searchAbleName) ?? asString(item.rawName) ?? '')) {
+        qualifier ??= unit;
+        unit = 'each';
+      }
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
         searchAbleName: asString(item.searchAbleName),
-        quantity: asNumber(item.quantity),
-        unit: asString(item.unit),
+        qualifier,
+        convention,
+        conventionEvidence,
+        alternatives,
+        alternateMeasurements,
+        quantity,
+        unit,
       };
     }),
   };
