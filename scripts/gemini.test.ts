@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { asNumber } from '../src/lib/gemini.js';
+import { asNumber, mapRecipeExtraction, mapReceiptExtraction } from '../src/lib/gemini.js';
 
 // Regression cover for N-101: the vision model frequently answers numerics as
 // strings despite `responseSchema`, and the old `typeof === 'number'` check
@@ -37,4 +37,41 @@ test('asNumber: the unknowable stays null', async () => {
   assert.equal(asNumber('n/a'), null);
   assert.equal(asNumber({}), null);
   assert.equal(asNumber(true), null);
+});
+
+test('brownie source contract prefers explicit grams and preserves tsp, egg size, alternatives and yield', () => {
+  const recipe = mapRecipeExtraction({ name: 'Brownies', yieldQuantity: '16', yieldUnit: 'pieces', ingredients: [
+    { rawName: 'butter', quantity: .5, unit: 'cup', alternateMeasurements: [{ quantity: 115, unit: 'g' }] },
+    { rawName: 'sugar', quantity: 200, unit: 'g', alternateMeasurements: [{ quantity: 1, unit: 'cup' }] },
+    { rawName: 'eggs', quantity: 2, unit: 'large' },
+    { rawName: 'vanilla', quantity: 1, unit: 'tsp' },
+    { rawName: 'cocoa', quantity: 35, unit: 'g' },
+    { rawName: 'flour', quantity: 65, unit: 'g' },
+    { rawName: 'salt', quantity: '¼', unit: 'tsp' },
+    { rawName: 'baking powder', quantity: '1/4', unit: 'tsp', convention: 'us' },
+    { rawName: 'chocolate', quantity: 90, unit: 'g', alternatives: ['dark chocolate', 'chocolate chips'] },
+  ] });
+  assert.equal(recipe.yieldQuantity, 16);
+  assert.deepEqual(recipe.ingredients.map(i => i.quantity), [115, 200, 2, 1, 35, 65, .25, .25, 90]);
+  assert.equal(recipe.ingredients[0]?.unit, 'g');
+  assert.deepEqual(recipe.ingredients[0]?.alternateMeasurements, [{ quantity: .5, unit: 'cup' }]);
+  assert.equal(recipe.ingredients[2]?.unit, 'each');
+  assert.equal(recipe.ingredients[2]?.qualifier, 'large');
+  assert.equal(recipe.ingredients[7]?.unit, 'tsp');
+  assert.equal(recipe.ingredients[7]?.convention, null);
+  assert.equal(mapRecipeExtraction({ ingredients: [{ rawName: 'salt', quantity: 1, unit: 'tsp', convention: 'metric', conventionEvidence: 'Metric cup 250 ml' }] }).ingredients[0]?.convention, 'metric');
+  assert.deepEqual(recipe.ingredients[8]?.alternatives, ['dark chocolate', 'chocolate chips']);
+  assert.equal(mapRecipeExtraction({ ingredients: [{ rawName: 'unknown', alternateMeasurements: [null] }] }).ingredients[0]?.quantity, null);
+});
+
+test('receipt mapper preserves leading zeros, package structure and actual paid totals', () => {
+  const receipt = mapReceiptExtraction({ currency: 'ils', items: [
+    { rawName: 'lemon', rawSku: '00123457', quantity: .925, unit: 'kg', unitPrice: 9.9, totalPrice: 9.16 },
+    { rawName: 'cornstarch 500 g', quantity: 2, unit: 'unit', totalPrice: 14, packageQuantity: 500, packageUnit: 'g' },
+    { rawName: 'margarine', quantity: 8, unit: 'unit', unitPrice: 6.9, totalPrice: 55.2 },
+  ] });
+  assert.equal(receipt.currency, 'ILS');
+  assert.equal(receipt.items[0]?.rawSku, '00123457');
+  assert.equal(receipt.items[0]?.totalPrice, 9.16);
+  assert.equal(receipt.items[2]?.packageQuantity, null);
 });

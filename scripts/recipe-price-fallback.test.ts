@@ -65,8 +65,8 @@ test('name normalization handles Hebrew quotes and repeated spaces', () => {
 
 test('mixed inventory and fallback prices count as fully costed without claiming fallback stock', async () => {
   const db = new FakeDb({ 'select:recipeIngredients': [[
-    { inventoryItemId: 'inv-1', generalPriceId: null, rawName: 'Flour', quantity: '2', unit: 'kg', averageUnitCost: '4', currentQuantity: '10' },
-    { inventoryItemId: null, generalPriceId: 'price-1', rawName: 'Milk', quantity: '3', unit: 'unit', averageUnitCost: '6', currentQuantity: null },
+    { inventoryItemId: 'inv-1', generalPriceId: null, rawName: 'Flour', quantity: '2', unit: 'kg', inventoryUnit: 'g', inventoryStatus: 'ready', averageUnitCost: '.004', currentQuantity: '10000' },
+    { inventoryItemId: null, generalPriceId: 'price-1', rawName: 'Milk', quantity: '3', unit: 'each', priceIls: '6', packageQuantity: '1', packageUnit: 'each', priceStatus: 'ready', averageUnitCost: null, currentQuantity: null },
   ]] });
   const recipe = { id: 'recipe-1', prepTimeMinutes: 0, yieldQuantity: '2', targetMarginPct: '30' } as typeof recipes.$inferSelect;
   const costing = await costRecipe('shop-1', recipe, '30', '0', asDatabase(db));
@@ -78,5 +78,5 @@ test('mixed inventory and fallback prices count as fully costed without claiming
   assert.equal(costing.ingredients[1]?.lineCost, 18);
   assert.equal(costing.inStock, false);
   assert.notEqual(costing.retailPrice, '0.0000');
-  assert.deepEqual(db.onlyCallTo('select', 'recipeIngredients').joins, ['leftJoin', 'leftJoin']);
+  assert.deepEqual(db.onlyCallTo('select', 'recipeIngredients').joins, ['innerJoin', 'leftJoin', 'leftJoin']);
 });

@@ -83,6 +83,7 @@ export async function linkRecipeFallbackPrices(
     await database.update(recipeIngredients).set({ generalPriceId: saved.id }).where(and(
       eq(recipeIngredients.id, ingredient.id),
       eq(recipeIngredients.shopId, shopId),
+      eq(recipeIngredients.searchAbleName, ingredient.searchAbleName),
       isNull(recipeIngredients.inventoryItemId),
       isNull(recipeIngredients.generalPriceId),
     ));

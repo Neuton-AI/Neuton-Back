@@ -1,5 +1,6 @@
 import { normalizeMeasurement, parseNumber } from '../lib/measurements.js';
-import { ingredientConversions } from '../db/schema/index.js';
+import { ingredientConversions, productMeasurements } from '../db/schema/index.js';
+import { offerMeasurementKey } from '../lib/productIdentity.js';
 import { costRecipe } from '../lib/recipeCosting.js';
 import { z } from 'zod';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
@@ -18,14 +19,9 @@ import { notFound, conflict, forbidden, badRequest } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
-import {
-  calculateRetailPrice,
-  calculateUnitCost,
-  checkBatchStock,
-} from '../lib/pricing.js';
 import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js';
+import { linkRecipeFallbackPrices } from '../lib/recipePriceFallback.js';
 import { defaultReceiptsDeps, verifyItemSchema } from './receipts.js';
-import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
@@ -507,8 +503,10 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       convention: z.enum(['us', 'metric', 'imperial']).nullable().optional(),
       selectedAlternative: htmlFree(z.string().max(160)).optional(), inventoryItemId: z.string().uuid().optional(),
       profile: profileSchema.optional(), scope: z.enum(['recipe', 'ingredient', 'product']).default('recipe'),
+      packageContents: z.object({ quantity: z.number().positive(), unit: z.enum(['g', 'kg', 'ml', 'l', 'each']), packagesPerPurchase: z.number().positive().default(1) }).optional(),
+      saveProductMeasurement: z.boolean().default(false),
     }).parse(request.body);
-    return db.transaction(async tx => {
+    const result = await db.transaction(async tx => {
       const [row] = await tx.select().from(recipeIngredients).where(and(eq(recipeIngredients.id, lineId), eq(recipeIngredients.recipeId, recipeId), eq(recipeIngredients.shopId, shop.id))).for('update').limit(1);
       if (!row) throw notFound('Ingredient not found');
       const context = (row.measurementContext ?? {}) as import('../lib/recipeCosting.js').MeasurementContext;
@@ -517,12 +515,33 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         const [item] = await tx.select().from(inventoryItems).where(and(eq(inventoryItems.id, body.inventoryItemId), eq(inventoryItems.shopId, shop.id))).limit(1);
         if (!item) throw notFound('Inventory item not found');
       }
-      const profile = body.profile ? { ...body.profile, convention: body.convention ?? context.convention,
+      const profile = body.profile ? { ...body.profile, qualifier: body.profile.qualifier ?? context.qualifier, convention: body.convention ?? context.convention,
         source: 'shop-confirmed:' + currentUser(request).id, version: new Date().toISOString(), estimated: false } : undefined;
       const nextContext = { ...context,
         ...(body.convention !== undefined ? { convention: body.convention } : {}),
         ...(body.selectedAlternative ? { selectedAlternative: body.selectedAlternative } : {}),
         ...(profile ? { profile } : {}), confirmedBy: currentUser(request).id };
+      if (body.inventoryItemId || body.selectedAlternative) {
+        delete nextContext.catalogPackage;
+        if (!profile) delete nextContext.profile;
+      }
+      if (profile && body.scope !== 'recipe') delete nextContext.profile;
+      if (body.packageContents) {
+        if (!row.generalPriceId || body.inventoryItemId || body.selectedAlternative) throw badRequest('Confirm contents for the currently matched catalog product');
+        const [offer] = await tx.select().from(generalPrices).where(eq(generalPrices.id, row.generalPriceId)).limit(1);
+        if (!offer) throw notFound('Catalog product not found');
+        const contents = normalizeMeasurement(body.packageContents.quantity, body.packageContents.unit).measurement!;
+        const version = new Date();
+        const evidence = { source: 'shop-confirmed:' + currentUser(request).id, version: version.toISOString(), original: body.packageContents };
+        const confirmed = { ...contents, quantity: contents.quantity * body.packageContents.packagesPerPurchase, source: evidence.source, version: evidence.version };
+        if (body.saveProductMeasurement) {
+          const saved = { shopId: shop.id, productKey: offerMeasurementKey(offer), packageQuantity: qty(contents.quantity), packageUnit: contents.unit,
+            packagesPerPurchase: qty(body.packageContents.packagesPerPurchase), evidence, updatedAt: version };
+          await tx.insert(productMeasurements).values(saved).onConflictDoUpdate({ target: [productMeasurements.shopId, productMeasurements.productKey], set: saved });
+          // Shared product corrections remain live; order snapshots retain their version.
+          delete nextContext.catalogPackage;
+        } else nextContext.catalogPackage = confirmed;
+      }
       // Changes are resolved from source fields on every read, never stale derived fields.
       await tx.update(recipeIngredients).set({
         ...(body.quantity !== undefined ? { quantity: qty(body.quantity) } : {}), ...(body.unit !== undefined ? { unit: body.unit } : {}),
@@ -539,6 +558,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       }
       return { ok: true };
     });
+    if (body.selectedAlternative && !body.inventoryItemId) await linkRecipeFallbackPrices(db, shop.id, recipeId);
+    return result;
   });
 
   app.delete('/inventory/:id', mutationGuards, async (request) => {
@@ -579,7 +600,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         db: deps.db,
         shopId: shop.id,
         userId: user.id,
-        receiptId: id,
+        receiptId: id, currency: shop.currency,
         items: body.items,
       });
 

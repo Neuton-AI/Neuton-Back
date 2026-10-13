@@ -49,8 +49,8 @@ test('unit cost: zero yield does not produce Infinity or NaN', () => {
     hourlyLaborCost: 0,
     yieldQuantity: 0,
   });
-  assert.ok(Number.isFinite(result.unitCost), `unitCost was ${result.unitCost}`);
-  assert.equal(result.unitCost, 10_000_000);
+  assert.equal(result.unitCost, null);
+  assert.equal(result.batchCost, null);
 });
 
 test('retail price: recipe margin overrides shop margin', () => {

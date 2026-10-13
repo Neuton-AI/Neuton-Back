@@ -3,7 +3,7 @@ import { canonicalUnit, normalizeMeasurement, parseMeasurementText, parseNumber,
 export interface PurchaseInput {
   rawName: string; quantity: unknown; unit: unknown; unitPrice: unknown; totalPrice: unknown;
   packageQuantity?: unknown; packageUnit?: unknown; packagesPerPurchase?: unknown;
-  currency?: string | null; discountConfirmed?: boolean;
+  currency?: string | null; expectedCurrency?: string | null; discountConfirmed?: boolean;
 }
 export interface NormalizedPurchase extends Resolution { paidAmount: number | null; rate: number | null }
 export function normalizePurchase(input: PurchaseInput): NormalizedPurchase {
@@ -11,7 +11,7 @@ export function normalizePurchase(input: PurchaseInput): NormalizedPurchase {
   const paid = parseNumber(input.totalPrice);
   const unitPrice = parseNumber(input.unitPrice);
   const fail = (reason: string): NormalizedPurchase => ({ ...unresolved(reason), paidAmount: paid, rate: null });
-  if (input.currency !== 'ILS') return fail('unsupported_currency');
+  if (!input.currency || input.currency !== (input.expectedCurrency ?? 'ILS')) return fail('unsupported_currency');
   if (count === null || count <= 0) return fail('missing_quantity');
   const amount = paid ?? (unitPrice !== null ? count * unitPrice : null);
   if (amount === null || amount < 0) return fail('missing_price');

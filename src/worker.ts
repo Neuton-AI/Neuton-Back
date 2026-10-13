@@ -2,7 +2,7 @@ import { costRecipe } from './lib/recipeCosting.js';
 import { calculateOrderTotals } from './lib/pricing.js';
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, notInArray } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -25,7 +25,6 @@ import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { isHtmlSafe } from './lib/safeText.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
-import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import {
   findOrCreateInventoryItem as findOrCreateInventoryItemOn,
   type InventoryDb,
@@ -36,7 +35,6 @@ import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js'
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { searchProduct } from './lib/supermarket/prices.js';
-import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 
 /**
@@ -145,7 +143,7 @@ export async function processReceipt(
       processingDeadline: deadline,
       updatedAt: new Date(),
     })
-    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+    .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath), notInArray(receipts.status, ['verified', 'unverified'])));
 
   const bytes = await deps.getObjectBytes(storagePath);
   checkDeadline(deadline);
@@ -171,29 +169,31 @@ export async function processReceipt(
 
   await deps.db.transaction(async (tx) => {
     const receiptRows = await tx
-      .select({ id: receipts.id })
+      .select({ id: receipts.id, status: receipts.status })
       .from(receipts)
       .where(
         and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)),
       )
-      .limit(1);
+      .limit(1).for('update');
     const receiptId = receiptRows[0]?.id;
+    if (receiptRows[0]?.status === 'verified' || receiptRows[0]?.status === 'unverified') return;
     if (!receiptId) {
       jobLogger.warn('receipt row missing for storage path');
       return;
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Clearing previous line items');
+    await updateReceiptProgress({ ...deps, db: tx as unknown as Database }, data.shopId, storagePath, 'validating', 'Clearing previous line items');
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
+    const lineTotals: (number | null)[] = [];
     for (let i = 0; i < extraction.items.length; i++) {
       checkDeadline(deadline);
       const item = extraction.items[i]!;
       const progress = 40 + Math.floor((i / extraction.items.length) * 40);
       await updateReceiptProgress(
-        deps,
+        { ...deps, db: tx as unknown as Database },
         data.shopId,
         storagePath,
         'validating',
@@ -218,6 +218,7 @@ export async function processReceipt(
       } else if (unitPrice === null && quantity !== null && quantity !== 0 && totalPrice !== null) {
         unitPrice = totalPrice / quantity;
       }
+      lineTotals.push(totalPrice);
       await tx.insert(receiptItems).values({
         shopId: data.shopId,
         receiptId,
@@ -236,12 +237,12 @@ export async function processReceipt(
     }
 
     checkDeadline(deadline);
-    await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Saving receipt');
+    await updateReceiptProgress({ ...deps, db: tx as unknown as Database }, data.shopId, storagePath, 'validating', 'Saving receipt');
     await job.updateProgress(85);
 
-    const derivedTotal =
-      extraction.totalAmount ??
-      extraction.items.reduce((sum, item) => sum + (item.totalPrice ?? 0), 0);
+    const derivedTotal = extraction.totalAmount ??
+      (lineTotals.length > 0 && lineTotals.every(total => total !== null)
+        ? lineTotals.reduce<number>((sum, total) => sum + total!, 0) : null);
 
     // `status` and `progressStage` deliberately part ways here: the worker is
     // finished (progress stage `completed`) but the receipt is only extracted,
@@ -252,7 +253,7 @@ export async function processReceipt(
       .set({
         merchantName: extraction.merchantName,
         receiptDate: extraction.receiptDate,
-        totalAmount: money(derivedTotal),
+        totalAmount: derivedTotal === null ? null : money(derivedTotal),
         taxAmount: extraction.taxAmount === null ? null : money(extraction.taxAmount),
         currency: extraction.currency,
         status: 'unverified',
@@ -397,11 +398,11 @@ export async function processRecipe(
           searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: ingredient.quantity && ingredient.quantity > 0 ? qty(ingredient.quantity) : null,
           unit: ingredient.unit,
-          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
+          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, conventionEvidence: ingredient.conventionEvidence, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
         };
       });
 
-      await tx.insert(recipeIngredients).values(bill);
+      if (bill.length) await tx.insert(recipeIngredients).values(bill);
 
     });
 
@@ -450,11 +451,11 @@ export async function processRecipe(
           searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
           quantity: ingredient.quantity && ingredient.quantity > 0 ? qty(ingredient.quantity) : null,
           unit: ingredient.unit,
-          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
+          measurementContext: { qualifier: ingredient.qualifier, convention: ingredient.convention, conventionEvidence: ingredient.conventionEvidence, alternatives: ingredient.alternatives, alternateMeasurements: ingredient.alternateMeasurements },
         };
       });
 
-      await tx.insert(recipeIngredients).values(bill);
+      if (bill.length) await tx.insert(recipeIngredients).values(bill);
 
 
       return recipe;

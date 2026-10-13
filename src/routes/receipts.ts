@@ -261,7 +261,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       db: deps.db,
       shopId: shop.id,
       userId: user.id,
-      receiptId: id,
+      receiptId: id, currency: shop.currency,
       items: body.items,
     });
 
@@ -288,15 +288,20 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       if (receipt.status !== 'unverified') throw conflict('Only extracted, unverified purchases can be edited');
       const [line] = await tx.select().from(receiptItems).where(and(eq(receiptItems.id, lineId), eq(receiptItems.receiptId, id), eq(receiptItems.shopId, shop.id))).limit(1);
       if (!line) throw notFound('Receipt line not found');
+      const identityChanged = (body.rawSku != null && body.rawSku !== line.rawSku) ||
+        (body.codeChain != null && body.codeChain !== line.codeChain);
       await tx.update(receiptItems).set({
+        ...(body.rawName ? { rawName: body.rawName } : {}),
         ...(body.quantity != null ? { quantity: body.quantity.toFixed(6) } : {}),
         ...(body.unitPrice != null ? { unitPrice: body.unitPrice.toFixed(4) } : {}),
         ...(body.totalPrice != null ? { totalPrice: body.totalPrice.toFixed(2) } : {}),
         ...(body.rawSku ? { rawSku: body.rawSku } : {}), ...(body.codeChain ? { codeChain: body.codeChain } : {}),
         ...(body.unit ? { unit: body.unit } : {}),
+        ...(identityChanged ? { packageQuantity: null, packageUnit: null, packagesPerPurchase: null } : {}),
         ...(body.packageQuantity ? { packageQuantity: body.packageQuantity.toFixed(6), packageUnit: body.packageUnit } : {}),
         ...(body.packagesPerPurchase ? { packagesPerPurchase: body.packagesPerPurchase.toFixed(6) } : {}),
         measurementStatus: 'unresolved', measurementReason: null,
+        normalizedQuantity: null, normalizedUnit: null, normalizedRate: null,
         measurementEvidence: { confirmedBy: currentUser(request).id, discountConfirmed: body.discountConfirmed ?? false, saveProductMeasurement: body.saveProductMeasurement ?? false },
       }).where(eq(receiptItems.id, lineId));
       return { ok: true };
@@ -309,7 +314,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = verifySchema.parse(request.body);
     return verifyReceipt({ db: deps.db, shopId: shop.id, userId: currentUser(request).id,
-      receiptId: id, items: body.items, deferred: true });
+      receiptId: id, currency: shop.currency, items: body.items, deferred: true });
   });
 
   app.get('/receipts', guards, async (request) => {

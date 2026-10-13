@@ -36,6 +36,7 @@ export const orders = pgTable('orders', {
     .default('0.00'),
   deliveryFee: numeric('delivery_fee', { precision: 10, scale: 2 }).notNull().default('0.00'),
   appliedProfitMargin: numeric('applied_profit_margin', { precision: 5, scale: 2 }),
+  currency: text('currency'),
   totalCost: numeric('total_cost', { precision: 10, scale: 2 }),
   costingStatus: text('costing_status').notNull().default('unresolved'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull().default('0.00'),

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { normalizeMeasurement, parseNumber, parseMeasurementText, convertRequirement } from '../src/lib/measurements.js';
 import { normalizePurchase } from '../src/lib/purchaseNormalization.js';
 import { applyWeightedAverage } from '../src/lib/pricing.js';
+import { unitCost, quantity } from '../src/lib/money.js';
 
 test('fractions and invalid quantities survive parsing', () => {
   for (const value of [.25, '0.25', '1/4', '¼']) assert.equal(parseNumber(value), .25);
@@ -43,4 +44,23 @@ test('mixed normalized purchases maintain quantity and value', () => {
   const b = applyWeightedAverage(a, { quantity: next.measurement!.quantity, unitPrice: next.rate! });
   assert.equal(b.currentQuantity, 1500);
   assert.ok(Math.abs(b.averageUnitCost * 1500 - 35) < 1e-6);
+});
+
+test('weighed purchases ignore package factors; discounts and currencies require confirmation', () => {
+  const base = { rawName: 'lemon', quantity: .925, unit: 'kg', unitPrice: 9.9, totalPrice: 9.16, currency: 'ILS' };
+  assert.equal(normalizePurchase({ ...base, packageQuantity: 1000, packageUnit: 'g', packagesPerPurchase: 5 }).measurement?.quantity, 925);
+  assert.equal(normalizePurchase({ ...base, totalPrice: 8 }).reason, 'conflicting_price');
+  assert.equal(normalizePurchase({ ...base, totalPrice: 8, discountConfirmed: true }).paidAmount, 8);
+  assert.equal(normalizePurchase({ ...base, currency: 'USD' }).reason, 'unsupported_currency');
+  assert.equal(normalizePurchase({ ...base, currency: 'USD', expectedCurrency: 'USD' }).state, 'ready');
+});
+
+test('small inexpensive purchases retain six quantity and ten rate decimals', () => {
+  const purchase = normalizePurchase({ rawName: 'salt', quantity: 500, unit: 'g', unitPrice: .000003, totalPrice: .0015, currency: 'ILS' });
+  assert.equal(unitCost(purchase.rate!), '0.0000030000');
+  assert.equal(quantity(.125), '0.125000');
+  assert.ok(Math.abs(Number(unitCost(purchase.rate!)) * 500 - .0015) < 1e-10);
+  const grams = normalizeMeasurement(1, 'oz').measurement!.quantity;
+  assert.ok(Math.abs(grams - 28.349523125) < 1e-9);
+  assert.ok(Math.abs(normalizeMeasurement(grams / 1000, 'kg').measurement!.quantity - grams) < 1e-9);
 });

@@ -13,11 +13,8 @@ import { money, quantity as qty, toNumber } from '../lib/money.js';
 import {
   calculateDeliveryFee,
   calculateOrderTotals,
-  calculateRetailPrice,
-  calculateUnitCost,
 } from '../lib/pricing.js';
 import { recipeIngredients, inventoryItems, generalPrices } from '../db/schema/index.js';
-import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const orderItemSchema = z.object({
   recipeId: z.string().uuid(),
@@ -87,7 +84,7 @@ export async function priceOrderItems(
     const recipe = recipeRows.find(row => row.id === item.recipeId);
     if (!recipe) throw notFound('Recipe not found');
     const costing = await costRecipe(shopId, recipe, shopMargin, hourlyLaborCost, database);
-    return { recipeId: recipe.id, name: recipe.name, quantity: item.quantity,
+    return { currency: costing.currency, recipeId: recipe.id, name: recipe.name, quantity: item.quantity,
       unitCost: costing.unitCost, unitPrice: item.unitPrice ?? costing.retailPrice,
       appliedProfitMargin: costing.appliedMarginPercent, retailPrice: costing.retailPrice,
       costingStatus: costing.measurementState, reasons: costing.reasons, costingSnapshot: costing };
@@ -225,7 +222,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return {
-      items: priced,
+      currency: shop.currency, items: priced,
       deliveryDistanceKm: body.deliveryDistanceKm,
       baseFee: toNumber(shop.deliveryBaseFee),
       ratePerKm: toNumber(shop.deliveryRatePerKm),
@@ -280,7 +277,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       const inserted = await tx
         .insert(orders)
         .values({
-          orderNumber: counter.lastOrderNumber,
+          currency: shop.currency, orderNumber: counter.lastOrderNumber,
           shopId: shop.id,
           userId: user.id,
           customerName: body.customerName ?? null,

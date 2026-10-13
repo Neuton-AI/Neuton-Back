@@ -155,6 +155,7 @@ export const productMeasurements = pgTable('product_measurements', {
   productKey: text('product_key').notNull(),
   packageQuantity: numeric('package_quantity', { precision: 20, scale: 6 }).notNull(),
   packageUnit: text('package_unit').notNull(),
+  packagesPerPurchase: numeric('packages_per_purchase', { precision: 20, scale: 6 }).notNull().default('1'),
   evidence: jsonb('evidence').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => ({ productUnique: uniqueIndex('product_measurements_shop_product_unique').on(t.shopId, t.productKey) }));

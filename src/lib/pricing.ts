@@ -1,3 +1,4 @@
+import { parseNumber } from './measurements.js';
 import { round, toNumber } from './money.js';
 
 export interface RecipeIngredientInput {
@@ -18,10 +19,10 @@ export interface UnitCostBreakdown {
   /** (prep minutes ÷ 60) × hourly labor cost */
   laborCost: number;
   /** materials + labor */
-  batchCost: number;
+  batchCost: number | null;
   /** batchCost ÷ yield quantity */
-  unitCost: number;
-  yieldQuantity: number;
+  unitCost: number | null;
+  yieldQuantity: number | null;
 }
 
 export interface StockCheckInput {
@@ -38,6 +39,7 @@ export interface StockCheck {
 }
 
 /**
+ * Inputs must already share a verified quantity/rate basis. Use recipeCosting for raw measurements.
  * Unit Cost = ( Σ(ingredient qty × average_unit_cost) + (prep_minutes ÷ 60 × hourly_labor_cost) ) ÷ yield_quantity
  */
 export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
@@ -46,14 +48,15 @@ export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
     0,
   );
   const laborCost = (input.prepTimeMinutes / 60) * toNumber(input.hourlyLaborCost);
-  const batchCost = ingredientsCost + laborCost;
-  const yieldQuantity = Math.max(toNumber(input.yieldQuantity), 0.000001);
+  const yieldQuantity = parseNumber(input.yieldQuantity);
+  const complete = yieldQuantity !== null && yieldQuantity > 0 && input.ingredients.every(i => parseNumber(i.quantity) !== null && Number(i.quantity) > 0 && parseNumber(i.averageUnitCost) !== null && Number(i.averageUnitCost) >= 0);
+  const batchCost = complete ? ingredientsCost + laborCost : null;
 
   return {
     ingredientsCost: round(ingredientsCost, 4),
     laborCost: round(laborCost, 4),
-    batchCost: round(batchCost, 4),
-    unitCost: round(batchCost / yieldQuantity, 4),
+    batchCost: batchCost === null ? null : round(batchCost, 6),
+    unitCost: batchCost === null ? null : round(batchCost / yieldQuantity!, 6),
     yieldQuantity,
   };
 }

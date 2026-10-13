@@ -35,7 +35,7 @@ const recipeRow = {
 function recipeResponses() {
   return {
     'select:recipes': [[recipeRow]],
-    'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '1.000', averageUnitCost: '2.00' }]],
+    'select:recipeIngredients': [[{ recipeId: RECIPE_ID, rawName: 'Flour', unit: 'kg', inventoryItemId: 'inv', generalPriceId: null, inventoryUnit: 'g', inventoryStatus: 'ready', quantity: '1.000', averageUnitCost: '.002', currentQuantity: '10000' }]],
   };
 }
 

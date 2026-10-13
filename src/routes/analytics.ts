@@ -107,6 +107,7 @@ function utcInstant(date: Date): string {
  */
 export const expenseTotalsFields = {
   expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
+  unknownAmounts: sql<number>`count(*) filter (where ${receipts.totalAmount} is null)::int`,
   undatedCount: sql<number>`count(*) filter (where ${receipts.receiptDate} is null and coalesce(${receipts.totalAmount},0) <> 0)::int`,
   undatedAmount: sql<string>`coalesce(sum(${receipts.totalAmount}) filter (where ${receipts.receiptDate} is null and coalesce(${receipts.totalAmount},0) <> 0),0)`,
 };
@@ -210,7 +211,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const productionCost = toNumber(orderTotals[0]?.cost);
     const expenses = toNumber(expenseTotals[0]?.expenses);
 
-    const incomplete = Number(orderTotals[0]?.unknownCosts ?? 0) > 0;
+    const unknownExpenseCount = Number(expenseTotals[0]?.unknownAmounts ?? 0);
+    const incomplete = Number(orderTotals[0]?.unknownCosts ?? 0) > 0 || unknownExpenseCount > 0;
     const netProfit = incomplete ? null : netProfitOf(revenue, delivery, productionCost, expenses);
     const previousRevenue = toNumber(previousOrderTotals[0]?.revenue);
     const previousProfit = netProfitOf(
@@ -233,9 +235,11 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       range: { from: start.toISOString(), to: now.toISOString() },
       summary: {
         revenue,
-        expenses,
+        expenses: unknownExpenseCount > 0 ? null : expenses,
+        knownExpenses: expenses,
+        incompleteExpenseCount: unknownExpenseCount,
         deliveryFees: delivery,
-        productionCost: incomplete ? null : productionCost,
+        productionCost: Number(orderTotals[0]?.unknownCosts ?? 0) > 0 ? null : productionCost,
         knownProductionCost: productionCost,
         incompleteOrderCount: orderTotals[0]?.unknownCosts ?? 0,
         netProfit,
@@ -253,8 +257,8 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       },
       trend: {
         revenuePercent: trendPercent(revenue, previousRevenue),
-        profitPercent: netProfit === null || Number(previousOrderTotals[0]?.unknownCosts ?? 0) > 0 ? null : trendPercent(netProfit, previousProfit),
-        expensesPercent: trendPercent(expenses, previousExpenses),
+        profitPercent: netProfit === null || Number(previousOrderTotals[0]?.unknownCosts ?? 0) > 0 || Number(previousExpenseTotals[0]?.unknownAmounts ?? 0) > 0 ? null : trendPercent(netProfit, previousProfit),
+        expensesPercent: unknownExpenseCount > 0 || Number(previousExpenseTotals[0]?.unknownAmounts ?? 0) > 0 ? null : trendPercent(expenses, previousExpenses),
       },
       graph,
       topItem,
@@ -297,11 +301,13 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
       .select({
         value: sql<string>`coalesce(sum(${inventoryItems.currentQuantity} * ${inventoryItems.averageUnitCost}) filter (where ${inventoryItems.measurementStatus} = 'ready'),0)`,
         units: sql<number>`count(*)::int`,
+        unresolved: sql<number>`count(*) filter (where ${inventoryItems.measurementStatus} <> 'ready' or (${inventoryItems.currentQuantity} > 0 and ${inventoryItems.averageUnitCost} is null))::int`,
       })
       .from(inventoryItems)
       .where(and(eq(inventoryItems.shopId, shop.id), eq(inventoryItems.isActive, true)));
 
-    return { inventoryValue: toNumber(rows[0]?.value), trackedItems: rows[0]?.units ?? 0 };
+    return { inventoryValue: Number(rows[0]?.unresolved ?? 0) > 0 ? null : toNumber(rows[0]?.value), knownInventoryValue: toNumber(rows[0]?.value),
+      unresolvedItems: rows[0]?.unresolved ?? 0, trackedItems: rows[0]?.units ?? 0 };
   });
 };
 
@@ -407,6 +413,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
     .select({
       day: sql<string>`to_char(${receiptSpendDay}, 'YYYY-MM-DD')`,
       total: sql<string>`coalesce(sum(${receipts.totalAmount}),0)`,
+      unknownAmounts: sql<number>`count(*) filter (where ${receipts.totalAmount} is null)::int`,
     })
     .from(receipts)
     .where(and(eq(receipts.shopId, shopId), countedAsSpend, spentSince(start)))
@@ -435,7 +442,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
   }
   for (const row of expenses) {
     const day = byDay.get(row.day) ?? { revenue: 0, delivery: 0, cost: 0, expenses: 0, unknownCosts: 0 };
-    byDay.set(row.day, { ...day, expenses: day.expenses + toNumber(row.total) });
+    byDay.set(row.day, { ...day, expenses: day.expenses + toNumber(row.total), unknownCosts: day.unknownCosts + Number(row.unknownAmounts ?? 0) });
   }
 
   return [...byDay.entries()]

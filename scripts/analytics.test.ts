@@ -310,8 +310,10 @@ test('dashboard: totals, trends, graph, top item, order stats and low stock', as
     assert.deepEqual(body.summary, {
       revenue: 300,
       expenses: 45,
+      knownExpenses: 45, incompleteExpenseCount: 0,
       deliveryFees: 20,
       productionCost: 120,
+      knownProductionCost: 120, incompleteOrderCount: 0,
       netProfit: 115,
       orderCount: 3,
       profitMarginPercent: 38.3,
@@ -357,8 +359,10 @@ test('dashboard: a shop with no activity reports zeroes, not nulls', async () =>
     assert.deepEqual(body.summary, {
       revenue: 0,
       expenses: 0,
+      knownExpenses: 0, incompleteExpenseCount: 0,
       deliveryFees: 0,
       productionCost: 0,
+      knownProductionCost: 0, incompleteOrderCount: 0,
       netProfit: 0,
       orderCount: 0,
       profitMarginPercent: 0,
@@ -553,7 +557,7 @@ test('inventory-value: reports the stock value and how many items back it', asyn
   try {
     const { status, body } = await h.get('/api/v1/analytics/inventory-value');
     assert.equal(status, 200);
-    assert.deepEqual(body, { inventoryValue: 1234.5, trackedItems: 12 });
+    assert.deepEqual(body, { inventoryValue: 1234.5, knownInventoryValue: 1234.5, unresolvedItems: 0, trackedItems: 12 });
   } finally {
     await h.close();
   }
@@ -564,13 +568,40 @@ test('inventory-value: an empty catalog reports zero, not undefined', async () =
 
   try {
     const { body } = await h.get('/api/v1/analytics/inventory-value');
-    assert.deepEqual(body, { inventoryValue: 0, trackedItems: 0 });
+    assert.deepEqual(body, { inventoryValue: 0, knownInventoryValue: 0, unresolvedItems: 0, trackedItems: 0 });
   } finally {
     await h.close();
   }
 });
 
 /* ------------------------------------------------------------------- guards */
+
+test('dashboard keeps incomplete production costs, expenses and graph profits unknown', async () => {
+  const h = await harness({
+    'select:orders': [[{ revenue: '100', cost: '20', unknownCosts: 1, count: 2 }], [], [], [{ day: '2026-06-14', revenue: '100', cost: '20', unknownCosts: 1 }]],
+    'select:receipts': [[{ expenses: '10', unknownAmounts: 1 }], [], [{ day: '2026-06-14', total: '10', unknownAmounts: 1 }]],
+  });
+  try {
+    const { body } = await h.get('/api/v1/analytics/dashboard');
+    assert.equal(body.summary.productionCost, null);
+    assert.equal(body.summary.knownProductionCost, 20);
+    assert.equal(body.summary.expenses, null);
+    assert.equal(body.summary.knownExpenses, 10);
+    assert.equal(body.summary.netProfit, null);
+    assert.equal(body.trend.profitPercent, null);
+    assert.equal(body.graph[0].netProfit, null);
+  } finally { await h.close(); }
+});
+
+test('inventory value exposes the known subtotal without claiming legacy balances are valued', async () => {
+  const h = await harness({ 'select:inventoryItems': [[{ value: '25', units: 3, unresolved: 1 }]] });
+  try {
+    const { body } = await h.get('/api/v1/analytics/inventory-value');
+    assert.equal(body.inventoryValue, null);
+    assert.equal(body.knownInventoryValue, 25);
+    assert.equal(body.unresolvedItems, 1);
+  } finally { await h.close(); }
+});
 
 test('analytics reads the shop from the resolved context', async () => {
   const h = await harness();

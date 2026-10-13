@@ -54,13 +54,13 @@ async function seedShop(): Promise<string> {
 
   const [flour] = await db
     .insert(inventoryItems)
-    .values({ shopId: SHOP_ID, name: 'Flour', unit: 'kg', averageUnitCost: '2.00' })
+    .values({ shopId: SHOP_ID, name: 'Flour', unit: 'g', averageUnitCost: '.002' })
     .returning();
   if (!flour) throw new Error('fixture: inventory insert returned no row');
 
   const [recipe] = await db
     .insert(recipes)
-    .values({ shopId: SHOP_ID, name: 'Focaccia' })
+    .values({ shopId: SHOP_ID, name: 'Focaccia', yieldQuantity: '1' })
     .returning();
   if (!recipe) throw new Error('fixture: recipe insert returned no row');
 

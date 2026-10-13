@@ -1,5 +1,6 @@
 import { resolveCatalogMeasurement, isFoodCandidate, type CatalogRecord } from './measurements.js';
 import type { Resolution } from '../measurements.js';
+import { isGlobalProductCode } from '../productIdentity.js';
 import {
   decodeHtmlEntities,
   extractHtmlBlocks,
@@ -344,7 +345,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
 
 /** Exact product identity; local codes must be scoped to their retailer. */
 export function selectExactProduct(rows: PriceResult[], code: string, chain?: PriceChain): PriceResult | null {
-  if (!/^\d{8,14}$/.test(code) && !chain) return null;
+  if (!isGlobalProductCode(code) && !chain) return null;
   const matches = rows.filter(row => row.barcode === code && (!chain || row.chain === chain));
   const usable = matches.filter(row => row.measurement?.measurement);
   if (!usable.length) return matches[0] ?? null;
@@ -356,7 +357,7 @@ export function selectExactProduct(rows: PriceResult[], code: string, chain?: Pr
   return first;
 }
 export async function lookupExactProduct(code: string, chain?: PriceChain): Promise<PriceResult | null> {
-  if (!/^\d{8,14}$/.test(code) && !chain) return null;
+  if (!isGlobalProductCode(code) && !chain) return null;
   const results = await Promise.allSettled((chain ? [chain] : ['shufersal', 'carrefour'] as PriceChain[]).map(loadCatalog));
   return selectExactProduct(results.flatMap(r => r.status === 'fulfilled' ? r.value : []), code, chain);
 }

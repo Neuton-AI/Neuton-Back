@@ -51,6 +51,7 @@ UPDATE receipt_items i SET application_status = 'legacy_applied'
 FROM receipts r WHERE r.id = i.receipt_id AND r.status = 'verified';
 --> statement-breakpoint
 ALTER TABLE orders ALTER COLUMN total_cost DROP NOT NULL;
+ALTER TABLE orders ADD COLUMN currency text;
 ALTER TABLE orders ADD COLUMN costing_status text NOT NULL DEFAULT 'unresolved';
 UPDATE orders SET costing_status = 'legacy_snapshot';
 ALTER TABLE order_items ALTER COLUMN unit_cost DROP NOT NULL;
@@ -61,7 +62,8 @@ CREATE TABLE product_measurements (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
  shop_id uuid NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
  product_key text NOT NULL, package_quantity numeric(20,6) NOT NULL,
- package_unit text NOT NULL, evidence jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+ package_unit text NOT NULL, packages_per_purchase numeric(20,6) NOT NULL DEFAULT 1,
+ evidence jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX product_measurements_shop_product_unique ON product_measurements(shop_id, product_key);
 CREATE TABLE ingredient_conversions (
