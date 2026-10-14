@@ -83,12 +83,6 @@ export const receiptItems = pgTable('receipt_items', {
   receiptId: uuid('receipt_id')
     .notNull()
     .references(() => receipts.id, { onDelete: 'cascade' }),
-  /**
-   * The inventory row this line resolved to, written by the *verification*
-   * pass, never by the worker. `NULL` therefore means "not yet applied": as of
-   * N-28 the worker saves lines and stops, so a freshly extracted receipt has
-   * every line null here until someone approves it.
-   */
   inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
     onDelete: 'set null',
   }),
@@ -97,21 +91,8 @@ export const receiptItems = pgTable('receipt_items', {
   quantity: numeric('quantity', { precision: 12, scale: 3 }),
   unitPrice: numeric('unit_price', { precision: 12, scale: 4 }),
   totalPrice: numeric('total_price', { precision: 12, scale: 2 }),
-  /**
-   * The unit exactly as the model read it, in whatever spelling it used. The
-   * worker used to coerce this into `INVENTORY_UNITS` on the way in, which
-   * destroyed the value the reviewer needed to see in order to correct it; the
-   * map to a known inventory unit now happens when the line is applied.
-   */
-  unit: text('unit'),
+  srcUnit: text('src_unit'),
   confidence: numeric('confidence', { precision: 4, scale: 3 }),
-  /**
-   * Outcome of the human review pass. `pending` is the default and the only
-   * value the vision worker ever writes — it does not review anything.
-   */
-  reviewStatus: text('review_status', { enum: RECEIPT_REVIEW_STATUSES })
-    .notNull()
-    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   receiptIdx: index('receipt_items_receipt_id_idx').on(t.receiptId),
