@@ -416,20 +416,6 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     return rows[0];
   });
 
-  /** Raw AI output, for the receipt detail sheet's extraction trace. */
-  app.get('/receipts/:id/extraction', guards, async (request) => {
-    const shop = currentShop(request);
-    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-
-    const rows = await db
-      .select({ rawExtraction: receipts.rawExtraction })
-      .from(receipts)
-      .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)))
-      .limit(1);
-    if (!rows[0]) throw notFound('Receipt not found');
-    return { rawExtraction: rows[0].rawExtraction };
-  });
-
   /** Count of receipts still being processed — used for polling decisions. */
   app.get('/receipts/queue/pending-count', guards, async (request) => {
     const shop = currentShop(request);

@@ -252,7 +252,6 @@ export async function processReceipt(
         status: 'unverified',
         progressStage: 'completed',
         progressMessage: 'Ready for verification',
-        rawExtraction: extraction as unknown as Record<string, unknown>,
         processedAt: new Date(),
         updatedAt: new Date(),
         errorMessage: null,

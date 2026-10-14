@@ -1494,12 +1494,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "raw_extraction": {
-          "name": "raw_extraction",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "error_message": {
           "name": "error_message",
           "type": "text",
