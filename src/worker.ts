@@ -242,6 +242,7 @@ export async function processReceipt(
         rawSrcUnit: item.rawSrcUnit,
         baseUnit: item.baseUnit,
         srcUnit: item.srcUnit,
+        srcUnitAmount: item.srcUnitAmount === null ? null : qty(item.srcUnitAmount),
         baseUnitAmount: item.baseUnitAmount === null ? null : qty(item.baseUnitAmount),
         rawSku: item.rawSku,
         confidence: item.confidence === null ? null : item.confidence.toFixed(3),

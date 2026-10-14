@@ -8,6 +8,13 @@
       "when": 1791978430626,
       "tag": "0000_schema_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792012844820,
+      "tag": "0020_align_local_schema",
+      "breakpoints": true
     }
   ]
 }

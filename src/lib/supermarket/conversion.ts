@@ -1,5 +1,5 @@
-import { ExtractedLineItem } from "../gemini"
-import { PriceResult } from "./prices"
+import type { ExtractedLineItem } from "../gemini.js"
+import type { PriceResult } from "./prices.js"
 
 const CONVERSION = {
     g: { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 },

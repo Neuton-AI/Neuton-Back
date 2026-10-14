@@ -35,7 +35,7 @@ export async function linkRecipeFallbackPrices(
           const name = normalizePriceName(result.ItemName);
           const matchesIngredient = name === query || name.startsWith(`${query} `) || result.ItemCode === query;
           return matchesIngredient && result.score >= MIN_FALLBACK_SCORE &&
-            Number.isFinite(result.ItemPrice) && +result.ItemPrice > 0;
+            Number.isFinite(Number(result.ItemPrice)) && +result.ItemPrice > 0;
         });
         candidates.sort((a, b) => b.score - a.score || +a.ItemPrice - +b.ItemPrice);
         matches.set(query, candidates[0] ?? null);

@@ -10,3 +10,5 @@ npm-debug.log*
 coverage/
 .vscode/
 .idea/
+.local/db-backups/
+Temp/*
