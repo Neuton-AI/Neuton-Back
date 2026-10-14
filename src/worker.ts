@@ -36,6 +36,7 @@ import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
+import { setSrcUnitAmount, setUnitsData } from './lib/supermarket/conversion.js';
 
 /**
  * Correlation context shared by a job's logger and its Gemini extraction
@@ -164,6 +165,31 @@ export async function processReceipt(
     throw new Error('Gemini returned no parsable receipt extraction');
   }
 
+  const receiptItemsWithEnrichment = await Promise.all(extraction.items.map(async (item) => {
+    let itemEnrichment = null
+    if (item.rawSku && item.rawSku.length > 7) {
+      itemEnrichment = await searchProduct(item.rawSku)
+      item.isSkuEnriched = true
+      if (itemEnrichment.length === 0) {
+        console.log('Could not find itemEnrichment for ' + item.rawSku + ', trying with 0')
+        itemEnrichment = await searchProduct('0' + item.rawSku)
+        item.isSkuEnriched = true
+      }
+      if (itemEnrichment.length === 0) {
+        console.log('Could not find itemEnrichment for ' + item.rawSku + ', trying with rawName')
+        itemEnrichment = await searchProduct(item.rawName, 1)
+      }
+    }
+
+    return {
+      item,
+      itemEnrichment
+    }
+  }))
+
+  const sturatedItems = setUnitsData(receiptItemsWithEnrichment)
+  const itemsWithAmount = setSrcUnitAmount(sturatedItems)
+
   await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
   await job.updateProgress(30);
 
@@ -186,30 +212,19 @@ export async function processReceipt(
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
-    for (let i = 0; i < extraction.items.length; i++) {
+    for (let i = 0; i < itemsWithAmount.length; i++) {
       checkDeadline(deadline);
-      const item = extraction.items[i]!;
-      const progress = 40 + Math.floor((i / extraction.items.length) * 40);
+      const { item, itemEnrichment } = itemsWithAmount[i]!;
+      const progress = 40 + Math.floor((i / itemsWithAmount.length) * 40);
       await updateReceiptProgress(
         deps,
         data.shopId,
         storagePath,
         'validating',
-        `Saving line item ${i + 1} of ${extraction.items.length}`,
+        `Saving line item ${i + 1} of ${itemsWithAmount.length}`,
       );
       await job.updateProgress(progress);
 
-      // No inventory resolution, on purpose: the worker only extracts. Leaving
-      // `inventoryItemId` null is the durable signal that nobody has approved
-      // this line yet, and it is what `POST /receipts/:id/verify` reads to tell
-      // an untouched receipt from one that has already been applied. Doing it
-      // here is also what stops a wrong AI reading from corrupting stock counts
-      // before a human has seen the numbers.
-      //
-      // The model often reads only two of quantity/unit-price/line-total (a
-      // shelf ticket shows the unit price, a receipt tape the line total), so
-      // the missing third is derived rather than stored as NULL — a NULL total
-      // renders as $0.00 downstream and reads as a free item.
       let { quantity, unitPrice, totalPrice } = item;
       if (totalPrice === null && quantity !== null && unitPrice !== null) {
         totalPrice = quantity * unitPrice;
@@ -224,7 +239,11 @@ export async function processReceipt(
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),
-        srcUnit: item.unitOfMeasure,
+        rawSrcUnit: item.rawSrcUnit,
+        baseUnit: item.baseUnit,
+        srcUnit: item.srcUnit,
+        baseUnitAmount: item.baseUnitAmount === null ? null : qty(item.baseUnitAmount),
+        rawSku: item.rawSku,
         confidence: item.confidence === null ? null : item.confidence.toFixed(3),
       });
     }

@@ -135,7 +135,7 @@ export function extractHtmlBlocks(html: string, tag: string): string[] {
   return out;
 }
 
-export function extractXmlBlocks(xml: string, tag: string, fields?: string[]): string[] {
+export function extractXmlBlocks(xml: string, tag: string, fields?: readonly string[]): string[] {
   const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
   const out: string[] = [];
   let m: RegExpExecArray | null;
