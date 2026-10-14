@@ -224,7 +224,7 @@ export async function processReceipt(
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),
-        unit: item.unit,
+        srcUnit: item.unitOfMeasure,
         confidence: item.confidence === null ? null : item.confidence.toFixed(3),
       });
     }
@@ -252,7 +252,6 @@ export async function processReceipt(
         status: 'unverified',
         progressStage: 'completed',
         progressMessage: 'Ready for verification',
-        rawExtraction: extraction as unknown as Record<string, unknown>,
         processedAt: new Date(),
         updatedAt: new Date(),
         errorMessage: null,

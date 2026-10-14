@@ -3,14 +3,13 @@ import {
   char,
   date,
   index,
-  jsonb,
   numeric,
   pgTable,
   text,
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { RECEIPT_REVIEW_STATUSES, RECEIPT_STATUSES } from './enums.js';
+import { RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
 import { profiles, shops } from './identity.js';
 
@@ -42,11 +41,10 @@ export const receipts = pgTable('receipts', {
     .references(() => shops.id, { onDelete: 'cascade' }),
   uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
   storagePath: text('storage_path'),
-  /** MIME type actually stored in R2; the detail sheet renders PDFs differently. */
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
   merchantName: text('merchant_name'),
-  merchantAddress: text('merchant_address'), // the specific chain branch location/number
+  merchantAddress: text('merchant_address'),
   receiptDate: date('receipt_date'),
   paymentMethod: text('payment_method'),
   totalAmount: numeric('total_amount', { precision: 12, scale: 2 }),
@@ -57,15 +55,8 @@ export const receipts = pgTable('receipts', {
   progressMessage: text('progress_message'),
   processingStartedAt: timestamp('processing_started_at', { withTimezone: true }),
   processingDeadline: timestamp('processing_deadline', { withTimezone: true }),
-  rawExtraction: jsonb('raw_extraction'),
   errorMessage: text('error_message'),
-  /**
-   * When extraction finished — not when the receipt was applied. Since N-28 the
-   * worker stops here and never touches inventory, so the moment a human
-   * approved the receipt lives on `verified_at` instead.
-   */
   processedAt: timestamp('processed_at', { withTimezone: true }),
-  /** The user who approved the receipt's lines; null until verified. */
   verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
   verifiedAt: timestamp('verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -83,12 +74,6 @@ export const receiptItems = pgTable('receipt_items', {
   receiptId: uuid('receipt_id')
     .notNull()
     .references(() => receipts.id, { onDelete: 'cascade' }),
-  /**
-   * The inventory row this line resolved to, written by the *verification*
-   * pass, never by the worker. `NULL` therefore means "not yet applied": as of
-   * N-28 the worker saves lines and stops, so a freshly extracted receipt has
-   * every line null here until someone approves it.
-   */
   inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
     onDelete: 'set null',
   }),
@@ -97,21 +82,8 @@ export const receiptItems = pgTable('receipt_items', {
   quantity: numeric('quantity', { precision: 12, scale: 3 }),
   unitPrice: numeric('unit_price', { precision: 12, scale: 4 }),
   totalPrice: numeric('total_price', { precision: 12, scale: 2 }),
-  /**
-   * The unit exactly as the model read it, in whatever spelling it used. The
-   * worker used to coerce this into `INVENTORY_UNITS` on the way in, which
-   * destroyed the value the reviewer needed to see in order to correct it; the
-   * map to a known inventory unit now happens when the line is applied.
-   */
-  unit: text('unit'),
+  srcUnit: text('src_unit'),
   confidence: numeric('confidence', { precision: 4, scale: 3 }),
-  /**
-   * Outcome of the human review pass. `pending` is the default and the only
-   * value the vision worker ever writes — it does not review anything.
-   */
-  reviewStatus: text('review_status', { enum: RECEIPT_REVIEW_STATUSES })
-    .notNull()
-    .default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   receiptIdx: index('receipt_items_receipt_id_idx').on(t.receiptId),

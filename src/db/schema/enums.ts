@@ -36,10 +36,6 @@ export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 export const RECIPE_STATUSES = ['pending', 'processing', 'unverified', 'verified', 'failed'] as const;
 export type RecipeStatus = (typeof RECIPE_STATUSES)[number];
 
-/** Per-line outcome of the human review pass. Lines start at `pending`. */
-export const RECEIPT_REVIEW_STATUSES = ['pending', 'accepted', 'rejected'] as const;
-export type ReceiptReviewStatus = (typeof RECEIPT_REVIEW_STATUSES)[number];
-
 /**
  * The order lifecycle as the shop sees it:
  *

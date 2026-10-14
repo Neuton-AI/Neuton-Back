@@ -18,7 +18,7 @@ async function rateLimitedWait(): Promise<void> {
 }
 
 export async function fetchWithRateLimit(url: string, options: RequestInit = {}): Promise<Response> {
-  await rateLimitedWait();
+  // await rateLimitedWait();
 
   let lastError: Error | undefined;
 
@@ -28,7 +28,7 @@ export async function fetchWithRateLimit(url: string, options: RequestInit = {})
 
     try {
       if (attempt > 0) {
-        await rateLimitedWait();
+        // await rateLimitedWait();
       }
 
       const response = await fetch(url, {

@@ -40,7 +40,7 @@ if (MODELS.length === 0) {
 export interface ExtractedLineItem {
   rawName: string;
   quantity: number | null;
-  unit: string | null;
+  unitOfMeasure: string | null;
   unitPrice: number | null;
   totalPrice: number | null;
   confidence: number | null;
@@ -83,8 +83,10 @@ const RECEIPT_SCHEMA = `{
   "type": "object",
   "properties": {
     "merchantName": { "type": "string" },
+    "merchantAddress": { "type": "string", "description": "Full store address or city or street" },
     "receiptDate": { "type": "string", "description": "ISO date YYYY-MM-DD" },
     "totalAmount": { "type": "number" },
+    "paymentMethod": { "type": "string" },
     "taxAmount": { "type": "number" },
     "currency": { "type": "string", "description": "ISO 4217, 3 letters" },
     "items": {
@@ -93,14 +95,13 @@ const RECEIPT_SCHEMA = `{
         "type": "object",
         "properties": {
           "rawName": { "type": "string" },
-          "rawSku": {"type": "string"},
+          "rawSku": {"type": "string", "description": "The SKU or barcode of the item(item UID)"},
           "quantity": { "type": "number" },
-          "unit": { "type": "string" },
-          "unitPrice": { "type": "number" },
+          "unitOfMeasure": { "type": "string", "description": "The unit of measure of the item(g, kg, lb, oz, piece, etc)" },
           "totalPrice": { "type": "number" },
           "confidence": { "type": "number" }
         },
-        "required": ["rawName", "rawSku", "quantity", "unit", "unitPrice", "totalPrice", "confidence"]
+        "required": ["rawName", "rawSku", "quantity", "unitOfMeasure", "totalPrice", "confidence"]
       }
     }
   },
@@ -312,7 +313,7 @@ async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContex
   return walkModels(
     MODELS,
     async (model) => {
-      const abortSignal = createGeminiAbortSignal();
+      // const abortSignal = createGeminiAbortSignal();
       const response = await client.models.generateContent({
         model,
         contents: [{ role: 'user', parts: [part, { text: instruction }] }],
@@ -320,7 +321,7 @@ async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContex
           responseMimeType: 'application/json',
           responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
           temperature: 0.1,
-          abortSignal,
+          // abortSignal,
         },
       });
 
@@ -353,11 +354,12 @@ export async function extractReceipt(
     currency: asString(raw.currency)?.toUpperCase() ?? null,
     items: items.map((entry) => {
       const item = (entry ?? {}) as Record<string, unknown>;
+      const unitPrice = +((item.totalPrice as unknown as number) / (item.quantity as unknown as number)).toFixed(2)
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
         quantity: asNumber(item.quantity),
-        unit: asString(item.unit),
-        unitPrice: asNumber(item.unitPrice),
+        unitOfMeasure: asString(item.unitOfMeasure),
+        unitPrice,
         totalPrice: asNumber(item.totalPrice),
         confidence: asNumber(item.confidence),
       };
