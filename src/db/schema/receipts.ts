@@ -10,7 +10,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { RECEIPT_REVIEW_STATUSES, RECEIPT_STATUSES } from './enums.js';
+import { RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
 import { profiles, shops } from './identity.js';
 
@@ -42,11 +42,10 @@ export const receipts = pgTable('receipts', {
     .references(() => shops.id, { onDelete: 'cascade' }),
   uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
   storagePath: text('storage_path'),
-  /** MIME type actually stored in R2; the detail sheet renders PDFs differently. */
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
   merchantName: text('merchant_name'),
-  merchantAddress: text('merchant_address'), // the specific chain branch location/number
+  merchantAddress: text('merchant_address'),
   receiptDate: date('receipt_date'),
   paymentMethod: text('payment_method'),
   totalAmount: numeric('total_amount', { precision: 12, scale: 2 }),
@@ -59,13 +58,7 @@ export const receipts = pgTable('receipts', {
   processingDeadline: timestamp('processing_deadline', { withTimezone: true }),
   rawExtraction: jsonb('raw_extraction'),
   errorMessage: text('error_message'),
-  /**
-   * When extraction finished — not when the receipt was applied. Since N-28 the
-   * worker stops here and never touches inventory, so the moment a human
-   * approved the receipt lives on `verified_at` instead.
-   */
   processedAt: timestamp('processed_at', { withTimezone: true }),
-  /** The user who approved the receipt's lines; null until verified. */
   verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
   verifiedAt: timestamp('verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

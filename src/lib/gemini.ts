@@ -83,8 +83,10 @@ const RECEIPT_SCHEMA = `{
   "type": "object",
   "properties": {
     "merchantName": { "type": "string" },
+    "merchantAddress": { "type": "string", "description": "Full store address or city or street" },
     "receiptDate": { "type": "string", "description": "ISO date YYYY-MM-DD" },
     "totalAmount": { "type": "number" },
+    "paymentMethod": { "type": "string" },
     "taxAmount": { "type": "number" },
     "currency": { "type": "string", "description": "ISO 4217, 3 letters" },
     "items": {

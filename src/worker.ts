@@ -224,7 +224,7 @@ export async function processReceipt(
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),
-        unit: item.unit,
+        srcUnit: item.unitOfMeasure,
         confidence: item.confidence === null ? null : item.confidence.toFixed(3),
       });
     }

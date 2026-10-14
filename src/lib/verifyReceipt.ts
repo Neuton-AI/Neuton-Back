@@ -20,7 +20,7 @@ export interface VerifyLineInput {
   accepted: boolean;
   rawName?: string;
   rawSku?: string;
-  unit?: string;
+  srcUnit?: string;
   quantity?: number;
   unitPrice?: number;
   totalPrice?: number;
@@ -42,11 +42,11 @@ export interface VerifyReceiptResult {
 }
 
 interface Decision {
-  stored: { id: string; rawName: string; unit: string | null; quantity: string | null };
+  stored: { id: string; rawName: string; srcUnit: string | null; quantity: string | null };
   submitted: VerifyLineInput;
   inventoryItemId: string | null;
   rawName: string;
-  unit: string | null;
+  srcUnit: string | null;
   /** Quantity to put into stock: the reviewer's figure, absent nothing applied. */
   quantity: number;
   unitPrice: number;
@@ -91,7 +91,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     for (const submitted of items) {
       const stored = byId.get(submitted.id)!;
       const rawName = submitted.rawName ?? stored.rawName;
-      const unit = submitted.unit ?? stored.unit;
+      const srcUnit = submitted.srcUnit ?? stored.srcUnit;
       const quantity = submitted.quantity ?? toNumber(stored.quantity);
       const unitPrice = submitted.unitPrice ?? toNumber(stored.unitPrice);
 
@@ -104,7 +104,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
           submitted,
           inventoryItemId: null,
           rawName,
-          unit,
+          srcUnit,
           quantity,
           unitPrice,
         });
@@ -112,7 +112,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       }
 
       accepted += 1;
-      const inventoryItemId = await findOrCreateInventoryItem(tx, shopId, rawName, unit);
+      const inventoryItemId = await findOrCreateInventoryItem(tx, shopId, rawName, srcUnit);
 
       // Nothing was applied before this moment, so the whole accepted quantity
       // is what goes into stock — there is no earlier contribution to net out
@@ -125,7 +125,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
         submitted,
         inventoryItemId,
         rawName,
-        unit,
+        srcUnit,
         quantity,
         unitPrice,
       });
@@ -165,7 +165,6 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       const { stored, submitted } = decision;
       const patch: Record<string, unknown> = {
         inventoryItemId: decision.inventoryItemId,
-        reviewStatus: submitted.accepted ? 'accepted' : 'rejected',
       };
 
       // Corrections land only when supplied. An omitted field means the reviewer
@@ -173,7 +172,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       if (submitted.rawName !== undefined) patch.rawName = decision.rawName;
       // The column and its partial index exist, but nothing has ever written it.
       if (submitted.rawSku !== undefined) patch.rawSku = submitted.rawSku;
-      if (submitted.unit !== undefined) patch.unit = decision.unit;
+      if (submitted.srcUnit !== undefined) patch.srcUnit = decision.srcUnit;
       if (submitted.quantity !== undefined) patch.quantity = qty(decision.quantity);
       if (submitted.unitPrice !== undefined) patch.unitPrice = unitCost(decision.unitPrice);
       if (submitted.totalPrice !== undefined) patch.totalPrice = money(submitted.totalPrice);

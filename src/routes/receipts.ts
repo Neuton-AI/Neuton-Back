@@ -44,7 +44,7 @@ const verifyItemSchema = z.object({
   accepted: z.boolean(),
   rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
   rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
-  unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
+  srcUnit: htmlFree(z.string().trim().min(1).max(20)).optional(),
   quantity: z.coerce.number().min(0).optional(),
   unitPrice: z.coerce.number().min(0).optional(),
   totalPrice: z.coerce.number().min(0).optional(),
@@ -324,9 +324,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       )
       .orderBy(asc(receiptItems.id));
 
-    // `verifiedBy`/`verifiedAt` and each line's `reviewStatus` ride along on the
-    // `select()` above, so the review screen reads the whole verdict from here
-    // without a second request.
+    // `verifiedBy`/`verifiedAt` ride along on the `select()` above, so the
+    // review screen reads them from here without a second request.
     return { receipt: { ...receipt, items } };
   });
 
