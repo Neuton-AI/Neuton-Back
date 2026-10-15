@@ -1,3 +1,4 @@
+import { priceResult } from './support/priceResult.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -100,7 +101,7 @@ function receipt(overrides: Partial<ReceiptExtraction> = {}): ReceiptExtraction 
       {
         rawName: 'Flour',
         quantity: 2,
-        unitOfMeasure: 'kg',
+        rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null,
         unitPrice: 3.5,
         totalPrice: 7,
         confidence: 0.9123,
@@ -210,6 +211,11 @@ test('receipt: replaces the stored lines and hands a receipt to review inside on
     unitPrice: '3.5000',
     totalPrice: '7.00',
     srcUnit: 'kg',
+    rawSku: null,
+    rawSrcUnit: 'kg',
+    srcUnitAmount: null,
+    baseUnit: null,
+    baseUnitAmount: null,
     confidence: '0.912',
   });
 
@@ -232,8 +238,8 @@ test('receipt: the header total falls back to the sum of the line totals', async
     extractions: {
       receipt: receipt({
         items: [
-          { rawName: 'Flour', quantity: 2, unitOfMeasure: 'kg', unitPrice: 3.5, totalPrice: 7, confidence: 0.9 },
-          { rawName: 'Oil', quantity: 1, unitOfMeasure: 'l', unitPrice: 10, totalPrice: null, confidence: 0.5 },
+          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 0.9 },
+          { rawName: 'Oil', quantity: 1, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: 'l', unitPrice: 10, totalPrice: null, confidence: 0.5 },
         ],
       }),
     },
@@ -282,7 +288,7 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
       receipt: receipt({
         taxAmount: null,
         items: [
-          { rawName: 'Mystery', quantity: null, unitOfMeasure: null, unitPrice: null, totalPrice: null, confidence: null },
+          { rawName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
         ],
       }),
     },
@@ -312,7 +318,7 @@ test('receipt: a missing line total is derived from quantity x unit price', asyn
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'Flour', quantity: 2, unitOfMeasure: 'kg', unitPrice: 3.5, totalPrice: null, confidence: 1 },
+          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: null, confidence: 1 },
         ],
       }),
     },
@@ -335,7 +341,7 @@ test('receipt: a missing unit price is derived from total / quantity', async () 
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'Flour', quantity: 2, unitOfMeasure: 'kg', unitPrice: null, totalPrice: 7, confidence: 1 },
+          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
         ],
       }),
     },
@@ -358,8 +364,8 @@ test('receipt: derivation never divides by zero or invents from nothing', async 
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'ZeroQty', quantity: 0, unitOfMeasure: 'kg', unitPrice: null, totalPrice: 7, confidence: 1 },
-          { rawName: 'Mystery', quantity: null, unitOfMeasure: null, unitPrice: null, totalPrice: null, confidence: null },
+          { rawName: 'ZeroQty', quantity: 0, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
+          { rawName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
         ],
       }),
     },
@@ -384,7 +390,7 @@ test('receipt: extraction never touches inventory, however well-formed the line 
       receipt: receipt({
         totalAmount: 7,
         items: [
-          { rawName: 'Flour', quantity: 2, unitOfMeasure: 'kg', unitPrice: 3.5, totalPrice: 7, confidence: 1 },
+          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 1 },
         ],
       }),
     },
@@ -537,7 +543,7 @@ test('recipe: both extraction paths apply external fallback before committing th
     const queries: string[] = [];
     deps.searchProduct = async (query) => {
       queries.push(query);
-      return [{ name: 'Flour', price: 5, barcode: '123', chain: 'shufersal', score: 9500 }];
+      return [priceResult({ ItemName: 'Flour', ItemPrice: '5', score: 9500 })];
     };
     await processRecipe(deps, jobData, job);
     assert.deepEqual(queries, ['flour']);

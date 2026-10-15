@@ -5,12 +5,10 @@ import { linkRecipeFallbackPrices, normalizePriceName } from '../src/lib/recipeP
 import { costRecipe } from '../src/routes/catalog.js';
 import type { Database } from '../src/db/client.js';
 import type { recipes } from '../src/db/schema/index.js';
-import type { PriceResult } from '../src/lib/supermarket/prices.js';
+import { priceResult } from './support/priceResult.js';
 import { FakeDb } from './support/fakeDb.js';
 
-const product: PriceResult = {
-  name: 'Milk', barcode: '123', chain: 'shufersal', price: 6, score: 5000,
-};
+const product = priceResult();
 const line = { id: 'line-1', rawName: ' Milk ', searchAbleName: ' Milk ', inventoryItemId: null, generalPriceId: null };
 const asDatabase = (db: FakeDb) => db as unknown as Database;
 
@@ -22,7 +20,7 @@ test('fallback links the best affordable scored product directly, with no invent
   const queries: string[] = [];
   await linkRecipeFallbackPrices(asDatabase(db), 'shop-1', 'recipe-1', async (query) => {
     queries.push(query);
-    return [{ ...product, price: 7 }, product, { ...product, name: 'Chocolate milk', score: 9000, price: 2 }];
+    return [{ ...product, ItemPrice: '7' }, product, { ...product, ItemName: 'Chocolate milk', score: 9000, ItemPrice: '2' }];
   });
   assert.deepEqual(queries, ['milk']);
   const saved = db.onlyCallTo('insert', 'generalPrices').values as Record<string, unknown>;
@@ -48,8 +46,8 @@ test('missing, low-confidence, invalid and failed catalog searches leave lines u
   for (const search of [
     async () => [],
     async () => [{ ...product, score: 100 }],
-    async () => [{ ...product, price: Number.NaN }],
-    async () => [{ ...product, price: -1 }],
+    async () => [{ ...product, ItemPrice: 'NaN' }],
+    async () => [{ ...product, ItemPrice: '-1' }],
     async () => { throw new Error('catalog unavailable'); },
   ]) {
     const db = new FakeDb({ 'select:recipeIngredients': [[line]] });

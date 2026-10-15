@@ -3,9 +3,6 @@ import type { Database } from '../db/client.js';
 import { generalPrices, recipeIngredients } from '../db/schema/index.js';
 import { searchProduct, type PriceResult } from './supermarket/prices.js';
 
-// searchProduct scores are not probabilities. Require 2000 AND an ingredient
-// name prefix (or exact barcode): incidental matches such as "chocolate milk"
-// must not satisfy a search for "milk", even when their score is high.
 export const MIN_FALLBACK_SCORE = 2000;
 
 export function normalizePriceName(name: string): string {
@@ -35,15 +32,15 @@ export async function linkRecipeFallbackPrices(
       try {
         const results = await search(query);
         const candidates = results.filter((result) => {
-          const name = normalizePriceName(result.name);
-          const matchesIngredient = name === query || name.startsWith(`${query} `) || result.barcode === query;
+          const name = normalizePriceName(result.ItemName);
+          const matchesIngredient = name === query || name.startsWith(`${query} `) || result.ItemCode === query;
           return matchesIngredient && result.score >= MIN_FALLBACK_SCORE &&
-            Number.isFinite(result.price) && result.price > 0;
+            Number.isFinite(Number(result.ItemPrice)) && +result.ItemPrice > 0;
         });
-        candidates.sort((a, b) => b.score - a.score || a.price - b.price);
+        candidates.sort((a, b) => b.score - a.score || +a.ItemPrice - +b.ItemPrice);
         matches.set(query, candidates[0] ?? null);
-      } catch {
-        // A catalog outage leaves the line available for manual review.
+      } catch (e) {
+        console.error("failed to fetch price for", query, e);
         matches.set(query, null);
       }
     }
@@ -51,12 +48,12 @@ export async function linkRecipeFallbackPrices(
     if (!product) continue;
     const now = new Date();
     const price = {
-      normalizedName: normalizePriceName(product.name),
-      name: product.name,
-      barcode: product.barcode,
-      manufacturer: product.manufacturer ?? null,
+      normalizedName: normalizePriceName(product.ItemName),
+      name: product.ItemName,
+      barcode: product.ItemCode,
+      manufacturer: product.ManufactureName ?? null,
       chain: product.chain,
-      priceIls: product.price.toFixed(2),
+      priceIls: (+product.ItemPrice).toFixed(2),
       fetchedAt: now,
       updatedAt: now,
     };

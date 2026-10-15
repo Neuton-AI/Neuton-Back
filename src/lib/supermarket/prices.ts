@@ -9,32 +9,38 @@ import {
 
 export type PriceChain = 'shufersal' | 'carrefour';
 
-export interface PriceResult {
-  chain: PriceChain;
-  name: string;
-  price: number;
-  barcode: string;
-  manufacturer?: string;
-  score: number;
-}
-
 export interface ShufersalFileEntry {
   name: string;
   url: string;
   date: string;
 }
 
+export interface PriceResult extends FoundItem {
+  chain: PriceChain;
+  score: number;
+}
+
+export type FoundItem = Record<typeof PRICE_ITEM_FIELDS[number], string>
+
 const PRICE_ITEM_FIELDS = [
-  'ItemCode',
-  'ItemName',
-  'ManufacturerName',
-  'ManufacturerItemDescription',
-  'ItemPrice',
-  'UnitOfMeasurePrice',
-  'Quantity',
-  'UnitOfMeasure',
-  'PriceUpdateDate',
-];
+  "PriceUpdateTime",
+  "ItemCode",
+  "LastSaleDateTime",
+  "ItemType",
+  "ItemName",
+  "ManufactureName",
+  "ManufactureCountry",
+  "ManufactureItemDescription",
+  "UnitQty",
+  "Quantity",
+  "UnitOfMeasure",
+  "bIsWeighted",
+  "QtyInPackage",
+  "ItemPrice",
+  "UnitOfMeasurePrice",
+  "AllowDiscount",
+  "ItemStatus"
+] as const;
 
 const fileUrlCache = new Map<PriceChain, { url: string; expiresAt: number }>();
 
@@ -283,32 +289,15 @@ function scoreMatch(name: string, barcode: string, manufacturer: string, query: 
   return Math.max(0, score);
 }
 
-export function parseXmlItems(xml: string): Array<{
-  ItemCode: string;
-  ItemName: string;
-  ManufacturerName: string;
-  ItemPrice: string;
-}> {
+export function parseXmlItems(xml: string): Array<FoundItem> {
   const blocks = extractXmlBlocks(xml, 'Item', PRICE_ITEM_FIELDS);
-  const items: Array<{
-    ItemCode: string;
-    ItemName: string;
-    ManufacturerName: string;
-    ItemPrice: string;
-  }> = [];
+  const items: Array<FoundItem> = [];
   for (const block of blocks) {
-    const code = extractXmlElement(block, 'ItemCode');
-    const name = extractXmlElement(block, 'ItemName');
-    const man = extractXmlElement(block, 'ManufacturerName');
-    const price = extractXmlElement(block, 'ItemPrice');
-    if (code && name && price) {
-      items.push({
-        ItemCode: code,
-        ItemName: name,
-        ManufacturerName: man ?? '',
-        ItemPrice: price,
-      });
+    let item: any = {};
+    for (const property of PRICE_ITEM_FIELDS) {
+      item[property] = extractXmlElement(block, property) ?? '';
     }
+    items.push(item);
   }
   return items;
 }
@@ -329,7 +318,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
         const scored = items
           .map((item) => ({
             item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufacturerName, query),
+            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query),
           }))
           .filter((s) => s.score > 0);
         scored.sort((a, b) => b.score - a.score);
@@ -339,11 +328,8 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
           if (Number.isFinite(price)) {
             results.push({
               chain: 'shufersal',
-              name: s.item.ItemName,
-              price,
-              barcode: s.item.ItemCode,
               score: s.score,
-              ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
+              ...s.item,
             });
           }
         }
@@ -362,7 +348,7 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
         const scored = items
           .map((item) => ({
             item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufacturerName, query),
+            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query),
           }))
           .filter((s) => s.score > 0);
         scored.sort((a, b) => b.score - a.score);
@@ -372,11 +358,8 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
           if (Number.isFinite(price)) {
             results.push({
               chain: 'carrefour',
-              name: s.item.ItemName,
-              price,
-              barcode: s.item.ItemCode,
               score: s.score,
-              ...(s.item.ManufacturerName ? { manufacturer: s.item.ManufacturerName } : {}),
+              ...s.item,
             });
           }
         }

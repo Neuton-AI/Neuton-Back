@@ -39,8 +39,14 @@ if (MODELS.length === 0) {
 
 export interface ExtractedLineItem {
   rawName: string;
+  rawSku: string | null;
+  isSkuEnriched: boolean;
   quantity: number | null;
-  unitOfMeasure: string | null;
+  rawSrcUnit: string | null;
+  srcUnit: string | null;
+  srcUnitAmount: number | null;
+  baseUnit: string | null;
+  baseUnitAmount: number | null;
   unitPrice: number | null;
   totalPrice: number | null;
   confidence: number | null;
@@ -97,11 +103,11 @@ const RECEIPT_SCHEMA = `{
           "rawName": { "type": "string" },
           "rawSku": {"type": "string", "description": "The SKU or barcode of the item(item UID)"},
           "quantity": { "type": "number" },
-          "unitOfMeasure": { "type": "string", "description": "The unit of measure of the item(g, kg, lb, oz, piece, etc)" },
+          "rawSrcUnit": { "type": "string", "description": "The unit of measure of the item(g, kg, lb, oz, piece, etc)" },
           "totalPrice": { "type": "number" },
           "confidence": { "type": "number" }
         },
-        "required": ["rawName", "rawSku", "quantity", "unitOfMeasure", "totalPrice", "confidence"]
+        "required": ["rawName", "rawSku", "quantity", "rawSrcUnit", "totalPrice", "confidence"]
       }
     }
   },
@@ -337,7 +343,7 @@ export async function extractReceipt(
   inlineData: { mimeType: string; data: string },
   context?: LogContext,
 ): Promise<ReceiptExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>(
+  const raw = await runStructured<ReceiptExtraction>(
     'receipt',
     {
       inlineData,
@@ -345,21 +351,25 @@ export async function extractReceipt(
     context,
   );
 
-  const items = Array.isArray(raw.items) ? raw.items : [];
   return {
     merchantName: asString(raw.merchantName),
     receiptDate: asString(raw.receiptDate),
     totalAmount: asNumber(raw.totalAmount),
     taxAmount: asNumber(raw.taxAmount),
     currency: asString(raw.currency)?.toUpperCase() ?? null,
-    items: items.map((entry) => {
-      const item = (entry ?? {}) as Record<string, unknown>;
+    items: raw.items.map((item) => {
       const unitPrice = +((item.totalPrice as unknown as number) / (item.quantity as unknown as number)).toFixed(2)
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
         quantity: asNumber(item.quantity),
-        unitOfMeasure: asString(item.unitOfMeasure),
+        rawSrcUnit: asString(item.rawSrcUnit),
+        srcUnit: asString(item.srcUnit),
+        srcUnitAmount: asNumber(item.srcUnitAmount),
+        baseUnit: asString(item.baseUnit),
+        baseUnitAmount: asNumber(item.baseUnitAmount),
+        rawSku: asString(item.rawSku),
         unitPrice,
+        isSkuEnriched: false,
         totalPrice: asNumber(item.totalPrice),
         confidence: asNumber(item.confidence),
       };
