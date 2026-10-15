@@ -67,9 +67,9 @@ await sql.begin(async (tx) => {
       (${shopB}, ${ownerId}, 'admin')
   `;
   await tx`
-    insert into public.inventory_items (shop_id, name, unit) values
-      (${shopA}, 'Flour A', 'kg'),
-      (${shopB}, 'Flour B', 'kg')
+    insert into public.inventory_items (shop_id, name, unit, base_unit, base_unit_amount, base_unit_cost) values
+      (${shopA}, 'Flour A', 'kg', 'kg', 1, 0),
+      (${shopB}, 'Flour B', 'kg', 'kg', 1, 0)
   `;
 
   /**
@@ -133,8 +133,8 @@ await sql.begin(async (tx) => {
   let writeError = '';
   try {
     await asUser(memberId, (t) => tx`
-      insert into public.inventory_items (shop_id, name, unit)
-      values (${shopB}, 'Injected', 'kg')
+      insert into public.inventory_items (shop_id, name, unit, base_unit, base_unit_amount, base_unit_cost)
+      values (${shopB}, 'Injected', 'kg', 'kg', 1, 0)
     `);
   } catch (error) {
     writeBlocked = true;
@@ -148,8 +148,8 @@ await sql.begin(async (tx) => {
   let ownWriteOk = false;
   try {
     await asUser(memberId, (t) => tx`
-      insert into public.inventory_items (shop_id, name, unit)
-      values (${shopA}, 'Own Shop Item', 'kg')
+      insert into public.inventory_items (shop_id, name, unit, base_unit, base_unit_amount, base_unit_cost)
+      values (${shopA}, 'Own Shop Item', 'kg', 'kg', 1, 0)
     `);
     ownWriteOk = true;
   } catch (error) {

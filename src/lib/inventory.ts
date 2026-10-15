@@ -72,14 +72,19 @@ export async function findOrCreateInventoryItem(
   const name = rawName.trim();
   if (name.length === 0) return null;
 
+  const inventoryUnit = (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
+    ? (unit as InventoryUnit)
+    : 'unit';
+
   const created = await db
     .insert(inventoryItems)
     .values({
       shopId,
       name,
-      unit: (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
-        ? (unit as InventoryUnit)
-        : 'unit',
+      unit: inventoryUnit,
+      baseUnit: inventoryUnit,
+      baseUnitAmount: '1.00',
+      baseUnitCost: '0.000000',
       currentQuantity: '0.000',
     })
     .returning({ id: inventoryItems.id });

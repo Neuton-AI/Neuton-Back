@@ -15,6 +15,13 @@
       "when": 1792012844820,
       "tag": "0020_align_local_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792100706397,
+      "tag": "0021_inventory_base_units",
+      "breakpoints": true
     }
   ]
 }

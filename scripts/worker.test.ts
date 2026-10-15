@@ -100,8 +100,9 @@ function receipt(overrides: Partial<ReceiptExtraction> = {}): ReceiptExtraction 
     items: [
       {
         rawName: 'Flour',
+        rawMaterialName: 'Flour',
         quantity: 2,
-        rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null,
+        rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: 'kg',
         unitPrice: 3.5,
         totalPrice: 7,
         confidence: 0.9123,
@@ -155,6 +156,9 @@ test('inventory lookup: an unknown name is created at zero stock', async () => {
     shopId: SHOP_ID,
     name: 'Tahini',
     unit: 'kg',
+    baseUnit: 'kg',
+    baseUnitAmount: '1.00',
+    baseUnitCost: '0.000000',
     currentQuantity: '0.000',
   });
 });
@@ -238,8 +242,8 @@ test('receipt: the header total falls back to the sum of the line totals', async
     extractions: {
       receipt: receipt({
         items: [
-          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 0.9 },
-          { rawName: 'Oil', quantity: 1, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: 'l', unitPrice: 10, totalPrice: null, confidence: 0.5 },
+          { rawName: 'Flour', rawMaterialName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 0.9 },
+          { rawName: 'Oil', rawMaterialName: 'Oil', quantity: 1, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: 'l', unitPrice: 10, totalPrice: null, confidence: 0.5 },
         ],
       }),
     },
@@ -288,7 +292,7 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
       receipt: receipt({
         taxAmount: null,
         items: [
-          { rawName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
+          { rawName: 'Mystery', rawMaterialName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
         ],
       }),
     },
@@ -318,7 +322,7 @@ test('receipt: a missing line total is derived from quantity x unit price', asyn
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: null, confidence: 1 },
+          { rawName: 'Flour', rawMaterialName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: null, confidence: 1 },
         ],
       }),
     },
@@ -341,7 +345,7 @@ test('receipt: a missing unit price is derived from total / quantity', async () 
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
+          { rawName: 'Flour', rawMaterialName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
         ],
       }),
     },
@@ -364,8 +368,8 @@ test('receipt: derivation never divides by zero or invents from nothing', async 
       receipt: receipt({
         totalAmount: null,
         items: [
-          { rawName: 'ZeroQty', quantity: 0, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
-          { rawName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
+          { rawName: 'ZeroQty', rawMaterialName: 'ZeroQty', quantity: 0, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: 7, confidence: 1 },
+          { rawName: 'Mystery', rawMaterialName: 'Mystery', quantity: null, rawSku: null, isSkuEnriched: false, rawSrcUnit: null, srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: null, totalPrice: null, confidence: null },
         ],
       }),
     },
@@ -390,7 +394,7 @@ test('receipt: extraction never touches inventory, however well-formed the line 
       receipt: receipt({
         totalAmount: 7,
         items: [
-          { rawName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 1 },
+          { rawName: 'Flour', rawMaterialName: 'Flour', quantity: 2, rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: null, unitPrice: 3.5, totalPrice: 7, confidence: 1 },
         ],
       }),
     },

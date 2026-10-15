@@ -76,6 +76,9 @@ const inventorySchema = z.object({
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
   unit: z.enum(['kg', 'g', 'l', 'ml', 'unit', 'pack']),
+  baseUnit: htmlFree(z.string().trim().min(1).max(24)),
+  baseUnitAmount: z.number().finite().nonnegative().max(9999999999.99),
+  baseUnitCost: z.number().finite().nonnegative().max(999999999999.999999),
   currentQuantity: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).nullable().optional(),
   lastUnitCost: z.coerce.number().min(0).nullable().optional(),
@@ -501,6 +504,9 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         imageUrl: body.imageUrl ?? null,
         categoryId: body.categoryId ?? null,
         unit: body.unit,
+        baseUnit: body.baseUnit,
+        baseUnitAmount: body.baseUnitAmount.toFixed(2),
+        baseUnitCost: body.baseUnitCost.toFixed(6),
         currentQuantity: qty(body.currentQuantity),
         reorderLevel: body.reorderLevel === null || body.reorderLevel === undefined
           ? null
@@ -545,6 +551,9 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
     if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
     if (body.unit !== undefined) patch.unit = body.unit;
+    if (body.baseUnit !== undefined) patch.baseUnit = body.baseUnit;
+    if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(2);
+    if (body.baseUnitCost !== undefined) patch.baseUnitCost = body.baseUnitCost.toFixed(6);
     if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
     if (body.reorderLevel !== undefined) {
       patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);
