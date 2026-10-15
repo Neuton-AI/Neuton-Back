@@ -1,11 +1,14 @@
 import type { ExtractedLineItem } from "../gemini.js"
-import { enrichReciptItems, type PriceResult } from "./prices.js"
+import { type PriceResult } from "./prices.js"
+
+export type BaseUnits = keyof typeof CONVERSION
 
 const CONVERSION = {
     g: { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 },
     ml: { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588 },
     each: { each: 1, dozen: 12 },
 }
+
 
 const MASS_REGEX = {
     g: /(?:^|\s)(?:גרם|גרמ(?:ים)?|ג[״"']?),?(?!\p{L})/u,
@@ -45,26 +48,39 @@ export const getBaseAndCurrentUnit = (input: string) => {
 };
 
 const getScoredUnits = (itemEnrichment: PriceResult[], item: ExtractedLineItem) => {
-    let units = null
-    const scoredUnits: any = { base: {}, current: {} }
-    const itemSrcFound: any = item.srcUnit ? getBaseAndCurrentUnit(item.srcUnit) : null
-    const itemBaseFound: any = item.baseUnit ? getBaseAndCurrentUnit(item.baseUnit) : null
+    const scoredUnits: { base: Record<string, number>; current: Record<string, number> } = {
+        base: {},
+        current: {},
+    }
 
-    if (itemSrcFound !== null) {
-        scoredUnits.base[itemSrcFound.base]++
-        scoredUnits.current[itemSrcFound.current]++
+    const recordScore = (found: { current: string; base: string | null } | null) => {
+        if (!found) return
+        if (found.base) {
+            scoredUnits.base[found.base] = (scoredUnits.base[found.base] || 0) + 1
+        }
+        if (found.current) {
+            scoredUnits.current[found.current] = (scoredUnits.current[found.current] || 0) + 1
+        }
     }
-    if (itemBaseFound !== null) {
-        scoredUnits.base[itemBaseFound.base]++
-        scoredUnits.current[itemBaseFound.current]++
+
+    if (item.srcUnit) {
+        recordScore(getBaseAndCurrentUnit(item.srcUnit))
     }
-    for (const item of itemEnrichment) {
-        const found = getBaseAndCurrentUnit(item.UnitQty)
-        found.base && scoredUnits.base[found.base]++
-        found.current && scoredUnits.current[found.current]++
+    if (item.baseUnit) {
+        recordScore(getBaseAndCurrentUnit(item.baseUnit))
     }
-    const maxBase = 
-    const maxCurrent = 
+    for (const enrichmentItem of itemEnrichment) {
+        if (enrichmentItem.UnitQty) {
+            recordScore(getBaseAndCurrentUnit(enrichmentItem.UnitQty))
+        }
+    }
+
+    const getMaxEntry = (record: Record<string, number>): string | null => {
+        return Object.entries(record).sort(([, a], [, b]) => b - a)[0]?.[0] ?? null
+    }
+
+    const maxBase = getMaxEntry(scoredUnits.base)
+    const maxCurrent = getMaxEntry(scoredUnits.current)
 
     return { base: maxBase, current: maxCurrent }
 }
@@ -88,14 +104,19 @@ export const setUnitsData = (enrichedList: {
     return enrichedList.map(({ item, itemEnrichment }) => {
         let foundUnits;
         if (itemEnrichment && itemEnrichment?.[0]) {
-
             foundUnits = item.isSkuEnriched ? getBaseAndCurrentUnit(itemEnrichment[0].UnitQty) : getScoredUnits(itemEnrichment, item)
-
         } else {
-
+            foundUnits = item.srcUnit ? getBaseAndCurrentUnit(item.srcUnit) : null
         }
-        item.baseUnit = foundUnits?.base ?? null
-        item.srcUnit = foundUnits?.current ?? null
+        item.baseUnit = foundUnits?.base as BaseUnits || null
+        item.srcUnit = foundUnits?.current ?? item.srcUnit
         return { item, itemEnrichment }
     })
+}
+
+export const convertSrcAmountToBase = (item: ExtractedLineItem) => {
+    const { srcUnit, srcUnitAmount, baseUnit } = item
+    if (!srcUnit || !srcUnitAmount || !baseUnit) return item
+    const entr = CONVERSION[baseUnit][srcUnit]
+    // item.baseUnitAmount = srcUnitAmount * CONVERSION[baseUnit][srcUnit]
 }

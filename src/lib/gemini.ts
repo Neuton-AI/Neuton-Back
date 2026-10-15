@@ -5,6 +5,7 @@ import type { LogContext } from './logger/types.js';
 import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import { stripHtml } from './safeText.js';
 import type { MediaKind } from './queue.js';
+import { BaseUnits } from './supermarket/conversion.js';
 
 /**
  * Creates an AbortController that fires after the configured Gemini request timeout.
@@ -46,7 +47,7 @@ export interface ExtractedLineItem {
   rawSrcUnit: string | null;
   srcUnit: string | null;
   srcUnitAmount: number | null;
-  baseUnit: string | null;
+  baseUnit: BaseUnits | null;
   baseUnitAmount: number | null;
   unitPrice: number | null;
   totalPrice: number | null;
@@ -370,7 +371,7 @@ export async function extractReceipt(
         rawSrcUnit: asString(item.rawSrcUnit),
         srcUnit: asString(item.srcUnit),
         srcUnitAmount: asNumber(item.srcUnitAmount),
-        baseUnit: asString(item.baseUnit),
+        baseUnit: item.baseUnit,
         baseUnitAmount: asNumber(item.baseUnitAmount),
         rawSku: asString(item.rawSku),
         unitPrice,
