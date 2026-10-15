@@ -42,7 +42,7 @@ export type RecipeStatus = (typeof RECIPE_STATUSES)[number];
  * `processing` → `delivered`, with `cancelled` reachable from either
  *
  * Every order starts as `processing`. It moves to `delivered` only after
- * explicit human verification via `PATCH /orders/:id/status`. No transition out
+ * explicit human verification via `POST /orders/:id/verify`. No transition out
  * of `delivered` exists.
  *
  * `cancelled` is what `DELETE /orders/:id` writes instead of removing the row
