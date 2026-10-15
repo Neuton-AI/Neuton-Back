@@ -388,8 +388,9 @@ export const enrichReciptItems = async (extraction: ReceiptExtraction) => {
       itemEnrichment = await getValidNameEnrichment(item.rawName)
     }
 
-    itemEnrichment = itemEnrichment ?? await getScoredEnrichment(item.rawName, item.rawMaterialName)
-
+    if ((itemEnrichment && itemEnrichment.length === 0) || itemEnrichment === null) {
+      itemEnrichment = await getScoredEnrichment(item.rawName, item.rawMaterialName)
+    }
     return {
       item,
       itemEnrichment
@@ -411,7 +412,7 @@ export const getValidSkuEnrichment = async (sku: string) => {
 
 export const getValidNameEnrichment = async (name: string) => {
   const enriched: PriceResult[] = [];
-  const found = await searchProduct(name, 1)
+  const found = await searchProduct(name, 5)
   for (const item of found) {
     item.ItemName.toLowerCase() === name.toLowerCase() && enriched.push(item);
   }

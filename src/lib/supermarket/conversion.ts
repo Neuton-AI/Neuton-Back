@@ -90,7 +90,7 @@ export const setSrcUnitAmount = (enrichedList: {
     itemEnrichment: PriceResult[] | null;
 }[]) => {
     return enrichedList.map(({ item, itemEnrichment }) => {
-        item.srcUnitAmount = (item.isSkuEnriched && itemEnrichment && itemEnrichment[0]?.Quantity)
+        item.srcUnitAmount = (itemEnrichment && itemEnrichment[0]?.Quantity)
             ? +itemEnrichment[0].Quantity
             : null
         return { item, itemEnrichment }
@@ -101,7 +101,7 @@ export const setUnitsData = (enrichedList: {
     item: ExtractedLineItem;
     itemEnrichment: PriceResult[] | null;
 }[]) => {
-    return enrichedList.map(({ item, itemEnrichment }) => {
+    enrichedList.map(({ item, itemEnrichment }) => {
         let foundUnits;
         if (itemEnrichment && itemEnrichment?.[0]) {
             foundUnits = item.isSkuEnriched ? getBaseAndCurrentUnit(itemEnrichment[0].UnitQty) : getScoredUnits(itemEnrichment, item)
@@ -112,11 +112,18 @@ export const setUnitsData = (enrichedList: {
         item.srcUnit = foundUnits?.current ?? item.srcUnit
         return { item, itemEnrichment }
     })
+    const listWithAmounts = setSrcUnitAmount(enrichedList)
+    listWithAmounts.forEach(({ item }) => {
+        convertSrcAmountToBase(item)
+    })
+    return listWithAmounts
 }
 
 export const convertSrcAmountToBase = (item: ExtractedLineItem) => {
     const { srcUnit, srcUnitAmount, baseUnit } = item
     if (!srcUnit || !srcUnitAmount || !baseUnit) return item
-    const entr = CONVERSION[baseUnit][srcUnit]
-    // item.baseUnitAmount = srcUnitAmount * CONVERSION[baseUnit][srcUnit]
+    const conversions: Record<string, number> = CONVERSION[baseUnit]
+    const ratio = conversions[srcUnit] ?? null
+    item.baseUnitAmount = ratio ? srcUnitAmount * ratio : null
+    return item
 }
