@@ -1,3 +1,4 @@
+import { ReceiptExtraction } from '../gemini.js';
 import {
   decodeHtmlEntities,
   extractHtmlBlocks,
@@ -374,4 +375,57 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
   results.sort((a, b) => b.score - a.score);
 
   return results;
+}
+
+export const enrichReciptItems = async (extraction: ReceiptExtraction) => {
+  const receiptItemsWithEnrichment = await Promise.all(extraction.items.map(async (item) => {
+    let itemEnrichment = null
+
+    itemEnrichment = item.rawSku ? await getValidSkuEnrichment(item.rawSku) : null
+    item.isSkuEnriched = (itemEnrichment !== null && itemEnrichment.length > 0)
+
+    if (!item.isSkuEnriched) {
+      itemEnrichment = await getValidNameEnrichment(item.rawName)
+    }
+
+    itemEnrichment = itemEnrichment ?? await getScoredEnrichment(item.rawName, item.rawMaterialName)
+
+    return {
+      item,
+      itemEnrichment
+    }
+  }))
+
+  return receiptItemsWithEnrichment
+}
+
+export const getValidSkuEnrichment = async (sku: string) => {
+  const enriched: PriceResult[] = [];
+  const found = await searchProduct(sku)
+  for (const item of found) {
+    item.ItemCode == sku && enriched.push(item);
+  }
+
+  return enriched
+}
+
+export const getValidNameEnrichment = async (name: string) => {
+  const enriched: PriceResult[] = [];
+  const found = await searchProduct(name, 1)
+  for (const item of found) {
+    item.ItemName.toLowerCase() === name.toLowerCase() && enriched.push(item);
+  }
+
+  return enriched
+}
+
+export const getScoredEnrichment = async (rawName: string, rawMaterialName: string) => {
+  const [rawNameScored, rawMaterialNameScored] = await Promise.all([
+    searchProduct(rawName),
+    searchProduct(rawMaterialName),
+  ])
+
+  const scored = [...rawNameScored, ...rawMaterialNameScored].sort((a, b) => b.score - a.score)
+
+  return scored.slice(0, 5)
 }

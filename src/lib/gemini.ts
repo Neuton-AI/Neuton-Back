@@ -39,6 +39,7 @@ if (MODELS.length === 0) {
 
 export interface ExtractedLineItem {
   rawName: string;
+  rawMaterialName: string;
   rawSku: string | null;
   isSkuEnriched: boolean;
   quantity: number | null;
@@ -100,14 +101,15 @@ const RECEIPT_SCHEMA = `{
       "items": {
         "type": "object",
         "properties": {
-          "rawName": { "type": "string" },
+          "rawName": { "type": "string", "description": "The name of the item as it appears on the receipt" },
+          "rawMaterialName": { "type": "string", "description": "The name of the raw material the item is made of" },
           "rawSku": {"type": "string", "description": "The SKU or barcode of the item(item UID)"},
           "quantity": { "type": "number" },
           "rawSrcUnit": { "type": "string", "description": "The unit of measure of the item(g, kg, lb, oz, piece, etc)" },
           "totalPrice": { "type": "number" },
           "confidence": { "type": "number" }
         },
-        "required": ["rawName", "rawSku", "quantity", "rawSrcUnit", "totalPrice", "confidence"]
+        "required": ["rawName", "rawMaterialName", "rawSku", "quantity", "rawSrcUnit", "totalPrice", "confidence"]
       }
     }
   },
@@ -164,6 +166,8 @@ const ORDER_SCHEMA = `{
 
 const EXTRACT_RECEIPT_PROMPT = `Extract this shopping receipt.
 Return all the data in the receipt that we need in our response schema.
+the rawMaterialName is the raw material the item is made of without any additional words
+for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye". 
 Use null for anything you cannot read. Never invent values.`;
 
 const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
@@ -361,6 +365,7 @@ export async function extractReceipt(
       const unitPrice = +((item.totalPrice as unknown as number) / (item.quantity as unknown as number)).toFixed(2)
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
+        rawMaterialName: asString(item.rawMaterialName) ?? 'Unknown item',
         quantity: asNumber(item.quantity),
         rawSrcUnit: asString(item.rawSrcUnit),
         srcUnit: asString(item.srcUnit),

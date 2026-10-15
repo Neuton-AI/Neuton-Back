@@ -1,5 +1,5 @@
 import type { ExtractedLineItem } from "../gemini.js"
-import type { PriceResult } from "./prices.js"
+import { enrichReciptItems, type PriceResult } from "./prices.js"
 
 const CONVERSION = {
     g: { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 },
@@ -30,20 +30,6 @@ const measuresRegexes = {
 
 const BASE_UNIT = { mass: 'g', volume: 'ml', each: 'each' } as const;
 
-export const setUnitsData = (enrichedList: {
-    item: ExtractedLineItem;
-    itemEnrichment: PriceResult[] | null;
-}[]) => {
-    return enrichedList.map(({ item, itemEnrichment }) => {
-        const foundUnits = (itemEnrichment && item.isSkuEnriched)
-            ? getEnrichedUnits(itemEnrichment)
-            : getBaseAndCurrentUnit(item.rawSrcUnit || item.rawName)
-        item.baseUnit = foundUnits?.base ?? null
-        item.srcUnit = foundUnits?.current ?? null
-        return { item, itemEnrichment }
-    })
-}
-
 export const getBaseAndCurrentUnit = (input: string) => {
     const categories = Object.keys(measuresRegexes) as Array<keyof typeof measuresRegexes>;
 
@@ -58,12 +44,29 @@ export const getBaseAndCurrentUnit = (input: string) => {
     return { current: input, base: null };
 };
 
-const getEnrichedUnits = (itemEnrichment: PriceResult[]) => {
+const getScoredUnits = (itemEnrichment: PriceResult[], item: ExtractedLineItem) => {
     let units = null
-    for (const item of itemEnrichment) {
-        units = getBaseAndCurrentUnit(item.UnitQty)
+    const scoredUnits: any = { base: {}, current: {} }
+    const itemSrcFound: any = item.srcUnit ? getBaseAndCurrentUnit(item.srcUnit) : null
+    const itemBaseFound: any = item.baseUnit ? getBaseAndCurrentUnit(item.baseUnit) : null
+
+    if (itemSrcFound !== null) {
+        scoredUnits.base[itemSrcFound.base]++
+        scoredUnits.current[itemSrcFound.current]++
     }
-    return units
+    if (itemBaseFound !== null) {
+        scoredUnits.base[itemBaseFound.base]++
+        scoredUnits.current[itemBaseFound.current]++
+    }
+    for (const item of itemEnrichment) {
+        const found = getBaseAndCurrentUnit(item.UnitQty)
+        found.base && scoredUnits.base[found.base]++
+        found.current && scoredUnits.current[found.current]++
+    }
+    const maxBase = 
+    const maxCurrent = 
+
+    return { base: maxBase, current: maxCurrent }
 }
 
 export const setSrcUnitAmount = (enrichedList: {
@@ -74,6 +77,25 @@ export const setSrcUnitAmount = (enrichedList: {
         item.srcUnitAmount = (item.isSkuEnriched && itemEnrichment && itemEnrichment[0]?.Quantity)
             ? +itemEnrichment[0].Quantity
             : null
+        return { item, itemEnrichment }
+    })
+}
+
+export const setUnitsData = (enrichedList: {
+    item: ExtractedLineItem;
+    itemEnrichment: PriceResult[] | null;
+}[]) => {
+    return enrichedList.map(({ item, itemEnrichment }) => {
+        let foundUnits;
+        if (itemEnrichment && itemEnrichment?.[0]) {
+
+            foundUnits = item.isSkuEnriched ? getBaseAndCurrentUnit(itemEnrichment[0].UnitQty) : getScoredUnits(itemEnrichment, item)
+
+        } else {
+
+        }
+        item.baseUnit = foundUnits?.base ?? null
+        item.srcUnit = foundUnits?.current ?? null
         return { item, itemEnrichment }
     })
 }
