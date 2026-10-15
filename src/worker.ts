@@ -33,7 +33,7 @@ import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
-import { searchProduct } from './lib/supermarket/prices.js';
+import { enrichReciptItems, searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 import { setSrcUnitAmount, setUnitsData } from './lib/supermarket/conversion.js';
@@ -165,30 +165,8 @@ export async function processReceipt(
     throw new Error('Gemini returned no parsable receipt extraction');
   }
 
-  const receiptItemsWithEnrichment = await Promise.all(extraction.items.map(async (item) => {
-    let itemEnrichment = null
-    if (item.rawSku && item.rawSku.length > 7) {
-      itemEnrichment = await searchProduct(item.rawSku)
-      item.isSkuEnriched = true
-      if (itemEnrichment.length === 0) {
-        console.log('Could not find itemEnrichment for ' + item.rawSku + ', trying with 0')
-        itemEnrichment = await searchProduct('0' + item.rawSku)
-        item.isSkuEnriched = true
-      }
-      if (itemEnrichment.length === 0) {
-        console.log('Could not find itemEnrichment for ' + item.rawSku + ', trying with rawName')
-        itemEnrichment = await searchProduct(item.rawName, 1)
-      }
-    }
-
-    return {
-      item,
-      itemEnrichment
-    }
-  }))
-
-  const sturatedItems = setUnitsData(receiptItemsWithEnrichment)
-  const itemsWithAmount = setSrcUnitAmount(sturatedItems)
+  const receiptItemsWithEnrichment = await enrichReciptItems(extraction)
+  const itemsWithUnitsAmounts = setUnitsData(receiptItemsWithEnrichment)
 
   await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
   await job.updateProgress(30);
@@ -212,16 +190,16 @@ export async function processReceipt(
     await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
     await job.updateProgress(40);
 
-    for (let i = 0; i < itemsWithAmount.length; i++) {
+    for (let i = 0; i < itemsWithUnitsAmounts.length; i++) {
       checkDeadline(deadline);
-      const { item, itemEnrichment } = itemsWithAmount[i]!;
-      const progress = 40 + Math.floor((i / itemsWithAmount.length) * 40);
+      const { item, itemEnrichment } = itemsWithUnitsAmounts[i]!;
+      const progress = 40 + Math.floor((i / itemsWithUnitsAmounts.length) * 40);
       await updateReceiptProgress(
         deps,
         data.shopId,
         storagePath,
         'validating',
-        `Saving line item ${i + 1} of ${itemsWithAmount.length}`,
+        `Saving line item ${i + 1} of ${itemsWithUnitsAmounts.length}`,
       );
       await job.updateProgress(progress);
 
