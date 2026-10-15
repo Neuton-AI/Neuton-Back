@@ -45,7 +45,7 @@ async function harness(role = 'owner', responses: Record<string, unknown[]> = {}
   testApp.use({ db: db as never });
   return {
     db,
-    async post(url: string, body: Record<string, unknown>) {
+    async post(url: string, body?: Record<string, unknown>) {
       const response = await testApp.app.inject({ method: 'POST', url, payload: body });
       return { status: response.statusCode, body: response.json() as any };
     },
@@ -119,16 +119,14 @@ test('GET /orders rejects an unknown status with 400', async () => {
   }
 });
 
-test('PATCH /orders/:id/status moves processing -> delivered for any shop member', async () => {
+test('POST /orders/:id/verify moves processing -> delivered for any shop member', async () => {
   for (const role of ['owner', 'admin', 'member']) {
     const h = await harness(role, {
       'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
       'update:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered' }]],
     });
     try {
-      const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
-        status: 'delivered',
-      });
+      const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
       assert.equal(status, 200, `role=${role} should be allowed`);
       assert.equal(body.order.status, 'delivered');
       const update = h.db.onlyCallTo('update', 'orders');
@@ -139,14 +137,12 @@ test('PATCH /orders/:id/status moves processing -> delivered for any shop member
   }
 });
 
-test('PATCH /orders/:id/status rejects an already-delivered order with 400', async () => {
+test('POST /orders/:id/verify rejects an already-delivered order with 400', async () => {
   const h = await harness('member', {
     'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', deletedAt: null }]],
   });
   try {
-    const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
-      status: 'delivered',
-    });
+    const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
     assert.equal(status, 400);
     assert.match(body.error.message, /already delivered/);
     assert.deepEqual(
@@ -159,31 +155,21 @@ test('PATCH /orders/:id/status rejects an already-delivered order with 400', asy
   }
 });
 
-test('PATCH /orders/:id/status rejects invalid values with 400', async () => {
-  const h = await harness('owner');
+test('the old order status endpoint is no longer registered', async () => {
+  const h = await harness();
   try {
-    const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
-      status: 'processing',
-    });
-    assert.equal(status, 400);
-    assert.ok(body.error, 'an error envelope is returned');
-    const { status: badStatus, body: badBody } = await h.patch(
-      `/api/v1/orders/${ORDER_ID}/status`,
-      { status: 'shipped' },
-    );
-    assert.equal(badStatus, 400);
-    assert.equal(badBody.error.code, 'VALIDATION_ERROR');
+    const result = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, { status: 'delivered' });
+    assert.equal(result.status, 404);
+    assert.deepEqual(h.db.calls, []);
   } finally {
     await h.close();
   }
 });
 
-test('PATCH /orders/:id/status reads cross-shop access as 404', async () => {
+test('POST /orders/:id/verify reads cross-shop access as 404', async () => {
   const h = await harness('owner', { 'select:orders': [[]] });
   try {
-    const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
-      status: 'delivered',
-    });
+    const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
     assert.equal(status, 404);
     assert.equal(body.error.code, 'NOT_FOUND');
   } finally {
@@ -428,14 +414,12 @@ test('DELETE /orders/:id reads a missing or cross-shop order as 404', async () =
   }
 });
 
-test('PATCH /orders/:id/status cannot revive a cancelled order', async () => {
+test('POST /orders/:id/verify cannot revive a cancelled order', async () => {
   const h = await harness('member', {
     'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', deletedAt: null }]],
   });
   try {
-    const { status, body } = await h.patch(`/api/v1/orders/${ORDER_ID}/status`, {
-      status: 'delivered',
-    });
+    const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
     assert.equal(status, 400);
     assert.match(body.error.message, /already cancelled/);
     assert.deepEqual(h.db.callsTo('update', 'orders'), []);

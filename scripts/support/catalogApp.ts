@@ -70,7 +70,7 @@ function errorHandler(error: FastifyError, _request: FastifyRequest, reply: Fast
     .send({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } });
 }
 
-export async function buildCatalogApp(): Promise<CatalogHarness> {
+export async function buildCatalogApp(role = 'owner'): Promise<CatalogHarness> {
   const app = Fastify({ logger: false });
   app.setErrorHandler(errorHandler);
 
@@ -84,11 +84,11 @@ export async function buildCatalogApp(): Promise<CatalogHarness> {
   });
   app.decorate('resolveShop', async (request) => {
     request.shop = TEST_SHOP;
-    request.shopRole = 'owner';
+    request.shopRole = role as never;
   });
   app.decorate('requireRole', (allowed: string[]) => async (request) => {
     if (!request.shopRole || !allowed.includes(request.shopRole)) {
-      throw new Error(`Requires one of the roles: ${allowed.join(', ')}`);
+      throw new AppError(403, 'FORBIDDEN', `Requires one of the roles: ${allowed.join(', ')}`);
     }
   });
 

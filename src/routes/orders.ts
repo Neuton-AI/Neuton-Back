@@ -376,17 +376,11 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
    * anything else is a 400, and cross-shop access reads as 404 so one shop
    * can never probe another shop's orders.
    */
-  app.patch('/orders/:id/status', guards, async (request) => {
+  app.post('/orders/:id/verify', guards, async (request) => {
     const deps = request.ordersDeps ?? defaultOrdersDeps;
     const shop = currentShop(request);
     const user = currentUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const { status } = z.object({ status: z.enum(ORDER_STATUSES) }).parse(request.body);
-
-    if (status !== 'delivered') {
-      throw badRequest('Only the processing -> delivered transition is supported');
-    }
-
     const rows = await deps.db
       .select()
       .from(orders)

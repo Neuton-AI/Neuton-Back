@@ -20,7 +20,6 @@ import {
   calculateUnitCost,
   checkBatchStock,
 } from '../lib/pricing.js';
-import { verifyReceipt, type VerifyReceiptInput } from '../lib/verifyReceipt.js';
 import { defaultReceiptsDeps } from './receipts.js';
 import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
@@ -585,62 +584,13 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
-  /**
-   * Unified verification endpoint for receipts and recipes.
-   * Single transaction with row lock, audit trail, and proper error codes.
-   */
-  app.post('/catalog/:type/:id/verify', mutationGuards, async (request, reply) => {
+  /** Verifies a recipe and saves reviewed ingredients in one transaction. */
+  app.post('/recipes/:id/verify', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const user = currentUser(request);
-    const { type, id } = z
-      .object({
-        type: z.enum(['receipt', 'recipe']),
-        id: z.string().uuid(),
-      })
-      .parse(request.params);
-
-    // Per-request DB override for tests (same seam as receipts routes)
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const deps = request.receiptsDeps ?? defaultReceiptsDeps;
 
-    if (type === 'receipt') {
-      const body = z
-        .object({
-          items: z.array(
-            z.object({
-              id: z.string().uuid(),
-              accepted: z.boolean(),
-              rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
-              rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
-              unit: htmlFree(z.string().trim().min(1).max(20)).optional(),
-              quantity: z.coerce.number().min(0).optional(),
-              unitPrice: z.coerce.number().min(0).optional(),
-              totalPrice: z.coerce.number().min(0).optional(),
-            }),
-          ).min(1).max(500),
-        })
-        .parse(request.body);
-
-      const outcome = await verifyReceipt({
-        db: deps.db,
-        shopId: shop.id,
-        userId: user.id,
-        receiptId: id,
-        items: body.items,
-      });
-
-      await recordAuditSafe(app, {
-        shopId: shop.id,
-        userId: user.id,
-        eventType: 'RECEIPT_PROCESSED',
-        resourceId: id,
-        ipAddress: request.ip,
-        metadata: { accepted: outcome.accepted, rejected: outcome.rejected },
-      });
-
-      return reply.code(200).send(outcome);
-    }
-
-    // Recipe verification
     const body = z
       .object({
         ingredients: z.array(recipeIngredientSchema).min(1).optional(),
