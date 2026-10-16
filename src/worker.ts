@@ -165,7 +165,7 @@ export async function processReceipt(
     throw new Error('Gemini returned no parsable receipt extraction');
   }
 
-  const receiptItemsWithEnrichment = await enrichReciptItems(extraction)
+  const receiptItemsWithEnrichment = await enrichReciptItems(extraction, deps.searchProduct)
   const itemsWithUnitsAmounts = setUnitsData(receiptItemsWithEnrichment)
 
   await updateReceiptProgress(deps, data.shopId, storagePath, 'validating', 'Validating extracted data');
@@ -214,6 +214,7 @@ export async function processReceipt(
         receiptId,
         inventoryItemId: null,
         rawName: item.rawName,
+        rawMaterialName: item.rawMaterialName,
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),

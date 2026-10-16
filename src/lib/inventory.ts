@@ -17,6 +17,15 @@ import { applyWeightedAverage, type InventoryCostUpdate } from './pricing.js';
 export interface InventorySnapshot {
   currentQuantity: string;
   averageUnitCost: string;
+  baseUnit: string;
+  baseUnitAmount: string;
+}
+
+export interface InventoryMaterial {
+  rawMaterialName: string;
+  baseUnit: string;
+  baseUnitAmount: number;
+  baseUnitCost: number;
 }
 
 /**
@@ -72,14 +81,20 @@ export async function findOrCreateInventoryItem(
   const name = rawName.trim();
   if (name.length === 0) return null;
 
+  const inventoryUnit = (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
+    ? (unit as InventoryUnit)
+    : 'unit';
+
   const created = await db
     .insert(inventoryItems)
     .values({
       shopId,
       name,
-      unit: (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
-        ? (unit as InventoryUnit)
-        : 'unit',
+      rawMaterialName: name,
+      unit: inventoryUnit,
+      baseUnit: inventoryUnit,
+      baseUnitAmount: '1.00',
+      baseUnitCost: '0.000000',
       currentQuantity: '0.000',
     })
     .returning({ id: inventoryItems.id });
@@ -109,6 +124,8 @@ export async function lockInventoryRows(
       id: inventoryItems.id,
       currentQuantity: inventoryItems.currentQuantity,
       averageUnitCost: inventoryItems.averageUnitCost,
+      baseUnit: inventoryItems.baseUnit,
+      baseUnitAmount: inventoryItems.baseUnitAmount,
     })
     .from(inventoryItems)
     .where(inArray(inventoryItems.id, ordered))
@@ -119,10 +136,30 @@ export async function lockInventoryRows(
     locked.set(row.id, {
       currentQuantity: row.currentQuantity,
       averageUnitCost: row.averageUnitCost,
+      baseUnit: row.baseUnit,
+      baseUnitAmount: row.baseUnitAmount,
     });
   }
 
   return locked;
+}
+
+/** Saves the reviewed package measurements and cost while the caller holds its row lock. */
+export async function writeInventoryMaterial(
+  db: InventoryDb,
+  inventoryItemId: string,
+  material: InventoryMaterial,
+): Promise<void> {
+  await db
+    .update(inventoryItems)
+    .set({
+      rawMaterialName: material.rawMaterialName,
+      baseUnit: material.baseUnit,
+      baseUnitAmount: material.baseUnitAmount.toFixed(2),
+      baseUnitCost: material.baseUnitCost.toFixed(6),
+      updatedAt: new Date(),
+    })
+    .where(eq(inventoryItems.id, inventoryItemId));
 }
 
 /** Writes a computed inventory state, stamping `updated_at`. */
@@ -164,6 +201,7 @@ export async function applyPurchaseFrom(
   await writeInventoryState(db, inventoryItemId, next);
 
   return {
+    ...snapshot,
     currentQuantity: qty(next.currentQuantity),
     averageUnitCost: unitCost(next.averageUnitCost),
   };

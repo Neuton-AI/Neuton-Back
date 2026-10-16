@@ -43,11 +43,15 @@ const verifyItemSchema = z.object({
   id: z.string().uuid(),
   accepted: z.boolean(),
   rawName: htmlFree(z.string().trim().min(1).max(200)).optional(),
+  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)).optional(),
   rawSku: htmlFree(z.string().trim().min(1).max(120)).optional(),
   srcUnit: htmlFree(z.string().trim().min(1).max(20)).optional(),
   quantity: z.coerce.number().min(0).optional(),
   unitPrice: z.coerce.number().min(0).optional(),
   totalPrice: z.coerce.number().min(0).optional(),
+  baseUnit: htmlFree(z.string().trim().min(1).max(24)).optional(),
+  baseUnitAmount: z.number().finite().nonnegative().max(999999999.999).optional(),
+  baseUnitCost: z.number().finite().nonnegative().lt(1_000_000_000_000).optional(),
 });
 
 const verifySchema = z.object({

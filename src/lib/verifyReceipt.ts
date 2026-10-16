@@ -12,18 +12,27 @@ import { and, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { receipts, receiptItems } from '../db/schema/index.js';
 import { badRequest, conflict, notFound } from './errors.js';
-import { applyPurchaseFrom, findOrCreateInventoryItem, lockInventoryRows } from './inventory.js';
+import {
+  applyPurchaseFrom,
+  findOrCreateInventoryItem,
+  lockInventoryRows,
+  writeInventoryMaterial,
+} from './inventory.js';
 import { money, quantity as qty, toNumber, unitCost } from './money.js';
 
 export interface VerifyLineInput {
   id: string;
   accepted: boolean;
   rawName?: string;
+  rawMaterialName?: string;
   rawSku?: string;
   srcUnit?: string;
   quantity?: number;
   unitPrice?: number;
   totalPrice?: number;
+  baseUnit?: string;
+  baseUnitAmount?: number;
+  baseUnitCost?: number;
 }
 
 export interface VerifyReceiptInput {
@@ -46,10 +55,12 @@ interface Decision {
   submitted: VerifyLineInput;
   inventoryItemId: string | null;
   rawName: string;
+  rawMaterialName: string;
   srcUnit: string | null;
-  /** Quantity to put into stock: the reviewer's figure, absent nothing applied. */
   quantity: number;
   unitPrice: number;
+  baseUnit: string | null;
+  baseUnitAmount: number | null;
 }
 
 export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyReceiptResult> {
@@ -91,22 +102,33 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     for (const submitted of items) {
       const stored = byId.get(submitted.id)!;
       const rawName = submitted.rawName ?? stored.rawName;
+      const rawMaterialName = submitted.rawMaterialName ?? stored.rawMaterialName ?? rawName;
       const srcUnit = submitted.srcUnit ?? stored.srcUnit;
       const quantity = submitted.quantity ?? toNumber(stored.quantity);
       const unitPrice = submitted.unitPrice ?? toNumber(stored.unitPrice);
+      const baseUnit = submitted.baseUnit ?? stored.baseUnit;
+      const baseUnitAmount = submitted.baseUnitAmount ??
+        (stored.baseUnitAmount == null ? null : toNumber(stored.baseUnitAmount));
+
+      const decision = {
+        stored,
+        submitted,
+        rawName,
+        rawMaterialName,
+        srcUnit,
+        quantity,
+        unitPrice,
+        baseUnit,
+        baseUnitAmount,
+      };
 
       // A rejected line resolves no SKU and writes no stock movement. Creating one
       // anyway would leave inventory for something nobody bought.
       if (!submitted.accepted) {
         rejected += 1;
         decisions.push({
-          stored,
-          submitted,
+          ...decision,
           inventoryItemId: null,
-          rawName,
-          srcUnit,
-          quantity,
-          unitPrice,
         });
         continue;
       }
@@ -121,13 +143,8 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       // this running at most once per receipt, so there is no second full apply
       // to worry about either.
       decisions.push({
-        stored,
-        submitted,
+        ...decision,
         inventoryItemId,
-        rawName,
-        srcUnit,
-        quantity,
-        unitPrice,
       });
     }
 
@@ -143,13 +160,33 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     );
 
     for (const decision of decisions) {
-      if (!decision.inventoryItemId || decision.quantity <= 0) continue;
+      if (!decision.inventoryItemId) continue;
+
+      const snapshot = snapshots.get(decision.inventoryItemId);
+      if (!snapshot) continue;
+
+      // Reuse a known package amount only in the same base unit. An incomplete
+      // conversion to a different unit stays unknown (zero amount and cost).
+      const baseUnit = decision.baseUnit ?? snapshot.baseUnit;
+      const baseUnitAmount = decision.baseUnitAmount ??
+        (baseUnit === snapshot.baseUnit ? toNumber(snapshot.baseUnitAmount) : 0);
+      const baseUnitCost = decision.submitted.baseUnitCost ??
+        (baseUnitAmount > 0 ? decision.unitPrice / baseUnitAmount : 0);
+      await writeInventoryMaterial(tx, decision.inventoryItemId, {
+        rawMaterialName: decision.rawMaterialName,
+        baseUnit,
+        baseUnitAmount,
+        baseUnitCost,
+      });
+      snapshot.baseUnit = baseUnit;
+      snapshot.baseUnitAmount = baseUnitAmount.toFixed(2);
+
+      if (decision.quantity <= 0) continue;
 
       // Thread the state forward within the loop. Two accepted lines naming the
       // same SKU both start from the locked snapshot; without carrying the result
       // of the first write into the second, the later write would silently drop
       // the earlier line's quantity and cost.
-      const snapshot = snapshots.get(decision.inventoryItemId);
       const next = await applyPurchaseFrom(
         tx,
         decision.inventoryItemId,
@@ -170,12 +207,15 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       // Corrections land only when supplied. An omitted field means the reviewer
       // agreed with the extraction, not that they blanked it out.
       if (submitted.rawName !== undefined) patch.rawName = decision.rawName;
+      if (submitted.rawMaterialName !== undefined) patch.rawMaterialName = decision.rawMaterialName;
       // The column and its partial index exist, but nothing has ever written it.
       if (submitted.rawSku !== undefined) patch.rawSku = submitted.rawSku;
       if (submitted.srcUnit !== undefined) patch.srcUnit = decision.srcUnit;
       if (submitted.quantity !== undefined) patch.quantity = qty(decision.quantity);
       if (submitted.unitPrice !== undefined) patch.unitPrice = unitCost(decision.unitPrice);
       if (submitted.totalPrice !== undefined) patch.totalPrice = money(submitted.totalPrice);
+      if (submitted.baseUnit !== undefined) patch.baseUnit = decision.baseUnit;
+      if (submitted.baseUnitAmount !== undefined) patch.baseUnitAmount = qty(submitted.baseUnitAmount);
 
       await tx
         .update(receiptItems)

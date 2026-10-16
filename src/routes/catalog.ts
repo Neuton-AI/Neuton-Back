@@ -72,10 +72,14 @@ function isForeignKeyViolation(error: unknown): boolean {
 
 const inventorySchema = z.object({
   name: htmlFree(z.string().trim().min(1).max(160)),
+  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)),
   sku: htmlFree(z.string().trim().max(64)).nullable().optional(),
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
   unit: z.enum(['kg', 'g', 'l', 'ml', 'unit', 'pack']),
+  baseUnit: htmlFree(z.string().trim().min(1).max(24)),
+  baseUnitAmount: z.number().finite().nonnegative().max(9999999999.99),
+  baseUnitCost: z.number().finite().nonnegative().max(999999999999.999999),
   currentQuantity: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).nullable().optional(),
   lastUnitCost: z.coerce.number().min(0).nullable().optional(),
@@ -497,10 +501,14 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       .values({
         shopId: shop.id,
         name: body.name,
+        rawMaterialName: body.rawMaterialName,
         sku: body.sku ?? null,
         imageUrl: body.imageUrl ?? null,
         categoryId: body.categoryId ?? null,
         unit: body.unit,
+        baseUnit: body.baseUnit,
+        baseUnitAmount: body.baseUnitAmount.toFixed(2),
+        baseUnitCost: body.baseUnitCost.toFixed(6),
         currentQuantity: qty(body.currentQuantity),
         reorderLevel: body.reorderLevel === null || body.reorderLevel === undefined
           ? null
@@ -541,10 +549,14 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
 
     const patch: Partial<typeof inventoryItems.$inferInsert> = { updatedAt: new Date() };
     if (body.name !== undefined) patch.name = body.name;
+    if (body.rawMaterialName !== undefined) patch.rawMaterialName = body.rawMaterialName;
     if (body.sku !== undefined) patch.sku = body.sku ?? null;
     if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
     if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
     if (body.unit !== undefined) patch.unit = body.unit;
+    if (body.baseUnit !== undefined) patch.baseUnit = body.baseUnit;
+    if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(2);
+    if (body.baseUnitCost !== undefined) patch.baseUnitCost = body.baseUnitCost.toFixed(6);
     if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
     if (body.reorderLevel !== undefined) {
       patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);

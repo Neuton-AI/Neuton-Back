@@ -54,7 +54,7 @@ async function seedShop(): Promise<string> {
 
   const [flour] = await db
     .insert(inventoryItems)
-    .values({ shopId: SHOP_ID, name: 'Flour', unit: 'kg', averageUnitCost: '2.00' })
+    .values({ shopId: SHOP_ID, name: 'Flour', rawMaterialName: 'Flour', unit: 'kg', averageUnitCost: '2.00', baseUnit: 'kg', baseUnitAmount: '1.00', baseUnitCost: '2.000000' })
     .returning();
   if (!flour) throw new Error('fixture: inventory insert returned no row');
 

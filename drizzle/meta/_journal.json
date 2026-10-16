@@ -15,6 +15,27 @@
       "when": 1792012844820,
       "tag": "0020_align_local_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792100706397,
+      "tag": "0021_inventory_base_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792135353942,
+      "tag": "0022_inventory_raw_material_name",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792137994458,
+      "tag": "0023_receipt_item_raw_material_name",
+      "breakpoints": true
     }
   ]
 }

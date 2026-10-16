@@ -377,19 +377,19 @@ export async function searchProduct(query: string, limitPerChain = 15): Promise<
   return results;
 }
 
-export const enrichReciptItems = async (extraction: ReceiptExtraction) => {
+export const enrichReciptItems = async (extraction: ReceiptExtraction, search: typeof searchProduct = searchProduct) => {
   const receiptItemsWithEnrichment = await Promise.all(extraction.items.map(async (item) => {
     let itemEnrichment = null
 
-    itemEnrichment = item.rawSku ? await getValidSkuEnrichment(item.rawSku) : null
+    itemEnrichment = item.rawSku ? await getValidSkuEnrichment(item.rawSku, search) : null
     item.isSkuEnriched = (itemEnrichment !== null && itemEnrichment.length > 0)
 
     if (!item.isSkuEnriched) {
-      itemEnrichment = await getValidNameEnrichment(item.rawName)
+      itemEnrichment = await getValidNameEnrichment(item.rawName, search)
     }
 
     if ((itemEnrichment && itemEnrichment.length === 0) || itemEnrichment === null) {
-      itemEnrichment = await getScoredEnrichment(item.rawName, item.rawMaterialName)
+      itemEnrichment = await getScoredEnrichment(item.rawName, item.rawMaterialName, search)
     }
     return {
       item,
@@ -400,9 +400,9 @@ export const enrichReciptItems = async (extraction: ReceiptExtraction) => {
   return receiptItemsWithEnrichment
 }
 
-export const getValidSkuEnrichment = async (sku: string) => {
+export const getValidSkuEnrichment = async (sku: string, search: typeof searchProduct = searchProduct) => {
   const enriched: PriceResult[] = [];
-  const found = await searchProduct(sku)
+  const found = await search(sku)
   for (const item of found) {
     item.ItemCode == sku && enriched.push(item);
   }
@@ -410,9 +410,9 @@ export const getValidSkuEnrichment = async (sku: string) => {
   return enriched
 }
 
-export const getValidNameEnrichment = async (name: string) => {
+export const getValidNameEnrichment = async (name: string, search: typeof searchProduct = searchProduct) => {
   const enriched: PriceResult[] = [];
-  const found = await searchProduct(name, 5)
+  const found = await search(name, 5)
   for (const item of found) {
     item.ItemName.toLowerCase() === name.toLowerCase() && enriched.push(item);
   }
@@ -420,10 +420,10 @@ export const getValidNameEnrichment = async (name: string) => {
   return enriched
 }
 
-export const getScoredEnrichment = async (rawName: string, rawMaterialName: string) => {
+export const getScoredEnrichment = async (rawName: string, rawMaterialName: string, search: typeof searchProduct = searchProduct) => {
   const [rawNameScored, rawMaterialNameScored] = await Promise.all([
-    searchProduct(rawName),
-    searchProduct(rawMaterialName),
+    search(rawName),
+    search(rawMaterialName),
   ])
 
   const scored = [...rawNameScored, ...rawMaterialNameScored].sort((a, b) => b.score - a.score)
