@@ -24,6 +24,9 @@ export interface VerifyLineInput {
   quantity?: number;
   unitPrice?: number;
   totalPrice?: number;
+  baseUnit?: string;
+  baseUnitAmount?: number;
+  baseUnitCost?: number;
 }
 
 export interface VerifyReceiptInput {
@@ -94,6 +97,9 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       const srcUnit = submitted.srcUnit ?? stored.srcUnit;
       const quantity = submitted.quantity ?? toNumber(stored.quantity);
       const unitPrice = submitted.unitPrice ?? toNumber(stored.unitPrice);
+      const baseUnit = submitted.baseUnit ?? stored.baseUnit;
+      const baseUnitAmount = submitted.baseUnitAmount ?? toNumber(stored.baseUnitAmount);
+      const baseUnitCost = submitted.baseUnitCost ?? Number(stored.baseUnitAmount) / Number(stored.unitPrice);
 
       // A rejected line resolves no SKU and writes no stock movement. Creating one
       // anyway would leave inventory for something nobody bought.

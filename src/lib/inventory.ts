@@ -81,6 +81,7 @@ export async function findOrCreateInventoryItem(
     .values({
       shopId,
       name,
+      rawMaterialName: name,
       unit: inventoryUnit,
       baseUnit: inventoryUnit,
       baseUnitAmount: '1.00',

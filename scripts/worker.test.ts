@@ -155,6 +155,7 @@ test('inventory lookup: an unknown name is created at zero stock', async () => {
   assert.deepEqual(db.onlyCallTo('insert', 'inventoryItems').values, {
     shopId: SHOP_ID,
     name: 'Tahini',
+    rawMaterialName: 'Tahini',
     unit: 'kg',
     baseUnit: 'kg',
     baseUnitAmount: '1.00',

@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildCatalogApp } from './support/catalogApp.js';
 
-test('inventory creation rejects missing or null base unit fields before writing', async () => {
+test('inventory creation rejects missing or null required material fields before writing', async () => {
   const harness = await buildCatalogApp();
   try {
-    for (const field of ['baseUnit', 'baseUnitAmount', 'baseUnitCost']) {
+    for (const field of ['rawMaterialName', 'baseUnit', 'baseUnitAmount', 'baseUnitCost']) {
       for (const value of [undefined, null]) {
         const payload: Record<string, unknown> = {
-          name: 'Flour', unit: 'kg', baseUnit: 'g', baseUnitAmount: 1000, baseUnitCost: 0.123456,
+          name: 'Flour', rawMaterialName: 'Flour', unit: 'kg', baseUnit: 'g', baseUnitAmount: 1000, baseUnitCost: 0.123456,
         };
         if (value === undefined) delete payload[field];
         else payload[field] = value;

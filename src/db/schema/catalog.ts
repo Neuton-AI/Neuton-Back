@@ -32,6 +32,7 @@ export const inventoryItems = pgTable('inventory_items', {
     .references(() => shops.id, { onDelete: 'cascade' }),
   categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
+  rawMaterialName: text('raw_material_name').notNull(),
   sku: text('sku'),
   imageUrl: text('image_url'),
   unit: text('unit', { enum: INVENTORY_UNITS }).notNull(),

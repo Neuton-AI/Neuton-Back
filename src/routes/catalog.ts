@@ -72,6 +72,7 @@ function isForeignKeyViolation(error: unknown): boolean {
 
 const inventorySchema = z.object({
   name: htmlFree(z.string().trim().min(1).max(160)),
+  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)),
   sku: htmlFree(z.string().trim().max(64)).nullable().optional(),
   imageUrl: z.string().trim().url().max(500).nullable().optional(),
   categoryId: z.string().uuid().nullable().optional(),
@@ -500,6 +501,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       .values({
         shopId: shop.id,
         name: body.name,
+        rawMaterialName: body.rawMaterialName,
         sku: body.sku ?? null,
         imageUrl: body.imageUrl ?? null,
         categoryId: body.categoryId ?? null,
@@ -547,6 +549,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
 
     const patch: Partial<typeof inventoryItems.$inferInsert> = { updatedAt: new Date() };
     if (body.name !== undefined) patch.name = body.name;
+    if (body.rawMaterialName !== undefined) patch.rawMaterialName = body.rawMaterialName;
     if (body.sku !== undefined) patch.sku = body.sku ?? null;
     if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
     if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;

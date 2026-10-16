@@ -22,6 +22,13 @@
       "when": 1792100706397,
       "tag": "0021_inventory_base_units",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792135353942,
+      "tag": "0022_inventory_raw_material_name",
+      "breakpoints": true
     }
   ]
 }
