@@ -19,6 +19,7 @@ export interface VerifyLineInput {
   id: string;
   accepted: boolean;
   rawName?: string;
+  rawMaterialName?: string;
   rawSku?: string;
   srcUnit?: string;
   quantity?: number;
@@ -50,7 +51,6 @@ interface Decision {
   inventoryItemId: string | null;
   rawName: string;
   srcUnit: string | null;
-  /** Quantity to put into stock: the reviewer's figure, absent nothing applied. */
   quantity: number;
   unitPrice: number;
 }
@@ -94,6 +94,7 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     for (const submitted of items) {
       const stored = byId.get(submitted.id)!;
       const rawName = submitted.rawName ?? stored.rawName;
+      const rawMaterialName = submitted.rawMaterialName ?? stored.rawMaterialName;
       const srcUnit = submitted.srcUnit ?? stored.srcUnit;
       const quantity = submitted.quantity ?? toNumber(stored.quantity);
       const unitPrice = submitted.unitPrice ?? toNumber(stored.unitPrice);

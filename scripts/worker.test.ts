@@ -100,7 +100,7 @@ function receipt(overrides: Partial<ReceiptExtraction> = {}): ReceiptExtraction 
     items: [
       {
         rawName: 'Flour',
-        rawMaterialName: 'Flour',
+        rawMaterialName: 'Wheat flour',
         quantity: 2,
         rawSku: null, isSkuEnriched: false, rawSrcUnit: 'kg', srcUnitAmount: null, baseUnit: null, baseUnitAmount: null, srcUnit: 'kg',
         unitPrice: 3.5,
@@ -213,6 +213,7 @@ test('receipt: replaces the stored lines and hands a receipt to review inside on
     inventoryItemId: null,
     rawName: 'Flour',
     quantity: '2.000',
+    rawMaterialName: 'Wheat flour',
     unitPrice: '3.5000',
     totalPrice: '7.00',
     srcUnit: 'kg',

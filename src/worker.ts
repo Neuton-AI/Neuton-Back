@@ -214,6 +214,7 @@ export async function processReceipt(
         receiptId,
         inventoryItemId: null,
         rawName: item.rawName,
+        rawMaterialName: item.rawMaterialName,
         quantity: quantity === null ? null : qty(quantity),
         unitPrice: unitPrice === null ? null : unitCost(unitPrice),
         totalPrice: totalPrice === null ? null : money(totalPrice),

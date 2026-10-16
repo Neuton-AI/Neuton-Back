@@ -78,6 +78,7 @@ export const receiptItems = pgTable('receipt_items', {
     onDelete: 'set null',
   }),
   rawName: text('raw_name').notNull(),
+  rawMaterialName: text('raw_material_name').notNull(),
   rawSku: text('raw_sku'),
   quantity: numeric('quantity', { precision: 12, scale: 3 }),
   unitPrice: numeric('unit_price', { precision: 12, scale: 4 }),

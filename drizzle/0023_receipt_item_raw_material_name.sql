@@ -1,0 +1,1 @@
+ALTER TABLE "receipt_items" ADD COLUMN "raw_material_name" text NOT NULL;
