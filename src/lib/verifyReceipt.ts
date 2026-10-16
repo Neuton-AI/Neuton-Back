@@ -16,8 +16,11 @@ import {
   applyPurchaseFrom,
   findOrCreateInventoryItem,
   lockInventoryRows,
+  loadBaseUnitPurchases,
   writeInventoryMaterial,
+  type BaseUnitPurchase,
 } from './inventory.js';
+import { addBaseUnitCostSample, convertInventoryAmount } from './inventoryBaseUnits.js';
 import { money, quantity as qty, toNumber, unitCost } from './money.js';
 
 export interface VerifyLineInput {
@@ -61,6 +64,7 @@ interface Decision {
   unitPrice: number;
   baseUnit: string | null;
   baseUnitAmount: number | null;
+  baseUnitCost?: number;
 }
 
 export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyReceiptResult> {
@@ -94,12 +98,16 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
     if (foreign) {
       throw badRequest(`Receipt line ${foreign.id} does not belong to this receipt`);
     }
+    if (new Set(items.map((item) => item.id)).size !== items.length) {
+      throw badRequest('Receipt lines must not be submitted more than once');
+    }
 
     const decisions: Decision[] = [];
     let accepted = 0;
     let rejected = 0;
 
-    for (const submitted of items) {
+    // Match the deterministic history ordering for purchases within one receipt.
+    for (const submitted of [...items].sort((a, b) => a.id.localeCompare(b.id))) {
       const stored = byId.get(submitted.id)!;
       const rawName = submitted.rawName ?? stored.rawName;
       const rawMaterialName = submitted.rawMaterialName ?? stored.rawMaterialName ?? rawName;
@@ -159,27 +167,51 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
         .filter((value): value is string => value !== null),
     );
 
+    const purchaseHistory = new Map<string, BaseUnitPurchase[]>();
+
     for (const decision of decisions) {
       if (!decision.inventoryItemId) continue;
 
       const snapshot = snapshots.get(decision.inventoryItemId);
       if (!snapshot) continue;
 
-      // Reuse a known package amount only in the same base unit. An incomplete
-      // conversion to a different unit stays unknown (zero amount and cost).
       const baseUnit = decision.baseUnit ?? snapshot.baseUnit;
+      const historyKey = `${decision.inventoryItemId}:${baseUnit}`;
+      let history = purchaseHistory.get(historyKey);
+      if (!history) {
+        history = await loadBaseUnitPurchases(tx, shopId, decision.inventoryItemId, baseUnit);
+        purchaseHistory.set(historyKey, history);
+      }
+      // Inventory now holds a total. Only receipt history can supply a missing
+      // per-package measurement; reusing the inventory total would multiply it again.
       const baseUnitAmount = decision.baseUnitAmount ??
-        (baseUnit === snapshot.baseUnit ? toNumber(snapshot.baseUnitAmount) : 0);
+        toNumber(history[0]?.baseUnitAmount);
       const baseUnitCost = decision.submitted.baseUnitCost ??
         (baseUnitAmount > 0 ? decision.unitPrice / baseUnitAmount : 0);
+      const samples = history.map((purchase) => toNumber(purchase.baseUnitCost));
+      let baseUnitAverageCost = samples.length > 0
+        ? samples.reduce((sum, cost) => sum + cost, 0) / samples.length
+        : 0;
+      if (decision.quantity > 0 && baseUnitAmount > 0) {
+        baseUnitAverageCost = addBaseUnitCostSample(samples, Number(baseUnitCost.toFixed(6)));
+        history.unshift({ baseUnitCost: baseUnitCost.toFixed(6), baseUnitAmount: qty(baseUnitAmount) });
+        history.splice(20);
+      }
+      const totalBaseUnitAmount = convertInventoryAmount(
+        toNumber(snapshot.baseUnitAmount), snapshot.baseUnit, baseUnit,
+      ) + decision.quantity * baseUnitAmount;
       await writeInventoryMaterial(tx, decision.inventoryItemId, {
         rawMaterialName: decision.rawMaterialName,
         baseUnit,
-        baseUnitAmount,
+        baseUnitAmount: totalBaseUnitAmount,
         baseUnitCost,
+        baseUnitAverageCost,
       });
       snapshot.baseUnit = baseUnit;
-      snapshot.baseUnitAmount = baseUnitAmount.toFixed(2);
+      snapshot.baseUnitAmount = totalBaseUnitAmount.toFixed(3);
+      decision.baseUnit = baseUnit;
+      decision.baseUnitAmount = baseUnitAmount;
+      decision.baseUnitCost = baseUnitCost;
 
       if (decision.quantity <= 0) continue;
 
@@ -216,6 +248,11 @@ export async function verifyReceipt(input: VerifyReceiptInput): Promise<VerifyRe
       if (submitted.totalPrice !== undefined) patch.totalPrice = money(submitted.totalPrice);
       if (submitted.baseUnit !== undefined) patch.baseUnit = decision.baseUnit;
       if (submitted.baseUnitAmount !== undefined) patch.baseUnitAmount = qty(submitted.baseUnitAmount);
+      if (decision.inventoryItemId) {
+        patch.baseUnit = decision.baseUnit;
+        patch.baseUnitAmount = qty(decision.baseUnitAmount ?? 0);
+        patch.baseUnitCost = decision.baseUnitCost?.toFixed(6) ?? null;
+      }
 
       await tx
         .update(receiptItems)

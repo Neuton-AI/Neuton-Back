@@ -36,6 +36,13 @@
       "when": 1792137994458,
       "tag": "0023_receipt_item_raw_material_name",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792162156910,
+      "tag": "0024_receipt_inventory_totals_and_cost_sma",
+      "breakpoints": true
     }
   ]
 }

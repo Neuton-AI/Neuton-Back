@@ -88,6 +88,7 @@ export const receiptItems = pgTable('receipt_items', {
   srcUnitAmount: numeric('src_unit_amount', { precision: 12, scale: 3 }),
   baseUnit: text('base_unit'),
   baseUnitAmount: numeric('base_unit_amount', { precision: 12, scale: 3 }),
+  baseUnitCost: numeric('base_unit_cost', { precision: 18, scale: 6 }),
   confidence: numeric('confidence', { precision: 4, scale: 3 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

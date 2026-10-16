@@ -2,7 +2,7 @@ import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
-import { buildReceiptsApp, SHOP_ID } from './support/receiptsApp.js';
+import { buildReceiptsApp } from './support/receiptsApp.js';
 
 const RECEIPT_ID = '55555555-5555-5555-5555-555555555555';
 const LINE_ID = '66666666-6666-6666-6666-666666666666';
@@ -33,14 +33,15 @@ async function harness(options: {
   };
   create?: boolean;
   status?: string;
+  history?: { baseUnitCost: string; baseUnitAmount: string }[];
 } = {}) {
   const h = await buildReceiptsApp();
   const db = new FakeDb({
     'select:receipts': [[{ id: RECEIPT_ID, status: options.status ?? 'unverified' }]],
-    'select:receiptItems': [[{ ...LINE, ...options.line }]],
+    'select:receiptItems': [[{ ...LINE, ...options.line }], options.history ?? []],
     'select:inventoryItems': [
       options.create ? [] : [INVENTORY],
-      [{ ...INVENTORY, ...(options.create ? { currentQuantity: '0.000', averageUnitCost: '0' } : {}) }],
+      [{ ...INVENTORY, ...(options.create ? { currentQuantity: '0.000', averageUnitCost: '0', baseUnitAmount: '0.000' } : {}) }],
     ],
     'insert:inventoryItems': [[{ id: INVENTORY_ID }]],
   });
@@ -67,8 +68,9 @@ test('receipt verification saves extracted material details for new and existing
       assert.deepEqual(writes[0]?.set, {
         rawMaterialName: 'Wheat flour',
         baseUnit: 'g',
-        baseUnitAmount: '1000.00',
+        baseUnitAmount: create ? '2000.000' : '3000.000',
         baseUnitCost: '0.003457',
+        baseUnitAverageCost: '0.003457',
         updatedAt: writes[0]?.set?.updatedAt,
       });
       assert.equal(writes[1]?.set?.currentQuantity, create ? '2.000' : '5.000');
@@ -92,11 +94,12 @@ test('receipt corrections persist and determine inventory base cost using correc
     const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
     assert.equal(material?.rawMaterialName, 'Bread flour');
     assert.equal(material?.baseUnit, 'kg');
-    assert.equal(material?.baseUnitAmount, '0.50');
+    assert.equal(material?.baseUnitAmount, '2.000');
     assert.equal(material?.baseUnitCost, '12.000000');
     assert.deepEqual(h.db.onlyCallTo('update', 'receiptItems').set, {
       inventoryItemId: INVENTORY_ID,
       rawMaterialName: 'Bread flour', baseUnit: 'kg', baseUnitAmount: '0.500', unitPrice: '6.0000',
+      baseUnitCost: '12.000000',
     });
   } finally { await h.close(); }
 });
@@ -123,15 +126,15 @@ test('zero amounts and free purchases produce finite zero base costs', async () 
   }
 });
 
-test('missing extraction measurements retain the inventory package measurement', async () => {
+test('missing measurements never multiply the existing inventory total as a package amount', async () => {
   const h = await harness({ line: { baseUnit: null, baseUnitAmount: null } });
   try {
     const response = await h.verify();
     assert.equal(response.statusCode, 200, response.body);
     const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
     assert.equal(material?.baseUnit, 'kg');
-    assert.equal(material?.baseUnitAmount, '1.00');
-    assert.equal(material?.baseUnitCost, '3.456700');
+    assert.equal(material?.baseUnitAmount, '1.000');
+    assert.equal(material?.baseUnitCost, '0.000000');
   } finally { await h.close(); }
 });
 
@@ -155,7 +158,7 @@ test('a missing amount cannot reuse a measurement in a different base unit', asy
     assert.equal(response.statusCode, 200, response.body);
     const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
     assert.equal(material?.baseUnit, 'g');
-    assert.equal(material?.baseUnitAmount, '0.00');
+    assert.equal(material?.baseUnitAmount, '1000.000');
     assert.equal(material?.baseUnitCost, '0.000000');
   } finally { await h.close(); }
 });
@@ -218,5 +221,88 @@ test('multiple receipt lines for one item preserve every quantity contribution',
     assert.equal(writes[3]?.set?.currentQuantity, '7.000');
     assert.equal(writes[3]?.set?.averageUnitCost, '2.9876');
     assert.equal(writes[2]?.set?.baseUnitCost, '0.004000');
+    assert.equal(writes[2]?.set?.baseUnitAmount, '5000.000');
+    assert.equal(writes[2]?.set?.baseUnitAverageCost, '0.003729');
+  } finally { await h.close(); }
+});
+
+test('SMA keeps the latest 20 purchase costs and gives large and small purchases equal weight', async () => {
+  const history = Array.from({ length: 20 }, (_, index) => ({
+    baseUnitCost: String(20 - index), baseUnitAmount: '1.000',
+  }));
+  const h = await harness({ history });
+  try {
+    const response = await h.verify({ quantity: 100, baseUnitCost: 21 });
+    assert.equal(response.statusCode, 200, response.body);
+    const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
+    assert.equal(material?.baseUnitAverageCost, '11.500000');
+    assert.equal(material?.baseUnitAmount, '101000.000');
+    const historyRead = h.db.callsTo('select', 'receiptItems')[1];
+    assert.equal(historyRead?.limit, 20);
+    assert.deepEqual(historyRead?.joins, ['innerJoin']);
+    assert.equal(h.db.onlyCallTo('update', 'receiptItems').set?.baseUnitCost, '21.000000');
+  } finally { await h.close(); }
+});
+
+test('SMA uses available history, including zero-cost purchases and explicit corrected costs', async () => {
+  const h = await harness({ history: [
+    { baseUnitCost: '0.000000', baseUnitAmount: '1000.000' },
+    { baseUnitCost: '6.000000', baseUnitAmount: '1000.000' },
+  ] });
+  try {
+    const response = await h.verify({ baseUnitCost: 3, quantity: 0.5 });
+    assert.equal(response.statusCode, 200, response.body);
+    const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
+    assert.equal(material?.baseUnitAverageCost, '3.000000');
+    assert.equal(material?.baseUnitAmount, '1500.000');
+  } finally { await h.close(); }
+});
+
+test('zero-quantity lines leave purchase history unchanged', async () => {
+  const h = await harness({ history: [{ baseUnitCost: '6.000000', baseUnitAmount: '1000.000' }] });
+  try {
+    const response = await h.verify({ quantity: 0, baseUnitCost: 100 });
+    assert.equal(response.statusCode, 200, response.body);
+    const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
+    assert.equal(material?.baseUnitAverageCost, '6.000000');
+    assert.equal(material?.baseUnitAmount, '1000.000');
+  } finally { await h.close(); }
+});
+
+test('missing package amounts can reuse the latest verified receipt measurement', async () => {
+  const h = await harness({
+    line: { baseUnitAmount: null },
+    history: [{ baseUnitCost: '0.004', baseUnitAmount: '500.000' }],
+  });
+  try {
+    const response = await h.verify({ unitPrice: 3 });
+    assert.equal(response.statusCode, 200, response.body);
+    const material = h.db.callsTo('update', 'inventoryItems')[0]?.set;
+    assert.equal(material?.baseUnitAmount, '2000.000');
+    assert.equal(material?.baseUnitCost, '0.006000');
+    assert.equal(material?.baseUnitAverageCost, '0.005000');
+    assert.equal(h.db.onlyCallTo('update', 'receiptItems').set?.baseUnitAmount, '500.000');
+  } finally { await h.close(); }
+});
+
+test('duplicate submitted receipt lines fail before inventory can be changed twice', async () => {
+  const h = await harness();
+  try {
+    const response = await h.app.inject({
+      method: 'POST', url: `/api/v1/receipts/${RECEIPT_ID}/verify`,
+      payload: { items: [{ id: LINE_ID, accepted: true }, { id: LINE_ID, accepted: true }] },
+    });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.deepEqual(h.db.callsTo('update', 'inventoryItems'), []);
+    assert.deepEqual(h.db.callsTo('update', 'receiptItems'), []);
+  } finally { await h.close(); }
+});
+
+test('incompatible base unit corrections cannot silently discard existing stock', async () => {
+  const h = await harness();
+  try {
+    const response = await h.verify({ baseUnit: 'ml' });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.deepEqual(h.db.callsTo('update', 'inventoryItems'), []);
   } finally { await h.close(); }
 });
