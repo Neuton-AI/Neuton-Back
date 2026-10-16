@@ -167,7 +167,7 @@ const ORDER_SCHEMA = `{
 
 const EXTRACT_RECEIPT_PROMPT = `Extract this shopping receipt.
 Return all the data in the receipt that we need in our response schema.
-the rawMaterialName is the raw material the item is made of without any additional words
+the rawMaterialName is the raw material the item is made of without any additional words, no units no weigths or any additional information.
 for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye". 
 Use null for anything you cannot read. Never invent values.`;
 
