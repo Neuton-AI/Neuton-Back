@@ -50,7 +50,7 @@ const verifyItemSchema = z.object({
   unitPrice: z.coerce.number().min(0).optional(),
   totalPrice: z.coerce.number().min(0).optional(),
   baseUnit: htmlFree(z.string().trim().min(1).max(24)).optional(),
-  baseUnitAmount: z.number().finite().nonnegative().max(9999999999.99).optional(),
+  baseUnitAmount: z.number().finite().nonnegative().max(999999999.999).optional(),
   baseUnitCost: z.number().finite().nonnegative().lt(1_000_000_000_000).optional(),
 });
 

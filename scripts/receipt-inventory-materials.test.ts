@@ -180,7 +180,7 @@ test('invalid material corrections are rejected before any database access', asy
     for (const corrections of [
       { rawMaterialName: '' }, { rawMaterialName: '<script>bad</script>' }, { rawMaterialName: 'x'.repeat(161) },
       { baseUnit: '' }, { baseUnit: '<b>kg</b>' }, { baseUnit: 'x'.repeat(25) },
-      { baseUnitAmount: -1 }, { baseUnitAmount: null }, { baseUnitAmount: 10000000000 },
+      { baseUnitAmount: -1 }, { baseUnitAmount: null }, { baseUnitAmount: 1000000000 },
       { baseUnitCost: -1 }, { baseUnitCost: null }, { baseUnitCost: 1000000000000 },
     ]) {
       const response = await h.verify(corrections);
