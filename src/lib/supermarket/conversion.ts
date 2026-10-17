@@ -10,19 +10,29 @@ const CONVERSION = {
 }
 
 
-const MASS_REGEX = {
+const HEBREW_MASS_REGEX = {
     g: /(?:^|\s)(?:גרם|גרמ(?:ים)?|ג[״"']?),?(?!\p{L})/u,
     kg: /(?:^|\s)(?:קילוגרם|קילוגרמ(?:ים)?|ק["'״]?ג),?(?!\p{L})/u,
     mg: /(?:^|\s)(?:מיליגרם|מיליגרמ(?:ים)?|מ["'״]?ג),?(?!\p{L})/u,
 }
 
-const VOLUME_REGEX = {
+const HEBREW_VOLUME_REGEX = {
     ml: /(?:^|\s)(?:מיליליטר(?:ים)?|מ["'י]?ל|סמ"ק|מל),?(?!\p{L})/u,
     l: /(?:^|\s)(?:ליטר(?:ים)?|ל),?(?!\p{L})/u,
 }
 
-const EACH_REGEX = {
+const HEBREW_EACH_REGEX = {
     each: /(?:^|\s)(?:יחיד(?:ה|ות)|יחד(?:ה|ות)|מארז(?:ים)?|יח['״"]?)[,]?(?!\p{L})/u,
+}
+
+const MASS_REGEX = {
+    ...HEBREW_MASS_REGEX
+}
+const VOLUME_REGEX = {
+    ...HEBREW_VOLUME_REGEX
+}
+const EACH_REGEX = {
+    ...HEBREW_EACH_REGEX
 }
 
 const measuresRegexes = {
