@@ -1,10 +1,10 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { convertMeasurement, parseMeasurementQuantity } from '../src/lib/unitConversion.js';
+import { convertMeasurement, parseMeasurementQuantity, resolveUnit } from '../src/lib/unitConversion.js';
 import { convertRecipeToBaseUnits } from '../src/lib/recipeConversion.js';
 import { parseRecipeExtraction } from '../src/lib/gemini.js';
-import { convertSrcAmountToBase, setUnitsData } from '../src/lib/supermarket/conversion.js';
+import { convertSrcAmountToBase, getBaseAndCurrentUnit, setUnitsData } from '../src/lib/supermarket/conversion.js';
 import type { ExtractedLineItem } from '../src/lib/gemini.js';
 import type { PriceResult } from '../src/lib/supermarket/prices.js';
 
@@ -34,7 +34,7 @@ test('invalid quantities, packages and ambiguous household measures stay unresol
   for (const quantity of [null, undefined, '', 0, -1, NaN, Infinity, '1/0', '2 cups', 'about 2', {}, '1-2']) {
     assert.equal(convertMeasurement(quantity, 'kg').unresolvedReason, 'invalid-quantity');
   }
-  for (const unit of [null, '', 'pack', 'מארז', 'bag', 'cup', 'כוס', 'tbsp', 'כף', 'pinch', 'handful', 'kg/ml', '200 g']) {
+  for (const unit of [null, '', 'pack', 'מארז', 'bag', 'cup', 'כוס', 'tbsp', 'כף', 'pinch', 'handful', 'kg/ml']) {
     assert.equal(convertMeasurement(1, unit).unresolvedReason, 'unsupported-unit');
   }
   for (const [unit, target] of [['kg', 'ml'], ['ml', 'each'], ['each', 'g']] as const) {
@@ -45,6 +45,33 @@ test('invalid quantities, packages and ambiguous household measures stay unresol
   convertSrcAmountToBase(stale);
   assert.equal(stale.baseUnitAmount, null);
   assert.equal(stale.baseUnit, null);
+});
+
+test('the shared conversion loop recognizes Hebrew and English regexes with token boundaries', () => {
+  for (const [units, current, base] of [
+    [['גרם', 'גרמים', 'גרמ', 'ג״', 'משקל גרם,', 'g', 'GR.', 'grams', '200 g'], 'g', 'g'],
+    [['קילוגרם', 'קילוגרמים', 'קילוגרמ', 'קג', 'ק"ג', 'ק״ג,', 'kg', 'KILOGRAMS'], 'kg', 'g'],
+    [['מיליגרם', 'מיליגרמים', 'מג', 'מ״ג', 'mg', 'milligrams'], 'mg', 'g'],
+    [['מיליליטר', 'מיליליטרים', 'מ"ל', 'מ״ל', 'מל', 'מיל', 'סמ"ק', 'ml', 'milliliters', 'millilitres'], 'ml', 'ml'],
+    [['ליטר', 'ליטרים', 'ל', 'l', 'liters', 'litres'], 'l', 'ml'],
+    [['יחידה', 'יחידות', 'יחדה', 'יחדות', 'יח', 'יח״', 'each', 'units', 'piece', 'pieces', 'pc', 'pcs'], 'each', 'each'],
+    [['תריסר', 'dozen', 'dozens', 'dz'], 'dozen', 'each'],
+    [['oz', 'ounce', 'ounces'], 'oz', 'g'],
+    [['lb', 'lbs', 'pound', 'pounds'], 'lb', 'g'],
+    [['US   teaspoons', 'us tsp.'], 'us tsp', 'ml'],
+    [['us tablespoons', 'us tbsp'], 'us tbsp', 'ml'],
+    [['us cups', 'US CUP'], 'us cup', 'ml'],
+  ] as const) {
+    for (const input of units) {
+      assert.deepEqual(resolveUnit(input), { current, base }, input);
+      assert.deepEqual(getBaseAndCurrentUnit(input), { current, base }, input);
+    }
+  }
+  for (const input of ['program', 'kilogrammatic', 'milk', 'glass', 'גרמופון', 'לימון', 'יחידותיות']) {
+    assert.equal(resolveUnit(input), null, input);
+  }
+  assert.equal(convertMeasurement(1, 'מארזים').baseUnitAmount, null);
+  assert.equal(convertMeasurement(1, 'packs').baseUnitAmount, null);
 });
 
 test('full recipe conversion preserves original fields, steps and links without mutating extraction', () => {

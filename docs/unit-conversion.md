@@ -19,10 +19,14 @@ Canonical units are `g`, `ml` and `each`. Supported dimensions:
 | Volume | ml, l, explicitly US tsp/tbsp/cup |
 | Count | each/unit/piece, dozen |
 
-The core lists English singular/plural and Hebrew aliases. Case, whitespace,
-periods and Hebrew/English quotation marks are normalized. Only complete unit
-aliases match: arbitrary product descriptions are not treated as measurement
-metadata. Decimal numbers, simple fractions (`1/2`), mixed fractions (`1 1/2`),
+The core retains the Hebrew mass, volume and count regexes and adds parallel
+English regexes. The conversion loop checks both language groups within each
+measurement category. Regex boundaries prevent matches inside longer words;
+English patterns ignore case and Hebrew patterns handle unit quotation marks.
+As in the original receipt matcher, unit tokens can occur within measurement
+text (`200 g`, `משקל ק״ג`). Package tokens are recognized separately and have
+no conversion factor because their contents are unknown.
+Decimal numbers, simple fractions (`1/2`), mixed fractions (`1 1/2`),
 and common Unicode fractions (`½`, `1½`) are supported. The recipe parser uses
 the same quantity parser so fractions survive extraction.
 
