@@ -507,7 +507,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         categoryId: body.categoryId ?? null,
         unit: body.unit,
         baseUnit: body.baseUnit,
-        baseUnitAmount: body.baseUnitAmount.toFixed(2),
+        baseUnitAmount: body.baseUnitAmount.toFixed(3),
         baseUnitCost: body.baseUnitCost.toFixed(6),
         currentQuantity: qty(body.currentQuantity),
         reorderLevel: body.reorderLevel === null || body.reorderLevel === undefined
@@ -555,7 +555,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
     if (body.unit !== undefined) patch.unit = body.unit;
     if (body.baseUnit !== undefined) patch.baseUnit = body.baseUnit;
-    if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(2);
+    if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(3);
     if (body.baseUnitCost !== undefined) patch.baseUnitCost = body.baseUnitCost.toFixed(6);
     if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
     if (body.reorderLevel !== undefined) {

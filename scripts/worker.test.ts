@@ -158,7 +158,7 @@ test('inventory lookup: an unknown name is created at zero stock', async () => {
     rawMaterialName: 'Tahini',
     unit: 'kg',
     baseUnit: 'kg',
-    baseUnitAmount: '1.00',
+    baseUnitAmount: '0.000',
     baseUnitCost: '0.000000',
     currentQuantity: '0.000',
   });
