@@ -126,18 +126,28 @@ const RECIPE_SCHEMA = `{
     "yieldQuantity": { "type": "number" },
     "yieldUnit": { "type": "string" },
     "allergens": { "type": "array", "items": { "type": "string" } },
-    "instructions": { "type": "string" },
+    "instructions": { 
+      "type": "array", 
+      "items": { 
+        "type": "object", 
+        "properties": {
+          "stepNumber": { "type": "integer", "description": "The step number" },
+          "instruction": { "type": "string", "description": "The instruction for the step" }
+        },  
+        "required": ["stepNumber", "instruction"]
+      } 
+    },
     "ingredients": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "rawName": { "type": "string" },
-          "searchAbleName": { "type": "string" },
+          "rawName": { "type": "string", description: "The name of the ingredient as it appears on the recipe" },
+          "rawMaterialName": { "type": "string", "description": "The name of the raw material the ingredient is made of" },
           "quantity": { "type": "number" },
-          "unit": { "type": "string" }
+          "rawSrcUnit": { "type": "string", "description": "The unit of measure of the ingredient(g, kg, lb, oz, piece, etc)" }
         },
-        "required": ["rawName", "searchAbleName", "quantity", "unit"]
+        "required": ["rawName", "rawMaterialName", "quantity", "rawSrcUnit"]
       }
     }
   },
@@ -171,17 +181,12 @@ the rawMaterialName is the raw material the item is made of without any addition
 for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye". 
 Use null for anything you cannot read. Never invent values.`;
 
-const EXTRACT_RECIPE_PROMPT = `Extract this recipe (handwritten or printed).
-Return all the data in the recipe that we need in our response schema.
+const EXTRACT_RECIPE_PROMPT = `Extract the recipe data from the provided document, all the ingredients, amounts and steps to make. 
 For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our searchAbleName.
-The searchAbleName should be:
-- firm and not ambiguous, not "or" or "maybe" a firm determination of what is the ingredient.
-- clean without any instructions or measures.
-Example of standartize 1: bad - "1 cup flour, sifted or raw", good - "flour" and unit will be "cup" quantity will be 1.
-Example of standartize 2: bad - "2 large eggs, room temperature", good - "eggs" and unit will be "large" quantity will be 2.
-Example of standartize 3: bad - "chocolate chips or chopped chocolate", good - "chocolate chips"
+the rawMaterialName is the raw material the item is made of without any additional words, no ambiguity no units no weigths or any additional information.
+for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye", "chocolate chips 28% unsweetened or chopped chocolate" becomes "chocolate chips". 
 Use null for anything you cannot read. Never invent values.
-`
+`;
 
 const PROMPTS: Record<MediaKind, { instruction: string; schema: string }> = {
   receipt: {
