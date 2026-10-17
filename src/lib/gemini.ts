@@ -188,6 +188,7 @@ const EXTRACT_RECIPE_PROMPT = `Extract the recipe data from the provided documen
 For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our rawMaterialName.
 the rawMaterialName is the raw material the item is made of without any additional words, no ambiguity no units no weigths or any additional information.
 for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye", "chocolate chips 28% unsweetened or chopped chocolate" becomes "chocolate chips". 
+when extracting an ingredient quantity turn fractures to decimals, for example: 2 1/2 becomes 2.5, 1/4 becomes 0.25 etc.
 Use null for anything you cannot read. Never invent values.
 `;
 
