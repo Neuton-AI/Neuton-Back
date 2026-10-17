@@ -9,7 +9,7 @@ import { priceResult } from './support/priceResult.js';
 import { FakeDb } from './support/fakeDb.js';
 
 const product = priceResult();
-const line = { id: 'line-1', rawName: ' Milk ', searchAbleName: ' Milk ', inventoryItemId: null, generalPriceId: null };
+const line = { id: 'line-1', rawName: ' Milk ', rawMaterialName: ' Milk ', inventoryItemId: null, generalPriceId: null };
 const asDatabase = (db: FakeDb) => db as unknown as Database;
 
 test('fallback links the best affordable scored product directly, with no inventory writes', async () => {
@@ -24,8 +24,9 @@ test('fallback links the best affordable scored product directly, with no invent
   });
   assert.deepEqual(queries, ['milk']);
   const saved = db.onlyCallTo('insert', 'generalPrices').values as Record<string, unknown>;
-  assert.equal(saved.priceIls, '6.00');
-  assert.equal(saved.normalizedName, 'milk');
+  assert.equal(saved.baseUnitCost, null);
+  assert.equal(saved.sku, '123');
+  assert.equal(saved.rawMaterialName, 'milk');
   assert.deepEqual(db.onlyCallTo('update', 'recipeIngredients').set, { generalPriceId: 'price-1' });
   assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
 });
@@ -34,7 +35,7 @@ test('fallback skips both existing link types and empty names on a retry', async
   const db = new FakeDb({ 'select:recipeIngredients': [[
     { ...line, inventoryItemId: 'inv-1' },
     { ...line, generalPriceId: 'price-1' },
-    { ...line, rawName: ' ', searchAbleName: ' ' },
+    { ...line, rawName: ' ', rawMaterialName: ' ' },
   ]] });
   await linkRecipeFallbackPrices(asDatabase(db), 'shop-1', 'recipe-1', async () => {
     assert.fail('linked ingredients must not be searched');
@@ -63,8 +64,8 @@ test('name normalization handles Hebrew quotes and repeated spaces', () => {
 
 test('mixed inventory and fallback prices count as fully costed without claiming fallback stock', async () => {
   const db = new FakeDb({ 'select:recipeIngredients': [[
-    { inventoryItemId: 'inv-1', generalPriceId: null, rawName: 'Flour', quantity: '2', unit: 'kg', averageUnitCost: '4', currentQuantity: '10' },
-    { inventoryItemId: null, generalPriceId: 'price-1', rawName: 'Milk', quantity: '3', unit: 'unit', averageUnitCost: '6', currentQuantity: null },
+    { inventoryItemId: 'inv-1', generalPriceId: null, rawName: 'Flour', quantity: '2', baseUnitAmount: '2', rawSrcUnit: 'kg', averageUnitCost: '4', currentQuantity: '10' },
+    { inventoryItemId: null, generalPriceId: 'price-1', rawName: 'Milk', quantity: '3', baseUnitAmount: '3', rawSrcUnit: 'unit', averageUnitCost: '6', currentQuantity: null },
   ]] });
   const recipe = { id: 'recipe-1', prepTimeMinutes: 0, yieldQuantity: '2', targetMarginPct: '30' } as typeof recipes.$inferSelect;
   const costing = await costRecipe('shop-1', recipe, '30', '0', asDatabase(db));
@@ -77,4 +78,17 @@ test('mixed inventory and fallback prices count as fully costed without claiming
   assert.equal(costing.inStock, false);
   assert.notEqual(costing.retailPrice, '0.0000');
   assert.deepEqual(db.onlyCallTo('select', 'recipeIngredients').joins, ['leftJoin', 'leftJoin']);
+});
+
+test('preserved links with unresolved base conversion cannot count as valid zero-cost matches', async () => {
+  const db = new FakeDb({ 'select:recipeIngredients': [[
+    { inventoryItemId: null, generalPriceId: 'price-legacy', rawName: 'Milk', quantity: '1', rawSrcUnit: 'cup', baseUnitAmount: null, averageUnitCost: null, currentQuantity: null },
+  ]] });
+  const recipe = { id: 'recipe-1', prepTimeMinutes: 0, yieldQuantity: '1', targetMarginPct: '30' } as typeof recipes.$inferSelect;
+  const costing = await costRecipe('shop-1', recipe, '30', '0', asDatabase(db));
+  assert.equal(costing.linkedCount, 0);
+  assert.equal(costing.ingredients[0]?.linked, false);
+  assert.equal(costing.ingredients[0]?.generalPriceId, 'price-legacy');
+  assert.equal(costing.retailPrice, '0.0000');
+  assert.equal(costing.inStock, false);
 });

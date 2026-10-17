@@ -85,7 +85,7 @@ async function priceOrderItems(
   const ingredientRows = await database
     .select({
       recipeId: recipeIngredients.recipeId,
-      quantity: recipeIngredients.quantity,
+      quantity: recipeIngredients.baseUnitAmount,
       averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)

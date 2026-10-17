@@ -315,7 +315,7 @@ export async function processRecipe(
     yieldQuantity,
     yieldUnit,
     allergens,
-    instructions,
+    steps,
   } = extraction;
   const safeName = name;
 
@@ -340,7 +340,7 @@ export async function processRecipe(
         handle,
         data.shopId,
         ingredient.rawName,
-        ingredient.unit,
+        ingredient.rawSrcUnit,
         'recipe',
       );
       if (found) linked.set(ingredient.rawName, found);
@@ -369,7 +369,7 @@ export async function processRecipe(
           yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
           yieldUnit: yieldUnit ?? 'portion',
           allergens,
-          instructions,
+          steps,
           status: 'unverified',
           errorMessage: null,
           updatedAt: new Date(),
@@ -386,9 +386,11 @@ export async function processRecipe(
           recipeId: existingRecipe.id,
           inventoryItemId,
           rawName: ingredient.rawName,
-          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
+          rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          unit: ingredient.unit ?? 'unit',
+          rawSrcUnit: ingredient.rawSrcUnit ?? 'unit',
+          baseUnit: ingredient.baseUnit,
+          baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
         };
       });
 
@@ -421,7 +423,7 @@ export async function processRecipe(
           yieldQuantity: qty(yieldQuantity && yieldQuantity > 0 ? yieldQuantity : 1),
           yieldUnit: yieldUnit ?? 'portion',
           allergens,
-          instructions,
+          steps,
           storagePath,
           status: 'unverified',
         })
@@ -437,9 +439,11 @@ export async function processRecipe(
           recipeId: recipe.id,
           inventoryItemId,
           rawName: ingredient.rawName,
-          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
+          rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          unit: ingredient.unit ?? 'unit',
+          rawSrcUnit: ingredient.rawSrcUnit ?? 'unit',
+          baseUnit: ingredient.baseUnit,
+          baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
         };
       });
 
@@ -533,7 +537,7 @@ export async function processOrderDocument(
   const ingredientRows = await deps.db
     .select({
       recipeId: recipeIngredients.recipeId,
-      quantity: recipeIngredients.quantity,
+      quantity: recipeIngredients.baseUnitAmount,
       averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)

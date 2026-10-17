@@ -25,8 +25,8 @@ export async function linkRecipeFallbackPrices(
   for (const ingredient of ingredients) {
     // Also guard in memory: retries must never replace an existing price link.
     if (ingredient.inventoryItemId || ingredient.generalPriceId) continue;
-    // `searchAbleName` is the shop-standardized query built for the supermarket APIs.
-    const query = normalizePriceName(ingredient.searchAbleName);
+    // `rawMaterialName` is the shop-standardized query built for the supermarket APIs.
+    const query = normalizePriceName(ingredient.rawMaterialName);
     if (!query) continue;
     if (!matches.has(query)) {
       try {
@@ -45,20 +45,19 @@ export async function linkRecipeFallbackPrices(
       }
     }
     const product = matches.get(query);
-    if (!product) continue;
-    const now = new Date();
+    if (!product || !product.ItemCode.trim()) continue;
     const price = {
-      normalizedName: normalizePriceName(product.ItemName),
-      name: product.ItemName,
-      barcode: product.ItemCode,
-      manufacturer: product.ManufactureName ?? null,
-      chain: product.chain,
-      priceIls: (+product.ItemPrice).toFixed(2),
-      fetchedAt: now,
-      updatedAt: now,
+      rawMaterialName: query,
+      rawName: product.ItemName,
+      sku: product.ItemCode || null,
+      rawSrcUnit: product.UnitOfMeasure || null,
+      srcUnit: null,
+      baseUnit: null,
+      baseUnitAmount: null,
+      baseUnitCost: null,
     };
     const [saved] = await database.insert(generalPrices).values(price)
-      .onConflictDoUpdate({ target: generalPrices.normalizedName, set: price })
+      .onConflictDoUpdate({ target: [generalPrices.rawMaterialName, generalPrices.sku], set: price })
       .returning({ id: generalPrices.id });
     if (!saved) throw new Error('general price upsert returned no row');
     await database.update(recipeIngredients).set({ generalPriceId: saved.id }).where(and(

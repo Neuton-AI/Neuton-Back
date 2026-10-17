@@ -7,7 +7,7 @@ import { buildReceiptsApp } from './support/receiptsApp.js';
 
 const ID = '66666666-6666-6666-6666-666666666666';
 const LINE_ID = '77777777-7777-7777-7777-777777777777';
-const INGREDIENT = { rawName: 'Flour', quantity: 2, unit: 'kg' };
+const INGREDIENT = { rawName: 'Flour', quantity: 2, rawSrcUnit: 'kg' };
 
 async function catalog(responses: Record<string, unknown[]> = {}, role = 'owner') {
   const h = await buildCatalogApp(role);
@@ -34,7 +34,7 @@ test('recipe verification saves corrections and verifies in one transaction', as
     assert.equal(insert.inTransaction, true);
     assert.deepEqual(insert.values, [{
       shopId: SHOP_ID, recipeId: ID, inventoryItemId: null,
-      rawName: 'Flour', searchAbleName: 'Flour', quantity: '2.000', unit: 'kg',
+      rawName: 'Flour', rawMaterialName: 'Flour', quantity: '2.000', rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null,
     }]);
     assert.equal(h.db.calls.some((call) => call.table === 'receipts'), false);
   } finally { await h.close(); }
