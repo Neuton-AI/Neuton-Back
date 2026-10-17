@@ -5,13 +5,13 @@ const CONVERSION = {
   each: { each: 1, dozen: 12 },
 };
 
-const MASS_REGEX = {
+const HEBREW_MASS_REGEX = {
   g: /(?:^|\s)(?:גרם|גרמ(?:ים)?|ג[״"']?),?(?!\p{L})/u,
   kg: /(?:^|\s)(?:קילוגרם|קילוגרמ(?:ים)?|ק["'״]?ג),?(?!\p{L})/u,
   mg: /(?:^|\s)(?:מיליגרם|מיליגרמ(?:ים)?|מ["'״]?ג),?(?!\p{L})/u,
 };
 
-const VOLUME_REGEX = {
+const HEBREW_VOLUME_REGEX = {
   ml: /(?:^|\s)(?:מיליליטר(?:ים)?|מ["'״י]?ל|סמ["״]?ק|מל),?(?!\p{L})/u,
   l: /(?:^|\s)(?:ליטר(?:ים)?|ל),?(?!\p{L})/u,
   tsp: /(?:^|\s)(?:כפית|כפיות),?(?!\p{L})/u,
@@ -19,7 +19,7 @@ const VOLUME_REGEX = {
   cup: /(?:^|\s)(?:כוס|כוסות),?(?!\p{L})/u,
 };
 
-const EACH_REGEX = {
+const HEBREW_EACH_REGEX = {
   // Recognize packages separately: their contents are unknown, so they have no conversion factor.
   pack: /(?:^|\s)(?:מארז(?:ים)?),?(?!\p{L})/u,
   each: /(?:^|\s)(?:יחיד(?:ה|ות)|יחד(?:ה|ות)|מארז(?:ים)?|יח['״"]?)[,]?(?!\p{L})/u,
@@ -48,10 +48,26 @@ const ENGLISH_EACH_REGEX = {
   dozen: /(?:^|\s)(?:dozens?|dz)\.?(?=$|[\s,])/i,
 };
 
+
+const MASS_REGEX = {
+  ...HEBREW_MASS_REGEX,
+  ...ENGLISH_MASS_REGEX
+}
+
+const VOLUME_REGEX = {
+  ...HEBREW_VOLUME_REGEX,
+  ...ENGLISH_VOLUME_REGEX
+}
+
+const EACH_REGEX = {
+  ...HEBREW_EACH_REGEX,
+  ...ENGLISH_EACH_REGEX
+}
+
 const measuresRegexes = {
-  mass: [MASS_REGEX, ENGLISH_MASS_REGEX],
-  volume: [VOLUME_REGEX, ENGLISH_VOLUME_REGEX],
-  each: [EACH_REGEX, ENGLISH_EACH_REGEX],
+  mass: [MASS_REGEX],
+  volume: [VOLUME_REGEX],
+  each: [EACH_REGEX],
 };
 
 const BASE_UNIT = { mass: 'g', volume: 'ml', each: 'each' } as const;
