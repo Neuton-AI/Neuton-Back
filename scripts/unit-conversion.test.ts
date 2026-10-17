@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { convertMeasurement, parseMeasurementQuantity, resolveUnit } from '../src/lib/unitConversion.js';
+import { convertMeasurement, parseMeasurementQuantity, resolveUnit, MeasurementUnresolvedReason } from '../src/lib/unitConversion.js';
 import { convertRecipeToBaseUnits } from '../src/lib/recipeConversion.js';
 import { parseRecipeExtraction } from '../src/lib/gemini.js';
 import { convertSrcAmountToBase, getBaseAndCurrentUnit, setUnitsData } from '../src/lib/supermarket/conversion.js';
@@ -20,7 +20,7 @@ test('recipe and receipt conversion share bilingual aliases and fractional quant
     [0.5, 'l', 'ml', 500], ['½', 'ליטר', 'ml', 500], ['1 1/2', 'litres', 'ml', 1500],
     [2, 'יחידות', 'each', 2], [0.5, 'dozen', 'each', 6], [2, 'pieces', 'each', 2],
     [1000, 'מ״ג', 'g', 1], [1, 'oz', 'g', 28.3495], [1, 'lb', 'g', 453.592],
-    [1, 'us cup', 'ml', 236.588], [1, 'us tbsp', 'ml', 14.7868], [1, 'us tsp', 'ml', 4.92892],
+    [1, 'cup', 'ml', 236.588], [1, 'tbsp', 'ml', 14.7868], [1, 'tsp', 'ml', 4.92892],
   ] as const) {
     assert.deepEqual(convertMeasurement(quantity, unit), { baseUnit: base, baseUnitAmount: expected, unresolvedReason: null });
     const item = receiptItem({ srcUnit: unit, srcUnitAmount: parseMeasurementQuantity(quantity), baseUnit: base });
@@ -30,17 +30,17 @@ test('recipe and receipt conversion share bilingual aliases and fractional quant
   }
 });
 
-test('invalid quantities, packages and ambiguous household measures stay unresolved', () => {
+test('invalid quantities, unknown packages and unsupported measures stay unresolved', () => {
   for (const quantity of [null, undefined, '', 0, -1, NaN, Infinity, '1/0', '2 cups', 'about 2', {}, '1-2']) {
-    assert.equal(convertMeasurement(quantity, 'kg').unresolvedReason, 'invalid-quantity');
+    assert.equal(convertMeasurement(quantity, 'kg').unresolvedReason, MeasurementUnresolvedReason.InvalidQuantity);
   }
-  for (const unit of [null, '', 'pack', 'מארז', 'bag', 'cup', 'כוס', 'tbsp', 'כף', 'pinch', 'handful', 'kg/ml']) {
-    assert.equal(convertMeasurement(1, unit).unresolvedReason, 'unsupported-unit');
+  for (const unit of [null, '', 'pack', 'מארז', 'bag', 'pinch', 'handful', 'kg/ml']) {
+    assert.equal(convertMeasurement(1, unit).unresolvedReason, MeasurementUnresolvedReason.UnsupportedUnit);
   }
   for (const [unit, target] of [['kg', 'ml'], ['ml', 'each'], ['each', 'g']] as const) {
-    assert.deepEqual(convertMeasurement(1, unit, target), { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'incompatible-unit' });
+    assert.deepEqual(convertMeasurement(1, unit, target), { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.IncompatibleUnit });
   }
-  assert.equal(convertMeasurement(Number.MAX_VALUE, 'kg').unresolvedReason, 'invalid-base-amount');
+  assert.equal(convertMeasurement(Number.MAX_VALUE, 'kg').unresolvedReason, MeasurementUnresolvedReason.InvalidBaseAmount);
   const stale = receiptItem({ srcUnit: 'kg', baseUnit: 'ml', baseUnitAmount: 999 });
   convertSrcAmountToBase(stale);
   assert.equal(stale.baseUnitAmount, null);
@@ -58,9 +58,9 @@ test('the shared conversion loop recognizes Hebrew and English regexes with toke
     [['תריסר', 'dozen', 'dozens', 'dz'], 'dozen', 'each'],
     [['oz', 'ounce', 'ounces'], 'oz', 'g'],
     [['lb', 'lbs', 'pound', 'pounds'], 'lb', 'g'],
-    [['US   teaspoons', 'us tsp.'], 'us tsp', 'ml'],
-    [['us tablespoons', 'us tbsp'], 'us tbsp', 'ml'],
-    [['us cups', 'US CUP'], 'us cup', 'ml'],
+    [['teaspoon', 'TEASPOONS', 'tsp.', 'כפית', 'כפיות'], 'tsp', 'ml'],
+    [['tablespoon', 'TABLESPOONS', 'tbsp', 'כף', 'כפות'], 'tbsp', 'ml'],
+    [['cup', 'CUPS', 'כוס', 'כוסות'], 'cup', 'ml'],
   ] as const) {
     for (const input of units) {
       assert.deepEqual(resolveUnit(input), { current, base }, input);
@@ -87,7 +87,7 @@ test('full recipe conversion preserves original fields, steps and links without 
   const converted = convertRecipeToBaseUnits(recipe);
   assert.deepEqual(recipe, original);
   assert.deepEqual(converted.ingredients.map((i) => [i.baseUnit, i.baseUnitAmount]), [
-    ['g', 200], ['ml', 500], ['each', 6], [null, null], [null, null],
+    ['g', 200], ['ml', 500], ['each', 6], [null, null], ['ml', 236.588],
   ]);
   assert.deepEqual({ ...converted, ingredients: recipe.ingredients }, recipe);
   converted.ingredients.forEach((ingredient, index) => {

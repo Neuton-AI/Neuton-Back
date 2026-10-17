@@ -16,7 +16,7 @@ Canonical units are `g`, `ml` and `each`. Supported dimensions:
 | Dimension | Units |
 | --- | --- |
 | Mass | mg, g, kg, oz, lb |
-| Volume | ml, l, explicitly US tsp/tbsp/cup |
+| Volume | ml, l, tsp, tbsp, cup |
 | Count | each/unit/piece, dozen |
 
 The core retains the Hebrew mass, volume and count regexes and adds parallel
@@ -33,10 +33,12 @@ the same quantity parser so fractions survive extraction.
 Both base fields are `null` for unresolved lines. The core also returns an
 `unresolvedReason`: `invalid-quantity`, `unsupported-unit`, `incompatible-unit`,
 or `invalid-base-amount`. Missing, nonpositive, nonfinite or malformed quantities,
-missing units, packs/bags of unknown size, pinches, and bare household measures
-(`cup`, `tsp`, `tbsp`, `כוס`, `כף`) are unresolved. US measures must be explicit
-because household sizes vary. This also replaces the old receipt table's implicit
-US household factors and incorrect pack-to-piece assumption. No density or piece
+missing units, packs/bags of unknown size and pinches are unresolved.
+The reasons are defined by `MeasurementUnresolvedReason`, with `UnresolvedReason`
+derived from its members and used by `MeasurementConversion`.
+Bare `tsp`/`teaspoon`, `tbsp`/`tablespoon`, and `cup` (including plurals and Hebrew
+equivalents) convert using the existing factors: 4.92892 ml, 14.7868 ml and
+236.588 ml respectively. No density or piece
 weight is inferred, and an explicit incompatible target dimension is rejected.
 
 Migration 0026 allows missing extracted quantity/unit to remain SQL NULL instead

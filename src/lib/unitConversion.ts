@@ -1,7 +1,7 @@
 /** Shared measurement rules. Package contents and recipe-line amounts are mapped by callers. */
 const CONVERSION = {
   g: { g: 1, kg: 1000, mg: 0.001, oz: 28.3495, lb: 453.592 },
-  ml: { ml: 1, l: 1000, 'us tsp': 4.92892, 'us tbsp': 14.7868, 'us cup': 236.588 },
+  ml: { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588 },
   each: { each: 1, dozen: 12 },
 };
 
@@ -14,6 +14,9 @@ const MASS_REGEX = {
 const VOLUME_REGEX = {
   ml: /(?:^|\s)(?:מיליליטר(?:ים)?|מ["'״י]?ל|סמ["״]?ק|מל),?(?!\p{L})/u,
   l: /(?:^|\s)(?:ליטר(?:ים)?|ל),?(?!\p{L})/u,
+  tsp: /(?:^|\s)(?:כפית|כפיות),?(?!\p{L})/u,
+  tbsp: /(?:^|\s)(?:כף|כפות),?(?!\p{L})/u,
+  cup: /(?:^|\s)(?:כוס|כוסות),?(?!\p{L})/u,
 };
 
 const EACH_REGEX = {
@@ -34,9 +37,9 @@ const ENGLISH_MASS_REGEX = {
 const ENGLISH_VOLUME_REGEX = {
   ml: /(?:^|\s)(?:ml|millilit(?:er|re)s?)\.?(?=$|[\s,])/i,
   l: /(?:^|\s)(?:l|lit(?:er|re)s?)\.?(?=$|[\s,])/i,
-  'us tsp': /(?:^|\s)us\s+(?:tsp|teaspoons?)\.?(?=$|[\s,])/i,
-  'us tbsp': /(?:^|\s)us\s+(?:tbsp|tablespoons?)\.?(?=$|[\s,])/i,
-  'us cup': /(?:^|\s)us\s+cups?\.?(?=$|[\s,])/i,
+  tsp: /(?:^|\s)(?:tsp|teaspoons?)\.?(?=$|[\s,])/i,
+  tbsp: /(?:^|\s)(?:tbsp|tablespoons?)\.?(?=$|[\s,])/i,
+  cup: /(?:^|\s)cups?\.?(?=$|[\s,])/i,
 };
 
 const ENGLISH_EACH_REGEX = {
@@ -98,24 +101,33 @@ export function parseMeasurementQuantity(value: unknown): number | null {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
+export enum MeasurementUnresolvedReason {
+  InvalidQuantity = 'invalid-quantity',
+  UnsupportedUnit = 'unsupported-unit',
+  IncompatibleUnit = 'incompatible-unit',
+  InvalidBaseAmount = 'invalid-base-amount',
+}
+
+export type UnresolvedReason = (typeof MeasurementUnresolvedReason)[keyof typeof MeasurementUnresolvedReason];
+
 export type MeasurementConversion =
   | { baseUnit: BaseUnit; baseUnitAmount: number; unresolvedReason: null }
-  | { baseUnit: null; baseUnitAmount: null; unresolvedReason: 'invalid-quantity' | 'unsupported-unit' | 'incompatible-unit' | 'invalid-base-amount' };
+  | { baseUnit: null; baseUnitAmount: null; unresolvedReason: UnresolvedReason };
 
 export function convertMeasurement(quantity: unknown, unit: string | null | undefined, targetBase?: BaseUnit): MeasurementConversion {
   const amount = parseMeasurementQuantity(quantity);
-  if (amount === null) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'invalid-quantity' };
+  if (amount === null) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.InvalidQuantity };
   const source = resolveUnit(unit);
-  if (!source) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'unsupported-unit' };
+  if (!source) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.UnsupportedUnit };
   if (targetBase && source.base !== targetBase) {
-    return { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'incompatible-unit' };
+    return { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.IncompatibleUnit };
   }
   const conversions: Record<string, number> = CONVERSION[source.base];
   const factor = conversions[source.current];
-  if (factor === undefined) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'unsupported-unit' };
+  if (factor === undefined) return { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.UnsupportedUnit };
   const baseUnitAmount = amount * factor;
   if (!Number.isFinite(baseUnitAmount) || baseUnitAmount <= 0) {
-    return { baseUnit: null, baseUnitAmount: null, unresolvedReason: 'invalid-base-amount' };
+    return { baseUnit: null, baseUnitAmount: null, unresolvedReason: MeasurementUnresolvedReason.InvalidBaseAmount };
   }
   return { baseUnit: source.base, baseUnitAmount, unresolvedReason: null };
 }

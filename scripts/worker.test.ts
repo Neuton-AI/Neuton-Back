@@ -559,7 +559,7 @@ test('recipe: new and queued recipes persist converted lines and preserve unreso
     await processRecipe(deps, jobData, job);
     const lines = db.onlyCallTo('insert', 'recipeIngredients').values as Array<Record<string, unknown>>;
     assert.deepEqual(lines.map((line) => [line.baseUnit, line.baseUnitAmount]), [
-      ['g', '200.000'], ['ml', '500.000'], ['each', '6.000'], [null, null], [null, null],
+      ['g', '200.000'], ['ml', '500.000'], ['each', '6.000'], [null, null], ['ml', '236.588'],
     ]);
     assert.equal(lines[3]?.quantity, null);
     assert.equal(lines[3]?.rawSrcUnit, null);
