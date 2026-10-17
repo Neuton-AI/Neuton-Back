@@ -4,7 +4,7 @@ import { type PriceResult } from "./prices.js"
 export type BaseUnits = keyof typeof CONVERSION
 
 const CONVERSION = {
-    g: { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 },
+    g: { mg: 0.001, g: 1, kg: 1000, oz: 28.3495, lb: 453.592 },
     ml: { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588 },
     each: { each: 1, dozen: 12 },
 }

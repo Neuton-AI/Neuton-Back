@@ -4,9 +4,10 @@
 ingredient fields and ordered steps, and returns new ingredients with `baseUnit`
 and `baseUnitAmount`. The recipe worker applies it before either ingredient insert
 path. It calls the existing supermarket/receipt regex matcher and amount converter;
-the conversion table and receipt conversion behavior are unchanged.
+the existing conversion mechanism is unchanged. The shared table also supports
+milligrams at 0.001 grams per milligram.
 
-English singular/plural names and abbreviations now cover grams, kilograms,
+English singular/plural names and abbreviations now cover milligrams, grams, kilograms,
 milliliters/litres/liters, ounces, pounds, teaspoons, tablespoons, cups, pieces,
 units, each and dozens. Existing Hebrew aliases remain available. English matching
 is case-insensitive. Plain `cup`, `tbsp`, and `tsp` use the existing ratios
@@ -14,8 +15,7 @@ is case-insensitive. Plain `cup`, `tbsp`, and `tsp` use the existing ratios
 
 Both base fields are null for missing units, nonpositive/nonfinite/missing numeric
 quantities, unknown units, packages with unknown contents, compound measures and
-qualified measures such as `heaped tbsp`. Milligrams are recognized but unresolved
-because the existing conversion table has no milligram ratio. Fractional numeric
+qualified measures such as `heaped tbsp`. Fractional numeric
 quantities, such as 0.2 or 0.5, use the same multiplication as receipts.
 
 Mass stays mass, volume stays volume, and count stays count. No density or piece

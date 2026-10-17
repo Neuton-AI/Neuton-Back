@@ -16,6 +16,7 @@ function recipe(quantity: number | null, rawSrcUnit: string | null): RecipeExtra
 }
 
 const fixtures: [string, number, string, number][] = [
+  ['mg', 500, 'g', 0.5], ['milligrams', 1000, 'g', 1], ['מיליגרם', 250, 'g', 0.25],
   ['kg', 0.2, 'g', 200], ['קילוגרם', 0.2, 'g', 200], ['KG.', 0.2, 'g', 200],
   ['kilograms', 0.2, 'g', 200], ['grams', 2, 'g', 2], ['גרם', 2, 'g', 2],
   ['l', 0.5, 'ml', 500], ['ליטר', 0.5, 'ml', 500], ['litres', 0.5, 'ml', 500],
@@ -45,7 +46,7 @@ for (const [unit, quantity, baseUnit, amount] of fixtures) {
 test('missing, invalid, package, compound and unsupported inputs remain unresolved', () => {
   const inputs: [number | null, string | null][] = [
     [null, 'kg'], [0, 'kg'], [-1, 'kg'], [NaN, 'kg'], [Infinity, 'kg'], [Number.MAX_VALUE, 'kg'],
-    [1, null], [1, ''], [1, 'pinch'], [1, 'bag'], [1, 'מארז'], [1, 'mg'],
+    [1, null], [1, ''], [1, 'pinch'], [1, 'bag'], [1, 'מארז'],
     [1, 'kg/ml'], [1, 'kg-ml'], [1, 'מארז,'], [1, 'kg or l'], [1, 'heaped tbsp'], [1, '2 cups'], [1, 'cupboard'],
   ];
   for (const [quantity, unit] of inputs) {
