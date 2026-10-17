@@ -220,7 +220,7 @@ test('receipt: replaces the stored lines and hands a receipt to review inside on
     rawSku: null,
     rawSrcUnit: 'kg',
     srcUnitAmount: null,
-    baseUnit: null,
+    baseUnit: 'g',
     baseUnitAmount: null,
     confidence: '0.912',
   });
@@ -498,8 +498,8 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       rawMaterialName: 'Flour',
       quantity: '2.000',
       rawSrcUnit: 'kg',
-      baseUnit: null,
-      baseUnitAmount: null,
+      baseUnit: 'g',
+      baseUnitAmount: '2000.000',
     },
     {
       shopId: SHOP_ID,
@@ -572,6 +572,33 @@ test('recipe: queue redelivery preserves completed extractions and verified reci
     assert.equal(extracted.length, 0);
     assert.equal(db.callsTo('update', 'recipes').length, 0);
     assert.equal(db.callsTo('delete', 'recipeIngredients').length, 0);
+  }
+});
+
+test('recipe: both save paths persist converted amounts without using package quantities', async () => {
+  for (const existing of [false, true]) {
+    const ingredients = [
+      { ...RECIPE.ingredients[0]!, quantity: 0.2, rawSrcUnit: 'kg' },
+      { ...RECIPE.ingredients[0]!, quantity: 0.5, rawSrcUnit: 'l' },
+      { ...RECIPE.ingredients[0]!, quantity: 2, rawSrcUnit: 'pieces' },
+      { ...RECIPE.ingredients[0]!, quantity: null, rawSrcUnit: 'bag' },
+    ];
+    const { db, deps, job, jobData } = harness({
+      responses: {
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
+        'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
+      },
+      extractions: { recipe: { ...RECIPE, ingredients } },
+    });
+    await processRecipe(deps, jobData, job);
+    const rows = db.onlyCallTo('insert', 'recipeIngredients').values as Record<string, unknown>[];
+    assert.deepEqual(rows.map(({ baseUnit, baseUnitAmount }) => ({ baseUnit, baseUnitAmount })), [
+      { baseUnit: 'g', baseUnitAmount: '200.000' },
+      { baseUnit: 'ml', baseUnitAmount: '500.000' },
+      { baseUnit: 'each', baseUnitAmount: '2.000' },
+      { baseUnit: null, baseUnitAmount: null },
+    ]);
+    assert.equal(ingredients[0]!.baseUnitAmount, null);
   }
 });
 
