@@ -4,6 +4,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   text,
@@ -11,7 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { INVENTORY_UNITS, PRICE_CHAINS, RECIPE_STATUSES } from './enums.js';
+import { INVENTORY_UNITS, RECIPE_STATUSES } from './enums.js';
 import { shops } from './identity.js';
 
 export const categories = pgTable('categories', {
@@ -68,7 +69,7 @@ export const recipes = pgTable('recipes', {
   yieldUnit: text('yield_unit').notNull().default('portion'),
   targetMarginPct: numeric('target_margin_pct', { precision: 5, scale: 2 }),
   allergens: text('allergens').array(),
-  instructions: text('instructions'),
+  steps: jsonb('steps').$type<{ stepNumber: number; instruction: string }[]>().notNull().default([]),
   isActive: boolean('is_active').notNull().default(true),
   status: text('status', { enum: RECIPE_STATUSES }).notNull().default('pending'),
   storagePath: text('storage_path'),
@@ -84,33 +85,21 @@ export const recipes = pgTable('recipes', {
     .where(sql`${t.storagePath} IS NOT NULL`),
 }));
 
-/**
- * A *global* (not per-shop) cache of supermarket prices fetched from the
- * Israeli PriceFull feeds. An unlinked recipe ingredient — one whose material
- * the shop does not stock — points here so cost calc stops falling back to 0.
- *
- * Global because the same product price is shared by every shop, and read-only
- * for shops: the worker owns the rows and refreshes them. `normalized_name` is
- * the lookup key (unique); `barcode` is indexed for scan-based matching.
- */
+/** Global material/SKU cache. Null conversions are deliberately unresolved. */
 export const generalPrices = pgTable('general_prices', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  normalizedName: text('normalized_name').notNull(),
-  barcode: text('barcode'),
-  name: text('name').notNull(),
-  manufacturer: text('manufacturer'),
-  chain: text('chain', { enum: PRICE_CHAINS }).notNull(),
-  priceIls: numeric('price_ils', { precision: 12, scale: 2 }).notNull(),
-  packageQuantity: numeric('package_quantity', { precision: 12, scale: 3 }),
-  packageUnit: text('package_unit'),
-  pricePerBaseUnit: numeric('price_per_base_unit', { precision: 12, scale: 4 }),
-  sourceUrl: text('source_url'),
-  fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
+  rawName: text('raw_name').notNull(),
+  sku: text('sku'),
+  rawMaterialName: text('raw_material_name').notNull(),
+  rawSrcUnit: text('raw_src_unit'),
+  srcUnit: text('src_unit'),
+  baseUnit: text('base_unit'),
+  baseUnitAmount: numeric('base_unit_amount', { precision: 24, scale: 3 }),
+  baseUnitCost: numeric('base_unit_cost', { precision: 18, scale: 6 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  normalizedNameUnique: uniqueIndex('general_prices_normalized_name_unique').on(t.normalizedName),
-  barcodeIdx: index('general_prices_barcode_idx').on(t.barcode),
+  materialSkuUnique: uniqueIndex('general_prices_material_sku_unique').on(t.rawMaterialName, t.sku),
+  skuIdx: index('general_prices_sku_idx').on(t.sku),
 }));
 
 export const recipeIngredients = pgTable('recipe_ingredients', {
@@ -128,9 +117,11 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
     onDelete: 'set null',
   }),
   rawName: text('raw_name').notNull(),
-  searchAbleName: text('search_able_name').notNull(),
+  rawMaterialName: text('raw_material_name').notNull(),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull(),
-  unit: text('unit').notNull(),
+  rawSrcUnit: text('raw_src_unit').notNull(),
+  baseUnit: text('base_unit'),
+  baseUnitAmount: numeric('base_unit_amount', { precision: 24, scale: 3 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   recipeItemUnique: uniqueIndex('recipe_ingredients_recipe_id_inventory_item_id_unique').on(

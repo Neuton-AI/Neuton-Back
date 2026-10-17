@@ -26,9 +26,11 @@ import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
   rawName: htmlFree(z.string().trim().min(1).max(160)),
-  searchAbleName: htmlFree(z.string().trim().min(1).max(160)).optional(),
+  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)).optional(),
   quantity: z.coerce.number().positive(),
-  unit: htmlFree(z.string().trim().min(1).max(24)),
+  rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
+  baseUnit: htmlFree(z.string().trim().min(1).max(24)).nullable().optional(),
+  baseUnitAmount: z.number().finite().positive().max(999999999999.999).nullable().optional(),
 });
 
 const recipeSchema = z.object({
@@ -41,7 +43,10 @@ const recipeSchema = z.object({
   yieldUnit: htmlFree(z.string().trim().min(1).max(24)).default('portion'),
   targetMarginPct: z.coerce.number().min(0).max(999).nullable().optional(),
   allergens: z.array(htmlFree(z.string().trim().min(1).max(40))).max(20).default([]),
-  instructions: htmlFree(z.string().trim().max(20_000)).nullable().optional(),
+  steps: z.array(z.object({
+    stepNumber: z.number().int().positive(),
+    instruction: htmlFree(z.string().trim().min(1).max(20_000)),
+  })).max(500).refine((steps) => steps.every((step, index) => step.stepNumber === index + 1), 'Steps must be numbered in order').optional(),
   ingredients: z.array(recipeIngredientSchema).min(1),
 });
 
@@ -100,9 +105,12 @@ export async function costRecipe(
       inventoryItemId: recipeIngredients.inventoryItemId,
       generalPriceId: recipeIngredients.generalPriceId,
       rawName: recipeIngredients.rawName,
-      unit: recipeIngredients.unit,
+      rawSrcUnit: recipeIngredients.rawSrcUnit,
+      rawMaterialName: recipeIngredients.rawMaterialName,
+      baseUnit: recipeIngredients.baseUnit,
+      baseUnitAmount: recipeIngredients.baseUnitAmount,
       quantity: recipeIngredients.quantity,
-      name: sql<string>`coalesce(${inventoryItems.name}, ${generalPrices.name})`,
+      name: sql<string>`coalesce(${inventoryItems.name}, ${generalPrices.rawName})`,
       currentQuantity: inventoryItems.currentQuantity,
       averageUnitCost: recipeIngredientUnitCost,
     })
@@ -120,13 +128,13 @@ export async function costRecipe(
     )
     .orderBy(asc(recipeIngredients.id));
 
-  const linkedIngredients = ingredientRows.filter((i) => i.inventoryItemId != null || i.generalPriceId != null);
+  const linkedIngredients = ingredientRows.filter((i) => (i.inventoryItemId != null || i.generalPriceId != null) && i.averageUnitCost != null && i.baseUnitAmount != null);
   const totalCount = ingredientRows.length;
   const linkedCount = linkedIngredients.length;
 
   const breakdown = calculateUnitCost({
     ingredients: linkedIngredients.map((i) => ({
-      quantity: i.quantity,
+      quantity: i.baseUnitAmount!,
       averageUnitCost: i.averageUnitCost ?? '0',
     })),
     prepTimeMinutes: recipe.prepTimeMinutes,
@@ -168,17 +176,20 @@ export async function costRecipe(
     ingredients: ingredientRows.map((ingredient) => ({
       name: ingredient.name ?? ingredient.rawName,
       quantity: toNumber(ingredient.quantity),
-      unit: ingredient.unit,
+      rawSrcUnit: ingredient.rawSrcUnit,
+      rawMaterialName: ingredient.rawMaterialName,
+      baseUnit: ingredient.baseUnit,
+      baseUnitAmount: ingredient.baseUnitAmount,
       averageUnitCost: ingredient.averageUnitCost ? toNumber(ingredient.averageUnitCost) : 0,
       lineCost: ingredient.averageUnitCost
-        ? Math.round(toNumber(ingredient.quantity) * toNumber(ingredient.averageUnitCost) * 10_000) /
+        ? Math.round(toNumber(ingredient.baseUnitAmount ?? '0') * toNumber(ingredient.averageUnitCost) * 10_000) /
           10_000
         : 0,
       currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
       inventoryItemId: ingredient.inventoryItemId,
       generalPriceId: ingredient.generalPriceId,
       rawName: ingredient.rawName,
-      linked: ingredient.inventoryItemId != null || ingredient.generalPriceId != null,
+      linked: (ingredient.inventoryItemId != null || ingredient.generalPriceId != null) && ingredient.averageUnitCost != null && ingredient.baseUnitAmount != null,
     })),
   };
 }
@@ -266,7 +277,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               ? null
               : body.targetMarginPct.toFixed(2),
           allergens: body.allergens,
-          instructions: body.instructions ?? null,
+          steps: body.steps ?? [],
           status: 'pending',
         })
         .returning();
@@ -280,9 +291,11 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           recipeId: recipe.id,
           inventoryItemId: ingredient.inventoryItemId ?? null,
           rawName: ingredient.rawName,
-          searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
+          rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity),
-          unit: ingredient.unit,
+          rawSrcUnit: ingredient.rawSrcUnit,
+          baseUnit: ingredient.baseUnit ?? null,
+          baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
         })),
       );
 
@@ -346,7 +359,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
         body.targetMarginPct === null ? null : body.targetMarginPct.toFixed(2);
     }
     if (body.allergens !== undefined) patch.allergens = body.allergens;
-    if (body.instructions !== undefined) patch.instructions = body.instructions ?? null;
+    if (body.steps !== undefined) patch.steps = body.steps ?? [];
 
     const updated = await db
       .update(recipes)
@@ -366,9 +379,11 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
               rawName: ingredient.rawName,
-              searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
+              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
-              unit: ingredient.unit,
+              rawSrcUnit: ingredient.rawSrcUnit,
+              baseUnit: ingredient.baseUnit ?? null,
+              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
             })),
           );
         }
@@ -642,9 +657,11 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
               rawName: ingredient.rawName,
-              searchAbleName: ingredient.searchAbleName?.trim() || ingredient.rawName,
+              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
-              unit: ingredient.unit,
+              rawSrcUnit: ingredient.rawSrcUnit,
+              baseUnit: ingredient.baseUnit ?? null,
+              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
             })),
           );
         }

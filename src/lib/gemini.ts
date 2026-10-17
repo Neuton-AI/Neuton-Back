@@ -65,9 +65,11 @@ export interface ReceiptExtraction {
 
 export interface RecipeIngredient {
   rawName: string;
-  searchAbleName?: string | null;
+  rawMaterialName?: string | null;
   quantity: number | null;
-  unit: string | null;
+  rawSrcUnit: string | null;
+  baseUnit: string | null;
+  baseUnitAmount: number | null;
 }
 
 export interface RecipeExtraction {
@@ -77,7 +79,7 @@ export interface RecipeExtraction {
   yieldQuantity: number | null;
   yieldUnit: string | null;
   allergens: string[];
-  instructions: string | null;
+  steps: { stepNumber: number; instruction: string }[];
   ingredients: RecipeIngredient[];
 }
 
@@ -117,7 +119,7 @@ const RECEIPT_SCHEMA = `{
   "required": ["items", "receiptDate", "merchantName", "totalAmount", "taxAmount", "currency"]
 }`;
 
-const RECIPE_SCHEMA = `{
+export const RECIPE_SCHEMA = `{
   "type": "object",
   "properties": {
     "name": { "type": "string" },
@@ -126,7 +128,7 @@ const RECIPE_SCHEMA = `{
     "yieldQuantity": { "type": "number" },
     "yieldUnit": { "type": "string" },
     "allergens": { "type": "array", "items": { "type": "string" } },
-    "instructions": { 
+    "steps": {
       "type": "array", 
       "items": { 
         "type": "object", 
@@ -142,7 +144,7 @@ const RECIPE_SCHEMA = `{
       "items": {
         "type": "object",
         "properties": {
-          "rawName": { "type": "string", description: "The name of the ingredient as it appears on the recipe" },
+          "rawName": { "type": "string", "description": "The name of the ingredient as it appears on the recipe" },
           "rawMaterialName": { "type": "string", "description": "The name of the raw material the ingredient is made of" },
           "quantity": { "type": "number" },
           "rawSrcUnit": { "type": "string", "description": "The unit of measure of the ingredient(g, kg, lb, oz, piece, etc)" }
@@ -151,7 +153,7 @@ const RECIPE_SCHEMA = `{
       }
     }
   },
-  "required": ["name", "ingredients", "instructions", "prepTimeMinutes","yieldQuantity", "yieldUnit", "allergens", "ingredients"]
+  "required": ["name", "ingredients", "steps", "prepTimeMinutes","yieldQuantity", "yieldUnit", "allergens"]
 }`;
 
 const ORDER_SCHEMA = `{
@@ -182,7 +184,7 @@ for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned"
 Use null for anything you cannot read. Never invent values.`;
 
 const EXTRACT_RECIPE_PROMPT = `Extract the recipe data from the provided document, all the ingredients, amounts and steps to make. 
-For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our searchAbleName.
+For each ingredient we extract we need to clear it for search in supermaket apis, we need to standartize the ingredient name - this will be our rawMaterialName.
 the rawMaterialName is the raw material the item is made of without any additional words, no ambiguity no units no weigths or any additional information.
 for example: "Butter unsalted sweet" becomes "Butter", "Ribeye 15% fat seasoned" becomes "Ribeye", "chocolate chips 28% unsweetened or chopped chocolate" becomes "chocolate chips". 
 Use null for anything you cannot read. Never invent values.
@@ -388,12 +390,25 @@ export async function extractReceipt(
   };
 }
 
+export function parseRecipeSteps(value: unknown): RecipeExtraction['steps'] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry, index) => {
+    const step = (entry ?? {}) as Record<string, unknown>;
+    return { stepNumber: index + 1, instruction: asString(step.instruction) ?? '' };
+  }).filter((step) => step.instruction.length > 0)
+    .map((step, index) => ({ ...step, stepNumber: index + 1 }));
+}
+
 export async function extractRecipe(
   inlineData: { mimeType: string; data: string },
   context?: LogContext,
 ): Promise<RecipeExtraction | null> {
   const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
 
+  return parseRecipeExtraction(raw);
+}
+
+export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtraction {
   const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
   return {
     name: asString(raw.name),
@@ -407,14 +422,16 @@ export async function extractRecipe(
         .map((a) => stripHtml(a).trim())
         .filter((a) => a.length > 0)
       : [],
-    instructions: asString(raw.instructions),
+    steps: parseRecipeSteps(raw.steps),
     ingredients: ingredients.map((entry) => {
       const item = (entry ?? {}) as Record<string, unknown>;
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
-        searchAbleName: asString(item.searchAbleName),
+        rawMaterialName: asString(item.rawMaterialName),
         quantity: asNumber(item.quantity),
-        unit: asString(item.unit),
+        rawSrcUnit: asString(item.rawSrcUnit),
+        baseUnit: null,
+        baseUnitAmount: null,
       };
     }),
   };

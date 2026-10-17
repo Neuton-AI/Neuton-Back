@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { generalPrices, inventoryItems } from '../db/schema/index.js';
+import { generalPrices, inventoryItems, recipeIngredients } from '../db/schema/index.js';
 
-/** Inventory remains authoritative; external prices only cost fallback links. */
-export const recipeIngredientUnitCost = sql<string>`coalesce(${inventoryItems.averageUnitCost}, ${generalPrices.priceIls})`;
+/** A price link alone does not establish a valid conversion. */
+export const recipeIngredientUnitCost = sql<string | null>`case
+  when ${recipeIngredients.baseUnitAmount} > 0 then case
+    when ${recipeIngredients.inventoryItemId} is not null
+      and ${recipeIngredients.baseUnit} = ${inventoryItems.baseUnit}
+      then ${inventoryItems.baseUnitAverageCost}
+    when ${recipeIngredients.inventoryItemId} is null
+      and ${recipeIngredients.baseUnit} = ${generalPrices.baseUnit}
+      and ${generalPrices.baseUnitAmount} > 0
+      then ${generalPrices.baseUnitCost}
+  end
+end`;

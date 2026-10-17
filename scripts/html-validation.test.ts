@@ -150,18 +150,18 @@ test('POST /shops refuses HTML in the shop address', async () => {
 test('POST /recipes refuses HTML wherever the recipe text lives', async () => {
   const clean = {
     name: 'Focaccia',
-    ingredients: [{ rawName: 'Flour', quantity: 1, unit: 'kg' }],
+    ingredients: [{ rawName: 'Flour', quantity: 1, rawSrcUnit: 'kg' }],
   };
   // Short enough for every field's own length cap, so the only issue raised
   // is the HTML one and the assertion stays exact.
   const payload = '<svg onload=alert(3)>';
 
-  for (const field of ['name', 'description', 'instructions', 'yieldUnit'] as const) {
+  for (const field of ['name', 'description', 'steps', 'yieldUnit'] as const) {
     const h = await catalogHarness();
     try {
       const { status, body } = await post(h, '/api/v1/recipes', {
         ...clean,
-        [field]: payload,
+        [field]: field === 'steps' ? [{ stepNumber: 1, instruction: payload }] : payload,
       });
 
       assert.equal(status, 400, `${field} must be rejected`);
@@ -176,7 +176,7 @@ test('POST /recipes refuses HTML wherever the recipe text lives', async () => {
   try {
     const { status, body } = await post(h, '/api/v1/recipes', {
       ...clean,
-      ingredients: [{ rawName: '<b>Flour</b>', quantity: 1, unit: 'kg' }],
+      ingredients: [{ rawName: '<b>Flour</b>', quantity: 1, rawSrcUnit: 'kg' }],
     });
     assert.equal(status, 400, 'ingredient text is covered too');
     assert.deepEqual(flaggedPaths(body), ['ingredients']);
