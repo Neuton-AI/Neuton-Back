@@ -32,6 +32,7 @@ import { env } from './env.js';
 import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
+import { convertRecipeToBaseUnits } from './lib/recipeConversion.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { enrichReciptItems, searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
@@ -296,7 +297,7 @@ export async function processRecipe(
   }
 
   const bytes = await deps.getObjectBytes(storagePath);
-  const extraction = await deps.extractRecipe(
+  const rawExtraction = await deps.extractRecipe(
     {
       mimeType: data.contentType,
       data: toBase64(bytes),
@@ -304,12 +305,12 @@ export async function processRecipe(
     jobLogContext(data, job),
   );
 
-  if (!extraction?.name) {
+  if (!rawExtraction?.name) {
     throw new Error('Gemini returned no parsable recipe extraction');
   }
+  const extraction = convertRecipeToBaseUnits(rawExtraction);
 
   const {
-    name,
     description,
     prepTimeMinutes,
     yieldQuantity,
@@ -317,7 +318,7 @@ export async function processRecipe(
     allergens,
     steps,
   } = extraction;
-  const safeName = name;
+  const safeName = rawExtraction.name;
 
   const shopRows = await deps.db
     .select({
@@ -387,8 +388,8 @@ export async function processRecipe(
           inventoryItemId,
           rawName: ingredient.rawName,
           rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          rawSrcUnit: ingredient.rawSrcUnit ?? 'unit',
+          quantity: ingredient.quantity == null ? null : qty(ingredient.quantity),
+          rawSrcUnit: ingredient.rawSrcUnit,
           baseUnit: ingredient.baseUnit,
           baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
         };
@@ -440,8 +441,8 @@ export async function processRecipe(
           inventoryItemId,
           rawName: ingredient.rawName,
           rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-          quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
-          rawSrcUnit: ingredient.rawSrcUnit ?? 'unit',
+          quantity: ingredient.quantity == null ? null : qty(ingredient.quantity),
+          rawSrcUnit: ingredient.rawSrcUnit,
           baseUnit: ingredient.baseUnit,
           baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
         };

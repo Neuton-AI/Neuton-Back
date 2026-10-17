@@ -84,6 +84,11 @@ test('forward migration preserves IDs, references, instructions and only proven 
       assert.equal(updated[0]?.raw_name, 'Updated flour');
       const columns = await tx`SELECT column_name FROM information_schema.columns WHERE table_name = 'general_prices' AND table_schema LIKE 'pg_temp_%'`;
       assert.equal(columns.length, 10);
+      const unresolvedMigration = readFileSync(new URL('../drizzle/0026_recipe_unresolved_measurements.sql', import.meta.url), 'utf8');
+      for (const statement of unresolvedMigration.split('--> statement-breakpoint')) await tx.unsafe(statement);
+      await tx`INSERT INTO recipe_ingredients(id, recipe_id, raw_name, quantity, raw_src_unit) VALUES (3, 1, 'salt to taste', NULL, NULL)`;
+      const unresolved = await tx`SELECT quantity, raw_src_unit, base_unit, base_unit_amount FROM recipe_ingredients WHERE id = 3`;
+      assert.deepEqual(unresolved[0], { quantity: null, raw_src_unit: null, base_unit: null, base_unit_amount: null });
     });
   } finally { await connection.end(); }
 });

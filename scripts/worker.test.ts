@@ -498,8 +498,8 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       rawMaterialName: 'Flour',
       quantity: '2.000',
       rawSrcUnit: 'kg',
-      baseUnit: null,
-      baseUnitAmount: null,
+      baseUnit: 'g',
+      baseUnitAmount: '2000.000',
     },
     {
       shopId: SHOP_ID,
@@ -507,7 +507,7 @@ test('recipe: stores the recipe and links only the ingredients it could price', 
       inventoryItemId: null,
       rawName: 'Salt',
       rawMaterialName: 'Salt',
-      quantity: '1.000',
+      quantity: null,
       rawSrcUnit: 'kg',
       baseUnit: null,
       baseUnitAmount: null,
@@ -536,6 +536,40 @@ test('recipe: a duplicate name is suffixed instead of failing the job', async ()
 
     const recipeRow = db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
     assert.equal(recipeRow.name, expected);
+  }
+});
+
+test('recipe: new and queued recipes persist converted lines and preserve unresolved extraction', async () => {
+  for (const existing of [false, true]) {
+    const extraction = { ...RECIPE, ingredients: [
+      { rawName: 'Flour', quantity: 0.2, rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null },
+      { rawName: 'Milk', quantity: 0.5, rawSrcUnit: 'l', baseUnit: null, baseUnitAmount: null },
+      { rawName: 'Eggs', quantity: 0.5, rawSrcUnit: 'dozen', baseUnit: null, baseUnitAmount: null },
+      { rawName: 'Salt', quantity: null, rawSrcUnit: null, baseUnit: null, baseUnitAmount: null },
+      { rawName: 'Sugar', quantity: 1, rawSrcUnit: 'cup', baseUnit: null, baseUnitAmount: null },
+    ] };
+    const original = structuredClone(extraction);
+    const { db, deps, job, jobData } = harness({
+      responses: {
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
+        'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
+      },
+      extractions: { recipe: extraction },
+    });
+    await processRecipe(deps, jobData, job);
+    const lines = db.onlyCallTo('insert', 'recipeIngredients').values as Array<Record<string, unknown>>;
+    assert.deepEqual(lines.map((line) => [line.baseUnit, line.baseUnitAmount]), [
+      ['g', '200.000'], ['ml', '500.000'], ['each', '6.000'], [null, null], [null, null],
+    ]);
+    assert.equal(lines[3]?.quantity, null);
+    assert.equal(lines[3]?.rawSrcUnit, null);
+    assert.equal(lines[4]?.quantity, '1.000');
+    assert.equal(lines[4]?.rawSrcUnit, 'cup');
+    assert.deepEqual(extraction, original);
+    const recipeCall = db.callsTo(existing ? 'update' : 'insert', 'recipes').at(-1)!;
+    const recipeValues = (existing ? recipeCall.set : recipeCall.values) as Record<string, unknown>;
+    assert.deepEqual(recipeValues.steps, RECIPE.steps);
+    assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
   }
 });
 

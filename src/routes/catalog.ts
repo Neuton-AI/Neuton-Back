@@ -175,7 +175,7 @@ export async function costRecipe(
     totalCount,
     ingredients: ingredientRows.map((ingredient) => ({
       name: ingredient.name ?? ingredient.rawName,
-      quantity: toNumber(ingredient.quantity),
+      quantity: ingredient.quantity == null ? null : toNumber(ingredient.quantity),
       rawSrcUnit: ingredient.rawSrcUnit,
       rawMaterialName: ingredient.rawMaterialName,
       baseUnit: ingredient.baseUnit,

@@ -5,7 +5,8 @@ import type { LogContext } from './logger/types.js';
 import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import { stripHtml } from './safeText.js';
 import type { MediaKind } from './queue.js';
-import { BaseUnits } from './supermarket/conversion.js';
+import type { BaseUnits } from './supermarket/conversion.js';
+import { parseMeasurementQuantity } from './unitConversion.js';
 
 /**
  * Creates an AbortController that fires after the configured Gemini request timeout.
@@ -428,7 +429,7 @@ export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtra
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
         rawMaterialName: asString(item.rawMaterialName),
-        quantity: asNumber(item.quantity),
+        quantity: parseMeasurementQuantity(item.quantity),
         rawSrcUnit: asString(item.rawSrcUnit),
         baseUnit: null,
         baseUnitAmount: null,
