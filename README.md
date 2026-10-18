@@ -28,3 +28,34 @@ amount and cost until a complete measurement is supplied.
 Apply `0023_receipt_item_raw_material_name.sql` before deploying this version.
 It backfills existing receipt lines from `raw_name` before making the new
 material name required.
+
+## Supermarket catalog cache
+
+Product searches keep decoded XML in `<backend-root>/prices/shufersal/<unix-ms>.xml`
+and `prices/carrefour/<unix-ms>.xml`. The path is relative to the module installation,
+not the launch directory, for both `tsx src/worker.ts` and `node dist/worker.js`.
+The timestamp is download completion time. Files expire at exactly six hours;
+expired or corrupt catalogs are removed before refresh. A failed chain is logged
+with its cache path and does not suppress results from the other chain.
+
+Provision writable, persistent storage at `<backend-root>/prices` (for example a
+container volume). Deployments must include the backend directory layout above;
+ephemeral disks work but lose the cache on restart. No new environment variable
+is required. Generated files are ignored by Git. Each process holds one parsed
+catalog per chain in memory while its file is unchanged and fresh.
+
+BullMQ receipt concurrency and concurrent item enrichment share one in-process
+promise per chain. Separate processes sharing the same volume coordinate through
+`proper-lockfile` directory locks; all workers must use this implementation and
+the same lock settings. The filesystem must support atomic mkdir/rename and
+reliable modification times. Independent volumes cache independently. Downloads
+are validated before publication and renamed atomically from a temporary file.
+Locks heartbeat every 10 seconds and become stale after 120 seconds (crashed-worker
+recovery); contenders retry for up to five minutes. Do not delete a live lock or
+mix implementations with different lease settings. Suspend/stall durations above
+the lease can compromise a lock; the worker fails that search rather than knowingly
+publishing after losing ownership. Keep clocks synchronized across shared-volume
+hosts. Cache directories are dedicated to generated files, not user documents.
+
+Verification: `npx tsx --test scripts/supermarket-cache.test.ts` covers deterministic
+clock/network fixtures and separate Node worker processes sharing a directory.
