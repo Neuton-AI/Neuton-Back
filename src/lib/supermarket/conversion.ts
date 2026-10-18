@@ -19,6 +19,8 @@ const HEBREW_MASS_REGEX = {
 const HEBREW_VOLUME_REGEX = {
     ml: /(?:^|\s)(?:מיליליטר(?:ים)?|מ["'י]?ל|סמ"ק|מל),?(?!\p{L})/u,
     l: /(?:^|\s)(?:ליטר(?:ים)?|ל),?(?!\p{L})/u,
+    tsp: /(?:^|\s)(?:כפית|כפיות),?(?!\p{L})/u,
+    tbsp: /(?:^|\s)(?:כף|כפות),?(?!\p{L})/u,
 }
 
 const HEBREW_EACH_REGEX = {
