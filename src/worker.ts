@@ -20,6 +20,7 @@ import {
 } from './lib/queue.js';
 import { getObjectBytes } from './lib/storage.js';
 import { extractOrder, extractReceipt, extractRecipe } from './lib/gemini.js';
+import { convertRecipeToBaseUnits } from './lib/recipeConversion.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { isHtmlSafe } from './lib/safeText.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
@@ -308,6 +309,8 @@ export async function processRecipe(
     throw new Error('Gemini returned no parsable recipe extraction');
   }
 
+  const convertedRecipe = convertRecipeToBaseUnits(extraction);
+
   const {
     name,
     description,
@@ -335,7 +338,7 @@ export async function processRecipe(
   // through `tx`, never the shared client).
   const resolveLinkedIngredientIds = async (handle: InventoryDb): Promise<Map<string, string>> => {
     const linked = new Map<string, string>();
-    for (const ingredient of extraction.ingredients) {
+    for (const ingredient of convertedRecipe.ingredients) {
       const found = await findOrCreateInventoryItemOn(
         handle,
         data.shopId,
@@ -379,7 +382,7 @@ export async function processRecipe(
       // Replace ingredients
       await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, existingRecipe.id));
 
-      const bill = extraction.ingredients.map((ingredient) => {
+      const bill = convertedRecipe.ingredients.map((ingredient) => {
         const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
         return {
           shopId: data.shopId,
@@ -432,7 +435,7 @@ export async function processRecipe(
       const recipe = newRecipe[0];
       if (!recipe) throw new Error('recipe insert returned no row');
 
-      const bill = extraction.ingredients.map((ingredient) => {
+      const bill = convertedRecipe.ingredients.map((ingredient) => {
         const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
         return {
           shopId: data.shopId,
