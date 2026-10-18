@@ -342,11 +342,11 @@ export async function processRecipe(
       const found = await findOrCreateInventoryItemOn(
         handle,
         data.shopId,
-        ingredient.rawName,
+        ingredient.rawMaterialName,
         ingredient.rawSrcUnit,
         'recipe',
       );
-      if (found) linked.set(ingredient.rawName, found);
+      if (found) linked.set(ingredient.rawMaterialName, found);
     }
     return linked;
   };
@@ -383,13 +383,13 @@ export async function processRecipe(
       await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, existingRecipe.id));
 
       const bill = convertedRecipe.ingredients.map((ingredient) => {
-        const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
+        const inventoryItemId = linkedIngredientIds.get(ingredient.rawMaterialName) ?? null;
         return {
           shopId: data.shopId,
           recipeId: existingRecipe.id,
           inventoryItemId,
           rawName: ingredient.rawName,
-          rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+          rawMaterialName: ingredient.rawMaterialName,
           quantity: qty(ingredient.quantity && ingredient.quantity > 0 ? ingredient.quantity : 1),
           rawSrcUnit: ingredient.rawSrcUnit ?? 'unit',
           baseUnit: ingredient.baseUnit,

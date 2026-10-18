@@ -65,7 +65,7 @@ export interface ReceiptExtraction {
 
 export interface RecipeIngredient {
   rawName: string;
-  rawMaterialName?: string | null;
+  rawMaterialName: string;
   quantity: number | null;
   rawSrcUnit: string | null;
   baseUnit: string | null;
@@ -427,7 +427,7 @@ export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtra
       const item = (entry ?? {}) as Record<string, unknown>;
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
-        rawMaterialName: asString(item.rawMaterialName),
+        rawMaterialName: asString(item.rawMaterialName) ?? 'Unknown material',
         quantity: asNumber(item.quantity),
         rawSrcUnit: asString(item.rawSrcUnit),
         baseUnit: null,

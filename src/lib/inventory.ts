@@ -47,9 +47,9 @@ function normalizeName(name: string): string {
 export async function findInventoryItem(
   db: InventoryDb,
   shopId: string,
-  rawName: string,
+  rawMaterialName: string,
 ): Promise<string | null> {
-  const name = rawName.trim();
+  const name = rawMaterialName.trim();
   if (name.length === 0) return null;
   const normalized = normalizeName(name);
 
@@ -69,17 +69,17 @@ export async function findInventoryItem(
 export async function findOrCreateInventoryItem(
   db: InventoryDb,
   shopId: string,
-  rawName: string,
+  rawMaterialName: string,
   unit: string | null,
   context?: 'receipt' | 'recipe' | 'generic',
 ): Promise<string | null> {
-  const found = await findInventoryItem(db, shopId, rawName);
+  const found = await findInventoryItem(db, shopId, rawMaterialName);
   if (found) return found;
   if (context === 'recipe') {
     return null;
   }
 
-  const name = rawName.trim();
+  const name = rawMaterialName.trim();
   if (name.length === 0) return null;
 
   const inventoryUnit = (INVENTORY_UNITS as readonly string[]).includes(unit ?? '')
