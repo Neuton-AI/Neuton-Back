@@ -299,7 +299,6 @@ export function createProductSearch(getItems: (chain: PriceChain) => Promise<Fou
           .filter(({ score }) => score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, limitPerChain)
-          .filter(({ item }) => Number.isFinite(parseFloat(item.ItemPrice)))
           .map(({ item, score }) => ({ chain, score, ...item }));
       } catch (error) {
         console.error(`Supermarket search failed for ${chain}:`, error);

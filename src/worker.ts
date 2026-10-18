@@ -31,7 +31,7 @@ import {
 import { env } from './env.js';
 import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
-import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
+import { prepareRecipeFallbackPrices, persistRecipeFallbackPrices } from './lib/recipePriceFallback.js';
 import { resolveRecipeInventoryLinks } from './lib/recipeInventory.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { enrichReciptItems, searchProduct } from './lib/supermarket/prices.js';
@@ -332,10 +332,17 @@ export async function processRecipe(
     .limit(1);
   const shop = shopRows[0];
 
+  const linkedIngredientIds = await resolveRecipeInventoryLinks(deps.db, data.shopId, convertedRecipe.ingredients);
+  const fallbackPrices = await prepareRecipeFallbackPrices(
+    convertedRecipe.ingredients.map((ingredient, index) => ({
+      ...ingredient, inventoryItemId: linkedIngredientIds[index] ?? null,
+    })),
+    deps.searchProduct,
+  );
+
   if (existingRecipe) {
     // Update existing row: replace extracted fields + ingredients + set unverified
     await deps.db.transaction(async (tx) => {
-      const linkedIngredientIds = await resolveRecipeInventoryLinks(tx, data.shopId, convertedRecipe.ingredients);
       // Re-extraction may yield a name another recipe already holds, so suffix
       // the duplicate ("Recipe Name (2)") instead of violating the (shopId, name) index.
       const uniqueName = await resolveUniqueRecipeName(
@@ -379,7 +386,7 @@ export async function processRecipe(
       });
 
       await tx.insert(recipeIngredients).values(bill);
-      await linkRecipeFallbackPrices(tx, data.shopId, existingRecipe.id, deps.searchProduct);
+      await persistRecipeFallbackPrices(tx, data.shopId, existingRecipe.id, fallbackPrices);
     });
 
     jobLogger.info(
@@ -393,7 +400,6 @@ export async function processRecipe(
   } else {
     // Legacy fallback: no row exists, insert directly as 'unverified' with storagePath
     const inserted = await deps.db.transaction(async (tx) => {
-      const linkedIngredientIds = await resolveRecipeInventoryLinks(tx, data.shopId, convertedRecipe.ingredients);
       // The (shopId, name) unique index rejects a name already in the shop, so
       // suffix the duplicate ("Recipe Name (2)") instead of failing the job.
       const uniqueName = await resolveUniqueRecipeName(tx, data.shopId, safeName);
@@ -432,7 +438,7 @@ export async function processRecipe(
       });
 
       await tx.insert(recipeIngredients).values(bill);
-      await linkRecipeFallbackPrices(tx, data.shopId, recipe.id, deps.searchProduct);
+      await persistRecipeFallbackPrices(tx, data.shopId, recipe.id, fallbackPrices);
 
       return recipe;
     });
