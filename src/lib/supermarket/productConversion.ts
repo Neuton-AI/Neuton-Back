@@ -1,4 +1,5 @@
-import { convertSrcAmountToBase, getBaseAndCurrentUnit } from './conversion.js';
+import type { ExtractedLineItem } from '../gemini.js';
+import { setUnitsData } from './conversion.js';
 import type { PriceResult } from './prices.js';
 
 function positiveDecimal(value: string): number | null {
@@ -7,31 +8,31 @@ function positiveDecimal(value: string): number | null {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
-/** Package contents for ordinary products; declared price basis for weighted goods. */
+/** Run the selected product through the receipt enrichment conversion pipeline. */
 export function normalizeProductPrice(product: PriceResult, rawMaterialName: string) {
   const price = positiveDecimal(product.ItemPrice);
-  const weighted = product.bIsWeighted.trim();
-  if (price === null || !product.ItemCode.trim() || !product.ItemName.trim()) return null;
-  if (!['', '0', '1'].includes(weighted)) return null;
+  if (price === null || positiveDecimal(product.Quantity) === null ||
+      !product.ItemCode.trim() || !product.ItemName.trim()) return null;
 
-  const rawSrcUnit = weighted === '1' ? product.UnitOfMeasure : product.UnitQty;
-  // Weighted price bases may include a multiplier (e.g. "100 גרם").
-  // Quantity is not the amount covered by that price.
-  const measure = rawSrcUnit.trim().match(/^(?:(\d+(?:\.\d+)?)\s*)?([\p{L}"'״׳]+[.,]?)$/u);
-  if (!measure || (weighted !== '1' && measure[1])) return null;
-  const unit = measure[2]!;
-  if (/^מארז(?:ים)?[.,]?$/u.test(unit)) return null;
-  const amount = weighted === '1'
-    ? positiveDecimal(measure[1] ?? '1')
-    : positiveDecimal(product.Quantity);
-  if (amount === null) return null;
-  const found = getBaseAndCurrentUnit(unit);
-  if (!found.base || (weighted === '1' && found.base !== 'g')) return null;
-  const converted = convertSrcAmountToBase({
-    srcUnit: found.current, srcUnitAmount: amount, baseUnit: found.base,
-    baseUnitAmount: null as number | null,
-  });
-  const baseAmount = converted.baseUnitAmount;
+  const item: ExtractedLineItem = {
+    rawName: product.ItemName,
+    rawMaterialName,
+    rawSku: product.ItemCode.trim(),
+    isSkuEnriched: true,
+    quantity: 1,
+    rawSrcUnit: product.UnitQty,
+    srcUnit: null,
+    srcUnitAmount: null,
+    baseUnit: null,
+    baseUnitAmount: null,
+    unitPrice: price,
+    totalPrice: price,
+    confidence: null,
+  };
+  // The selected product is already known, so use the receipt SKU-enrichment
+  // path. setUnitsData derives units from UnitQty and amounts from Quantity.
+  setUnitsData([{ item, itemEnrichment: [product] }]);
+  const baseAmount = item.baseUnitAmount;
   if (baseAmount === null || !Number.isFinite(baseAmount) || baseAmount <= 0 || baseAmount >= 1e21) return null;
   const cost = price / baseAmount;
   if (!Number.isFinite(cost) || cost >= 1e12) return null;
@@ -39,8 +40,8 @@ export function normalizeProductPrice(product: PriceResult, rawMaterialName: str
   const baseUnitCost = cost.toFixed(6);
   if (Number(baseUnitAmount) <= 0 || Number(baseUnitCost) <= 0 || Number(baseUnitCost) >= 1e12) return null;
   return {
-    rawName: product.ItemName, sku: product.ItemCode.trim(), rawMaterialName,
-    rawSrcUnit, srcUnit: found.current, baseUnit: found.base,
+    rawName: item.rawName, sku: item.rawSku, rawMaterialName,
+    rawSrcUnit: item.rawSrcUnit, srcUnit: item.srcUnit, baseUnit: item.baseUnit,
     baseUnitAmount, baseUnitCost,
   };
 }

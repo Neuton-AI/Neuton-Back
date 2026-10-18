@@ -12,7 +12,7 @@ export function normalizePriceName(name: string): string {
 // every conversion field so conflicting copies of a SKU also have a stable tie.
 function tieKey(product: PriceResult): string {
   return JSON.stringify([product.ItemCode, product.chain, product.ItemName,
-    product.UnitQty, product.Quantity, product.UnitOfMeasure, product.bIsWeighted, product.ItemPrice]);
+    product.UnitQty, product.Quantity, product.ItemPrice]);
 }
 
 export function selectFallbackProduct(results: PriceResult[]): PriceResult | null {

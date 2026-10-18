@@ -59,21 +59,21 @@ Inventory matching runs first, scoped to the shop. Only unmatched material names
 are searched, once per normalized material per extraction (including failures).
 The highest finite score wins without name-prefix or minimum-score filtering.
 Equal scores use code-point ordering of SKU, chain, product name, measurement
-fields, weighted flag and price. Validation happens after selection: an invalid
+fields and price. Validation happens after selection: an invalid
 winner leaves both links null rather than selecting a cheaper/lower-ranked item.
 
-Ordinary products use `Quantity × UnitQty` as package contents; `UnitOfMeasure`
-is a comparison-price basis and does not override those contents. Weighted
-products (`bIsWeighted=1`) use their explicit `UnitOfMeasure` price basis, including
-multipliers such as `100 גרם`, rather than multiplying the price by `Quantity`.
-Weighted bases must resolve to mass. Missing bases, ambiguous packages, invalid
-numbers, overflow and amounts/costs rounding to zero remain unresolved. No
-package size, density or piece weight is inferred from the product name.
+The selected product runs through the same `setUnitsData` pipeline as a
+receipt item with a known SKU. It derives `srcUnit` and `baseUnit` from `UnitQty`,
+sets `srcUnitAmount` from `Quantity`, and converts that amount to
+`baseUnitAmount` using the shared receipt rules. `UnitOfMeasure` is untrusted:
+it is never read, parsed, used for tie-breaking or used for conversion.
+`bIsWeighted` does not introduce a separate conversion path.
 
-Conversion reuses the receipt unit aliases and ratios. Values are stored at the
-existing 3-decimal amount / 6-decimal cost scales; `baseUnitCost` is ItemPrice
-divided by the converted price-basis amount. `rawSrcUnit` preserves the selected
-feed field. `rawMaterialName` is the normalized recipe material, not ItemName.
+Values are stored at the existing 3-decimal amount / 6-decimal cost scales;
+`baseUnitCost` is `ItemPrice / baseUnitAmount`, matching receipt per-base-unit
+costing. `rawSrcUnit` preserves `UnitQty`; `rawMaterialName` is the normalized
+recipe material. Missing/unknown conversion data, invalid numbers, overflow and
+amounts/costs rounding to zero remain unresolved.
 
 Search preparation runs outside transactions. The recipe save transaction writes
 ingredients, upserts normalized prices on (raw_material_name, sku), and links them

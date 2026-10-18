@@ -21,26 +21,29 @@ test('package mass, volume and count use shared conversion ratios and exact norm
   }
 });
 
-test('weighted products price the declared measurement basis, not Quantity or comparison package size', () => {
-  for (const [unit, amount, cost] of [
-    ['kg', '1000.000', '0.010000'], ['1קילוגרם', '1000.000', '0.010000'],
-    ['100 גרם', '100.000', '0.100000'],
-  ]) {
-    const normalized = normalizeProductPrice({ ...product, bIsWeighted: '1', Quantity: '0.25', UnitOfMeasure: unit! }, 'flour');
-    assert.equal(normalized?.baseUnitAmount, amount);
-    assert.equal(normalized?.baseUnitCost, cost);
-    assert.equal(normalized?.rawSrcUnit, unit);
+test('UnitOfMeasure and weighted flags never affect receipt-pipeline conversion', () => {
+  const expected = normalizeProductPrice({ ...product, Quantity: '0.25' }, 'flour');
+  assert.equal(expected?.baseUnitAmount, '250.000');
+  assert.equal(expected?.baseUnitCost, '0.040000');
+  for (const UnitOfMeasure of ['', 'kg', '100 גרם', 'invalid']) {
+    for (const bIsWeighted of ['', '0', '1', 'unknown']) {
+      assert.deepEqual(normalizeProductPrice({
+        ...product, Quantity: '0.25', UnitOfMeasure, bIsWeighted,
+      }, 'flour'), expected);
+    }
   }
+  const unreadable = { ...product };
+  Object.defineProperty(unreadable, 'UnitOfMeasure', { get() { throw new Error('must not read UnitOfMeasure'); } });
+  assert.equal(normalizeProductPrice(unreadable, 'flour')?.baseUnitAmount, '1000.000');
 });
 
-test('missing, ambiguous, invalid and unrepresentable product data remain unresolved', () => {
+test('missing, unknown, invalid and unrepresentable product data remain unresolved', () => {
   for (const invalid of [
     { Quantity: '' }, { Quantity: '0' }, { Quantity: '-1' }, { Quantity: '1foo' },
     { Quantity: '1e100' }, { Quantity: '0.00000001' }, { ItemPrice: '0' },
     { ItemPrice: '-10' }, { ItemPrice: 'NaN' }, { ItemPrice: 'Infinity' },
     { ItemPrice: '0.000000001' }, { ItemPrice: '100000000000000000' },
-    { UnitQty: '' }, { UnitQty: 'kg / l' }, { UnitQty: 'bag' }, { UnitQty: 'מארז' },
-    { bIsWeighted: 'unknown' }, { bIsWeighted: '1', UnitOfMeasure: '' },
-    { bIsWeighted: '1', UnitOfMeasure: 'each' }, { ItemName: '' }, { ItemCode: '' },
+    { UnitQty: '' }, { UnitQty: 'bag' },
+    { ItemName: '' }, { ItemCode: '' },
   ]) assert.equal(normalizeProductPrice({ ...product, ...invalid }, 'flour'), null, JSON.stringify(invalid));
 });
