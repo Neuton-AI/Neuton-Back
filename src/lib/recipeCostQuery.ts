@@ -3,7 +3,8 @@ import { generalPrices, inventoryItems, recipeIngredients } from '../db/schema/i
 
 /** A price link alone does not establish a valid conversion. */
 export const recipeIngredientUnitCost = sql<string | null>`case
-  when ${recipeIngredients.baseUnitAmount} > 0 then case
+  when ${recipeIngredients.baseUnitAmount} > 0
+    and ${recipeIngredients.baseUnit} in ('g', 'ml', 'each') then case
     when ${recipeIngredients.inventoryItemId} is not null
       and ${recipeIngredients.baseUnit} = ${inventoryItems.baseUnit}
       then ${inventoryItems.baseUnitAverageCost}

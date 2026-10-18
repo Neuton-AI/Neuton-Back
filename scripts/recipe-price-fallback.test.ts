@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareRecipeFallbackPrices, persistRecipeFallbackPrices, selectFallbackProduct, normalizePriceName } from '../src/lib/recipePriceFallback.js';
 import { costRecipe } from '../src/routes/catalog.js';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { recipeIngredientUnitCost } from '../src/lib/recipeCostQuery.js';
 import type { Database } from '../src/db/client.js';
 import { recipeIngredients, type recipes } from '../src/db/schema/index.js';
 import { priceResult } from './support/priceResult.js';
@@ -99,7 +101,9 @@ test('preserved links with unresolved base conversion cannot count as valid zero
   assert.equal(costing.linkedCount, 0);
   assert.equal(costing.ingredients[0]?.linked, false);
   assert.equal(costing.ingredients[0]?.generalPriceId, 'price-legacy');
-  assert.equal(costing.retailPrice, '0.0000');
+  assert.equal(costing.retailPrice, null);
+  assert.equal(costing.unitCost, null);
+  assert.equal(costing.ingredients[0]?.lineCost, null);
   assert.equal(costing.inStock, false);
 });
 
@@ -146,4 +150,30 @@ test('catalog search keeps invalid-price winners available for explicit unresolv
   ]);
   const matches = await prepareRecipeFallbackPrices([line], search);
   assert.equal(matches.get('milk'), null);
+});
+
+test('recipe APIs use converted line cost, labor and yield, including valid free ingredients', async () => {
+  const db = new FakeDb({ 'select:recipeIngredients': [[
+    { inventoryItemId: 'inv-1', generalPriceId: null, rawName: 'Flour', quantity: '0.2', baseUnitAmount: '200', baseUnit: 'g', rawSrcUnit: 'kg', averageUnitCost: '0.01', currentQuantity: '10' },
+    { inventoryItemId: null, generalPriceId: 'price-free', rawName: 'Water', quantity: '250', baseUnitAmount: '250', baseUnit: 'ml', rawSrcUnit: 'ml', averageUnitCost: '0', currentQuantity: null },
+  ]] });
+  const recipe = { id: 'recipe-1', prepTimeMinutes: 30, yieldQuantity: '4', targetMarginPct: '30' } as typeof recipes.$inferSelect;
+  const costing = await costRecipe('shop-1', recipe, '30', '20', asDatabase(db));
+  assert.equal(costing.costComplete, true);
+  assert.equal(costing.ingredients[0]?.lineCost, 2);
+  assert.equal(costing.ingredients[1]?.lineCost, 0);
+  assert.equal(costing.ingredients[1]?.linked, true);
+  assert.equal(costing.batchCost, 12);
+  assert.equal(costing.unitCost, 3);
+  assert.equal(costing.retailPrice, 3.9);
+});
+
+test('shared price query requires matching canonical units and uses only base prices', () => {
+  const { sql } = new PgDialect().sqlToQuery(recipeIngredientUnitCost);
+  assert.match(sql, /"recipe_ingredients"\."base_unit" in \('g', 'ml', 'each'\)/);
+  assert.match(sql, /"recipe_ingredients"\."base_unit" = "inventory_items"\."base_unit"/);
+  assert.match(sql, /"recipe_ingredients"\."base_unit" = "general_prices"\."base_unit"/);
+  assert.match(sql, /"inventory_items"\."base_unit_average_cost"/);
+  assert.match(sql, /"general_prices"\."base_unit_cost"/);
+  assert.doesNotMatch(sql, /"average_unit_cost"|"price_ils"/);
 });

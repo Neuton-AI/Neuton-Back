@@ -18,6 +18,7 @@ import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
 import {
   calculateRetailPrice,
   calculateUnitCost,
+  ingredientLineCost,
   checkBatchStock,
 } from '../lib/pricing.js';
 import { defaultReceiptsDeps } from './receipts.js';
@@ -25,13 +26,14 @@ import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
+  generalPriceId: z.string().uuid().nullable().optional(),
   rawName: htmlFree(z.string().trim().min(1).max(160)),
   rawMaterialName: htmlFree(z.string().trim().min(1).max(160)).optional(),
   quantity: z.coerce.number().positive(),
   rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
-  baseUnit: htmlFree(z.string().trim().min(1).max(24)).nullable().optional(),
+  baseUnit: z.enum(['g', 'ml', 'each']).nullable().optional(),
   baseUnitAmount: z.number().finite().positive().max(999999999999.999).nullable().optional(),
-});
+}).refine((ingredient) => !(ingredient.inventoryItemId && ingredient.generalPriceId), 'Choose one ingredient price source');
 
 const recipeSchema = z.object({
   name: htmlFree(z.string().trim().min(1).max(160)),
@@ -128,21 +130,24 @@ export async function costRecipe(
     )
     .orderBy(asc(recipeIngredients.id));
 
-  const linkedIngredients = ingredientRows.filter((i) => (i.inventoryItemId != null || i.generalPriceId != null) && i.averageUnitCost != null && i.baseUnitAmount != null);
+  const lineCosts = ingredientRows.map((i) => ingredientLineCost({
+    quantity: i.baseUnitAmount, averageUnitCost: i.averageUnitCost,
+  }));
+  const linkedIngredients = ingredientRows.filter((_, index) => lineCosts[index] !== null);
   const totalCount = ingredientRows.length;
   const linkedCount = linkedIngredients.length;
 
   const breakdown = calculateUnitCost({
-    ingredients: linkedIngredients.map((i) => ({
-      quantity: i.baseUnitAmount!,
-      averageUnitCost: i.averageUnitCost ?? '0',
+    ingredients: ingredientRows.map((i) => ({
+      quantity: i.baseUnitAmount,
+      averageUnitCost: i.averageUnitCost,
     })),
     prepTimeMinutes: recipe.prepTimeMinutes,
     hourlyLaborCost,
     yieldQuantity: recipe.yieldQuantity,
   });
 
-  const fullyLinked = linkedCount === totalCount;
+  const fullyLinked = breakdown.costComplete;
 
   const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
     breakdown.unitCost,
@@ -150,7 +155,7 @@ export async function costRecipe(
     fullyLinked ? recipe.targetMarginPct : null,
   );
 
-  const finalRetailPrice = fullyLinked ? retailPrice : '0.0000';
+  const finalRetailPrice = fullyLinked ? retailPrice : null;
 
   const batchAvailable =
     fullyLinked &&
@@ -163,33 +168,32 @@ export async function costRecipe(
     });
 
   return {
-    unitCost: breakdown.unitCost,
+    costComplete: fullyLinked,
+    unresolvedCount: breakdown.unresolvedCount,
+    unitCost: fullyLinked ? breakdown.unitCost : null,
     ingredientsCost: breakdown.ingredientsCost,
     laborCost: breakdown.laborCost,
-    batchCost: breakdown.batchCost,
+    batchCost: fullyLinked ? breakdown.batchCost : null,
     retailPrice: finalRetailPrice,
     appliedMarginPercent: fullyLinked ? appliedMarginPercent : '0.00',
     yieldQuantity: toNumber(recipe.yieldQuantity),
     inStock: batchAvailable,
     linkedCount,
     totalCount,
-    ingredients: ingredientRows.map((ingredient) => ({
+    ingredients: ingredientRows.map((ingredient, index) => ({
       name: ingredient.name ?? ingredient.rawName,
       quantity: toNumber(ingredient.quantity),
       rawSrcUnit: ingredient.rawSrcUnit,
       rawMaterialName: ingredient.rawMaterialName,
       baseUnit: ingredient.baseUnit,
       baseUnitAmount: ingredient.baseUnitAmount,
-      averageUnitCost: ingredient.averageUnitCost ? toNumber(ingredient.averageUnitCost) : 0,
-      lineCost: ingredient.averageUnitCost
-        ? Math.round(toNumber(ingredient.baseUnitAmount ?? '0') * toNumber(ingredient.averageUnitCost) * 10_000) /
-          10_000
-        : 0,
+      averageUnitCost: ingredient.averageUnitCost == null ? null : toNumber(ingredient.averageUnitCost),
+      lineCost: lineCosts[index] == null ? null : Math.round(lineCosts[index]! * 10_000) / 10_000,
       currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
       inventoryItemId: ingredient.inventoryItemId,
       generalPriceId: ingredient.generalPriceId,
       rawName: ingredient.rawName,
-      linked: (ingredient.inventoryItemId != null || ingredient.generalPriceId != null) && ingredient.averageUnitCost != null && ingredient.baseUnitAmount != null,
+      linked: lineCosts[index] !== null,
     })),
   };
 }
@@ -290,6 +294,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           shopId: shop.id,
           recipeId: recipe.id,
           inventoryItemId: ingredient.inventoryItemId ?? null,
+          generalPriceId: ingredient.generalPriceId ?? null,
           rawName: ingredient.rawName,
           rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
           quantity: qty(ingredient.quantity),
@@ -378,6 +383,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               shopId: shop.id,
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
+              generalPriceId: ingredient.generalPriceId ?? null,
               rawName: ingredient.rawName,
               rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
@@ -656,6 +662,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
               shopId: shop.id,
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
+              generalPriceId: ingredient.generalPriceId ?? null,
               rawName: ingredient.rawName,
               rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
               quantity: qty(ingredient.quantity),
@@ -712,7 +719,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
           shop.targetProfitMargin,
           shop.hourlyLaborCost,
         );
-        return { ...row, unitCost: costing.unitCost, retailPrice: costing.retailPrice };
+        if (!costing.costComplete) return null;
+        return { ...row, costComplete: true, unitCost: costing.unitCost, retailPrice: costing.retailPrice };
       }),
     );
 
