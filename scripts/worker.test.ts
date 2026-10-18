@@ -463,8 +463,8 @@ const RECIPE = {
   allergens: ['gluten'],
   steps: [{ stepNumber: 1, instruction: 'Bake.' }],
   ingredients: [
-    { rawName: 'Flour', quantity: 2, rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null },
-    { rawName: 'Salt', quantity: null, rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null },
+    { rawName: 'Flour', rawMaterialName: 'Flour', quantity: 2, rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null },
+    { rawName: 'Salt', rawMaterialName: 'Salt', quantity: null, rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null },
   ],
 };
 
@@ -588,7 +588,7 @@ test('recipe: both save paths persist converted amounts without using package qu
         'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }]] : [[]],
         'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
       },
-      extractions: { recipe: { ...RECIPE, ingredients } },
+      extractions: { recipe: { ...RECIPE, ingredients: ingredients.map(line => ({ ...line, baseUnit: null, baseUnitAmount: null })) } },
     });
     await processRecipe(deps, jobData, job);
     const rows = db.onlyCallTo('insert', 'recipeIngredients').values as Record<string, unknown>[];
@@ -1076,3 +1076,40 @@ test('runJob: a permanent failure on a recipe job records failure on the recipe 
     assert.equal(db.callsTo('update', 'recipes').length, 1);
     assert.equal((db.onlyCallTo('update', 'recipes').set as Record<string, unknown>).status, 'failed');
   });
+
+test('recipe: both save paths preserve repeated linked lines before verification and skip supermarket search', async () => {
+  for (const existing of [false, true]) {
+    const ingredients = [
+      { rawName: 'Raw flour', rawMaterialName: 'flour', quantity: 100, rawSrcUnit: 'g' },
+      { rawName: 'Raw flour', rawMaterialName: 'flour', quantity: 2, rawSrcUnit: 'kg' },
+      { rawName: 'Brand flour', rawMaterialName: 'missing', quantity: 3, rawSrcUnit: 'g' },
+    ];
+    const { db, deps, job, jobData } = harness({
+      responses: {
+        'select:recipes': existing ? [[{ id: 'rec-1', status: 'processing' }], []] : [[], []],
+        'insert:recipes': [[{ id: 'rec-1' }]],
+        'select:inventoryItems': [[
+          { id: 'inv-1', name: 'Brand flour', rawMaterialName: 'flour' },
+          { id: 'inv-2', name: 'Raw flour', rawMaterialName: 'other' },
+        ]],
+        // Even if a stale read returns linked lines, fallback must skip them.
+        'select:recipeIngredients': [ingredients.map((line) => ({ ...line, inventoryItemId: 'inv-1' }))],
+      },
+      extractions: { recipe: { ...RECIPE, ingredients: ingredients.map(line => ({ ...line, baseUnit: null, baseUnitAmount: null })) } },
+    });
+    let searches = 0;
+    deps.searchProduct = async () => { searches++; return []; };
+    await processRecipe(deps, jobData, job);
+    const bill = db.onlyCallTo('insert', 'recipeIngredients').values as Array<Record<string, unknown>>;
+    assert.deepEqual(bill.map(line => line.inventoryItemId), ['inv-1', 'inv-1', 'inv-1']);
+    assert.deepEqual(bill.map(line => line.quantity), ['100.000', '2.000', '3.000']);
+    assert.deepEqual(bill.map(line => line.baseUnitAmount), ['100.000', '2000.000', '3.000']);
+    assert.deepEqual(bill.map(line => line.rawName), ingredients.map(line => line.rawName));
+    assert.equal(db.onlyCallTo('insert', 'recipeIngredients').inTransaction, true);
+    assert.equal(searches, 0);
+    assert.equal(db.callsTo('insert', 'inventoryItems').length, 0);
+    assert.equal(db.callsTo('update', 'inventoryItems').length, 0);
+    const recipeWrite = existing ? db.callsTo('update', 'recipes').at(-1)?.set : db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
+    assert.equal(recipeWrite?.status, 'unverified');
+  }
+});
