@@ -12,3 +12,4 @@ coverage/
 .idea/
 .local/db-backups/
 Temp/*
+/prices/

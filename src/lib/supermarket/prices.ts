@@ -1,4 +1,5 @@
-import { ReceiptExtraction } from '../gemini.js';
+import { createCatalogCache } from './catalog-cache.js';
+import type { ReceiptExtraction } from '../gemini.js';
 import {
   decodeHtmlEntities,
   extractHtmlBlocks,
@@ -42,12 +43,6 @@ const PRICE_ITEM_FIELDS = [
   "AllowDiscount",
   "ItemStatus"
 ] as const;
-
-const fileUrlCache = new Map<PriceChain, { url: string; expiresAt: number }>();
-
-function getCacheTtlMs(): number {
-  return 6 * 60 * 60 * 1000; // 6 hours
-}
 
 export function parseShufersalFileList(html: string): ShufersalFileEntry[] {
   const entries: ShufersalFileEntry[] = [];
@@ -175,11 +170,6 @@ export function parsePublishPriceFileList(html: string, baseUrl: string): string
 }
 
 async function getLatestShufersalFileUrl(): Promise<string> {
-  const cached = fileUrlCache.get('shufersal');
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url;
-  }
-
   const listingUrl =
     'https://prices.shufersal.co.il/FileObject/UpdateCategory?catID=2&storeId=0&sort=Time&sortdir=DESC';
   const html = await fetchText(listingUrl);
@@ -196,19 +186,10 @@ async function getLatestShufersalFileUrl(): Promise<string> {
     url = `https:${url}`;
   }
 
-  fileUrlCache.set('shufersal', {
-    url,
-    expiresAt: Date.now() + getCacheTtlMs(),
-  });
   return url;
 }
 
 async function getLatestCarrefourFileUrl(): Promise<string> {
-  const cached = fileUrlCache.get('carrefour');
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url;
-  }
-
   const baseUrl = 'https://prices.carrefour.co.il/';
   const html = await fetchText(baseUrl);
   const files = parsePublishPriceFileList(html, baseUrl);
@@ -221,10 +202,6 @@ async function getLatestCarrefourFileUrl(): Promise<string> {
 
   let url = candidate;
 
-  fileUrlCache.set('carrefour', {
-    url,
-    expiresAt: Date.now() + getCacheTtlMs(),
-  });
   return url;
 }
 
@@ -303,79 +280,37 @@ export function parseXmlItems(xml: string): Array<FoundItem> {
   return items;
 }
 
-export async function searchProduct(query: string, limitPerChain = 15): Promise<PriceResult[]> {
-  if (!query || query.trim().length === 0) return [];
+const catalogCache = createCatalogCache({
+  download: async (chain) => fetchXml(await (chain === 'shufersal'
+    ? getLatestShufersalFileUrl()
+    : getLatestCarrefourFileUrl())),
+  parse: parseXmlItems,
+});
 
-  const results: PriceResult[] = [];
-
-  const tasks: Array<Promise<void>> = [];
-
-  tasks.push(
-    (async () => {
+export function createProductSearch(getItems: (chain: PriceChain) => Promise<FoundItem[]>) {
+  return async function search(query: string, limitPerChain = 15): Promise<PriceResult[]> {
+    if (!query || query.trim().length === 0) return [];
+    const chains: PriceChain[] = ['shufersal', 'carrefour'];
+    const results = await Promise.all(chains.map(async (chain): Promise<PriceResult[]> => {
       try {
-        const url = await getLatestShufersalFileUrl();
-        const xml = await fetchXml(url);
-        const items = parseXmlItems(xml);
-        const scored = items
-          .map((item) => ({
-            item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query),
-          }))
-          .filter((s) => s.score > 0);
-        scored.sort((a, b) => b.score - a.score);
-        const top = scored.slice(0, limitPerChain);
-        for (const s of top) {
-          const price = parseFloat(s.item.ItemPrice);
-          if (Number.isFinite(price)) {
-            results.push({
-              chain: 'shufersal',
-              score: s.score,
-              ...s.item,
-            });
-          }
-        }
-      } catch (err) {
-        // ignore per-chain errors
+        const items = await getItems(chain);
+        return items
+          .map((item) => ({ item, score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query) }))
+          .filter(({ score }) => score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, limitPerChain)
+          .filter(({ item }) => Number.isFinite(parseFloat(item.ItemPrice)))
+          .map(({ item, score }) => ({ chain, score, ...item }));
+      } catch (error) {
+        console.error(`Supermarket search failed for ${chain}:`, error);
+        return [];
       }
-    })(),
-  );
-
-  tasks.push(
-    (async () => {
-      try {
-        const url = await getLatestCarrefourFileUrl();
-        const xml = await fetchXml(url);
-        const items = parseXmlItems(xml);
-        const scored = items
-          .map((item) => ({
-            item,
-            score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query),
-          }))
-          .filter((s) => s.score > 0);
-        scored.sort((a, b) => b.score - a.score);
-        const top = scored.slice(0, limitPerChain);
-        for (const s of top) {
-          const price = parseFloat(s.item.ItemPrice);
-          if (Number.isFinite(price)) {
-            results.push({
-              chain: 'carrefour',
-              score: s.score,
-              ...s.item,
-            });
-          }
-        }
-      } catch (err) {
-        // ignore per-chain errors
-      }
-    })(),
-  );
-
-  await Promise.allSettled(tasks);
-
-  results.sort((a, b) => b.score - a.score);
-
-  return results;
+    }));
+    return results.flat().sort((a, b) => b.score - a.score);
+  };
 }
+
+export const searchProduct = createProductSearch((chain) => catalogCache.get(chain));
 
 export const enrichReciptItems = async (extraction: ReceiptExtraction, search: typeof searchProduct = searchProduct) => {
   const receiptItemsWithEnrichment = await Promise.all(extraction.items.map(async (item) => {
