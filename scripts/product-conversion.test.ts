@@ -40,10 +40,14 @@ test('UnitOfMeasure and weighted flags never affect receipt-pipeline conversion'
 test('missing, unknown, invalid and unrepresentable product data remain unresolved', () => {
   for (const invalid of [
     { Quantity: '' }, { Quantity: '0' }, { Quantity: '-1' }, { Quantity: '1foo' },
-    { Quantity: '1e100' }, { Quantity: '0.00000001' }, { ItemPrice: '0' },
+    { Quantity: '1e100' }, { Quantity: '0.00000001' },
     { ItemPrice: '-10' }, { ItemPrice: 'NaN' }, { ItemPrice: 'Infinity' },
     { ItemPrice: '0.000000001' }, { ItemPrice: '100000000000000000' },
     { UnitQty: '' }, { UnitQty: 'bag' },
     { ItemName: '' }, { ItemCode: '' },
   ]) assert.equal(normalizeProductPrice({ ...product, ...invalid }, 'flour'), null, JSON.stringify(invalid));
+});
+
+test('a free supermarket product preserves a valid zero base price', () => {
+  assert.equal(normalizeProductPrice({ ...product, ItemPrice: '0' }, 'flour')?.baseUnitCost, '0.000000');
 });

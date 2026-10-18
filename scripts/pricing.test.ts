@@ -152,3 +152,23 @@ test('median and average handle empty and even-length input', () => {
   assert.equal(median([4, 1, 3, 2]), 2.5);
   assert.equal(average([1, 2, 3, 4]), 2.5);
 });
+test('converted amounts preserve precision and valid zero prices', () => {
+  for (const [quantity, price, expected] of [[200, 0.01, 2], [250, 0.004, 1], [3, 0.25, 0.75], [200, 0, 0], [123.456, 0.012345, 1.5241]]) {
+    const result = calculateUnitCost({ ingredients: [{ quantity, averageUnitCost: price }], prepTimeMinutes: 0, hourlyLaborCost: 0, yieldQuantity: 1 });
+    assert.equal(result.ingredientsCost, expected);
+    assert.equal(result.costComplete, true);
+  }
+  const result = calculateUnitCost({ ingredients: [{ quantity: 200, averageUnitCost: 0.01 }], prepTimeMinutes: 30, hourlyLaborCost: 20, yieldQuantity: 4 });
+  assert.equal(result.batchCost, 12);
+  assert.equal(result.unitCost, 3);
+});
+
+test('missing conversion or price remains unresolved while resolved subtotal is retained', () => {
+  for (const ingredient of [{ quantity: null, averageUnitCost: 0 }, { quantity: 200, averageUnitCost: null }, { quantity: 200, averageUnitCost: -1 }, { quantity: 'invalid', averageUnitCost: 1 }]) {
+    const result = calculateUnitCost({ ingredients: [{ quantity: 200, averageUnitCost: 0.01 }, ingredient], prepTimeMinutes: 0, hourlyLaborCost: 0, yieldQuantity: 1 });
+    assert.equal(result.costComplete, false);
+    assert.equal(result.unresolvedCount, 1);
+    assert.equal(result.ingredientsCost, 2);
+  }
+  assert.equal(calculateUnitCost({ ingredients: [], prepTimeMinutes: 0, hourlyLaborCost: 0, yieldQuantity: 1 }).costComplete, false);
+});

@@ -33,7 +33,7 @@ test('recipe verification saves corrections and verifies in one transaction', as
     const insert = h.db.onlyCallTo('insert', 'recipeIngredients');
     assert.equal(insert.inTransaction, true);
     assert.deepEqual(insert.values, [{
-      shopId: SHOP_ID, recipeId: ID, inventoryItemId: null,
+      shopId: SHOP_ID, recipeId: ID, inventoryItemId: null, generalPriceId: null,
       rawName: 'Flour', rawMaterialName: 'Flour', quantity: '2.000', rawSrcUnit: 'kg', baseUnit: null, baseUnitAmount: null,
     }]);
     assert.equal(h.db.calls.some((call) => call.table === 'receipts'), false);
@@ -129,5 +129,23 @@ test('receipt verification uses its own route and preserves corrected source uni
     assert.equal(db.onlyCallTo('update', 'receipts').set?.status, 'verified');
     assert.deepEqual(db.callsTo('update', 'inventoryItems'), []);
     assert.equal(db.calls.some((call) => call.table === 'recipes'), false);
+  } finally { await h.close(); }
+});
+
+test('recipe verification retains normalized supermarket ingredient corrections', async () => {
+  const h = await catalog({
+    'select:recipes': [[{ id: ID, status: 'unverified' }]],
+    'update:recipes': [[{ id: ID, status: 'verified' }]],
+  });
+  try {
+    const response = await h.app.inject({
+      method: 'POST', url: `/api/v1/recipes/${ID}/verify`,
+      payload: { ingredients: [{ ...INGREDIENT, generalPriceId: LINE_ID, rawMaterialName: 'flour', baseUnit: 'g', baseUnitAmount: 2000 }] },
+    });
+    assert.equal(response.statusCode, 200);
+    const saved = h.db.onlyCallTo('insert', 'recipeIngredients').values as Record<string, unknown>[];
+    assert.equal(saved[0]?.generalPriceId, LINE_ID);
+    assert.equal(saved[0]?.baseUnit, 'g');
+    assert.equal(saved[0]?.baseUnitAmount, '2000.000');
   } finally { await h.close(); }
 });

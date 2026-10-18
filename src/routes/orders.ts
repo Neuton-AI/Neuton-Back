@@ -114,6 +114,8 @@ async function priceOrderItems(
       yieldQuantity: recipe.yieldQuantity,
     });
 
+    if (!breakdown.costComplete) throw badRequest(`Recipe ${recipe.name} has incomplete ingredient costs`);
+
     const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
       breakdown.unitCost,
       shopMargin,

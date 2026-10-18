@@ -1,7 +1,9 @@
 import { round, toNumber } from './money.js';
 
 export interface RecipeIngredientInput {
+  /** Converted amount in the canonical base unit. */
   quantity: number | string | null | undefined;
+  /** Price per matching base unit, or null when conversion/linking is unresolved. */
   averageUnitCost: number | string | null | undefined;
 }
 
@@ -13,7 +15,9 @@ export interface UnitCostInput {
 }
 
 export interface UnitCostBreakdown {
-  /** Σ (ingredient quantity × weighted moving average unit cost) */
+  costComplete: boolean;
+  unresolvedCount: number;
+  /** Resolved ingredient subtotal; partial when costComplete is false. */
   ingredientsCost: number;
   /** (prep minutes ÷ 60) × hourly labor cost */
   laborCost: number;
@@ -37,19 +41,31 @@ export interface StockCheck {
   shortfall: number;
 }
 
-/**
- * Unit Cost = ( Σ(ingredient qty × average_unit_cost) + (prep_minutes ÷ 60 × hourly_labor_cost) ) ÷ yield_quantity
- */
+/** Missing converted amounts and prices stay unresolved; a valid zero price is allowed. */
+export function ingredientLineCost(ingredient: RecipeIngredientInput): number | null {
+  const { quantity, averageUnitCost } = ingredient;
+  if (quantity == null || averageUnitCost == null || quantity === '' || averageUnitCost === '') return null;
+  const amount = Number(quantity);
+  const price = Number(averageUnitCost);
+  if (!Number.isFinite(amount) || amount <= 0 || !Number.isFinite(price) || price < 0) return null;
+  const cost = amount * price;
+  return Number.isFinite(cost) ? cost : null;
+}
+
+/** Sum converted line costs, add batch labor, then divide by recipe yield. */
 export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
-  const ingredientsCost = input.ingredients.reduce(
-    (sum, ingredient) => sum + toNumber(ingredient.quantity) * toNumber(ingredient.averageUnitCost),
-    0,
-  );
+  const lineCosts = input.ingredients.map(ingredientLineCost);
+  const unresolvedCount = lineCosts.filter((cost) => cost === null).length;
+  const costComplete = input.ingredients.length > 0 && unresolvedCount === 0 &&
+    Number.isFinite(Number(input.yieldQuantity)) && Number(input.yieldQuantity) > 0;
+  const ingredientsCost = lineCosts.reduce<number>((sum, cost) => sum + (cost ?? 0), 0);
   const laborCost = (input.prepTimeMinutes / 60) * toNumber(input.hourlyLaborCost);
   const batchCost = ingredientsCost + laborCost;
   const yieldQuantity = Math.max(toNumber(input.yieldQuantity), 0.000001);
 
   return {
+    costComplete,
+    unresolvedCount,
     ingredientsCost: round(ingredientsCost, 4),
     laborCost: round(laborCost, 4),
     batchCost: round(batchCost, 4),

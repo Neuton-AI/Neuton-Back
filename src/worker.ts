@@ -543,12 +543,13 @@ export async function processOrderDocument(
     const breakdown = calculateUnitCost({
       ingredients: (byRecipe.get(row.recipe.id) ?? []).map((i) => ({
         quantity: i.quantity,
-        averageUnitCost: i.averageUnitCost ?? '0',
+        averageUnitCost: i.averageUnitCost,
       })),
       prepTimeMinutes: row.recipe.prepTimeMinutes,
       hourlyLaborCost: shop?.hourlyLaborCost ?? '0',
       yieldQuantity: row.recipe.yieldQuantity,
     });
+    if (!breakdown.costComplete) throw new Error(`Recipe ${row.recipe.name} has incomplete ingredient costs`);
     const { retailPrice } = calculateRetailPrice(
       breakdown.unitCost,
       shop?.targetProfitMargin ?? '0',

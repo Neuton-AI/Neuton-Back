@@ -774,7 +774,7 @@ test('order: a stated unit price overrides the derived retail price', async () =
       'select:orders': [[{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
-      'select:recipeIngredients': [[]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '200', averageUnitCost: '0.01' }]],
       'insert:orderItems': [[]],
     },
     data: { kind: 'order', orderId: 'order-1' },
@@ -795,7 +795,7 @@ test('order: an existing customer name is never overwritten by the model', async
       'select:orders': [[{ ...ORDER, customerName: 'Already Known', destinationAddress: 'Kept' }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
-      'select:recipeIngredients': [[]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '200', averageUnitCost: '0.01' }]],
       'insert:orderItems': [[]],
     },
     data: { kind: 'order', orderId: 'order-1' },
@@ -817,7 +817,7 @@ test('order: extracted text carrying HTML is never written (#116)', async () => 
       'select:orders': [[{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
-      'select:recipeIngredients': [[]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '200', averageUnitCost: '0.01' }]],
       'insert:orderItems': [[]],
     },
     data: { kind: 'order', orderId: 'order-1' },
@@ -846,7 +846,7 @@ test('order: a missing quantity is sold as one', async () => {
       'select:orders': [[{ ...ORDER }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
-      'select:recipeIngredients': [[]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '200', averageUnitCost: '0.01' }]],
       'insert:orderItems': [[]],
     },
     data: { kind: 'order', orderId: 'order-1' },
@@ -1113,4 +1113,21 @@ test('recipe: both save paths preserve repeated linked lines before verification
     const recipeWrite = existing ? db.callsTo('update', 'recipes').at(-1)?.set : db.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
     assert.equal(recipeWrite?.status, 'unverified');
   }
+});
+
+test('order: unresolved ingredient aborts before replacing historical snapshots', async () => {
+  const { db, deps, job, jobData } = harness({
+    responses: {
+      'select:orders': [[{ ...ORDER, totalCost: '42.00' }]],
+      'select:recipes': [[{ ...CATALOG_RECIPE }]],
+      'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
+      'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '200', averageUnitCost: null }]],
+    },
+    data: { kind: 'order', orderId: 'order-1' },
+    extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Focaccia', quantity: 1, unitPrice: 20 }] } },
+  });
+  await assert.rejects(() => processOrderDocument(deps, jobData, job), /incomplete ingredient costs/);
+  assert.equal(db.callsTo('delete', 'orderItems').length, 0);
+  assert.equal(db.callsTo('insert', 'orderItems').length, 0);
+  assert.equal(db.callsTo('update', 'orders').length, 0);
 });

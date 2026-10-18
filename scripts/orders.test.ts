@@ -497,3 +497,19 @@ test('POST /orders rejects a fractional quantity with 400 as well', async () => 
     await h.close();
   }
 });
+
+for (const endpoint of ['/api/v1/orders/quote', '/api/v1/orders']) {
+  test(`${endpoint} rejects unresolved costing even with an explicit selling price`, async () => {
+    const h = await harness('owner', {
+      'select:recipes': [[recipeRow]],
+      'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '200', averageUnitCost: null }]],
+    });
+    try {
+      const result = await h.post(endpoint, { items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 20 }] });
+      assert.equal(result.status, 400);
+      assert.match(result.body.error.message, /incomplete ingredient costs/);
+      assert.equal(h.db.callsTo('insert', 'orders').length, 0);
+      assert.equal(h.db.callsTo('insert', 'orderItems').length, 0);
+    } finally { await h.close(); }
+  });
+}
