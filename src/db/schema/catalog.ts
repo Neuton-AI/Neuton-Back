@@ -124,14 +124,9 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   baseUnitAmount: numeric('base_unit_amount', { precision: 24, scale: 3 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
-  recipeItemUnique: uniqueIndex('recipe_ingredients_recipe_id_inventory_item_id_unique').on(
-    t.recipeId,
-    t.inventoryItemId,
-  ),
-  recipeRawNameUnique: uniqueIndex('recipe_ingredients_recipe_id_raw_name_unique').on(
-    t.recipeId,
-    t.rawName,
-  ),
+  // A recipe can use the same material in several steps or different units.
+  // Preserve each line and quantity instead of merging incompatible units (#97).
+  recipeIdx: index('recipe_ingredients_recipe_id_idx').on(t.recipeId),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
   priceLinkCheck: check(
     'recipe_ingredients_price_link_check',

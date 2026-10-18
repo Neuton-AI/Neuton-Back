@@ -27,12 +27,12 @@ import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import {
   findOrCreateInventoryItem as findOrCreateInventoryItemOn,
-  type InventoryDb,
 } from './lib/inventory.js';
 import { env } from './env.js';
 import { loggerFactory, workerLogger } from './lib/logger/index.js';
 import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { linkRecipeFallbackPrices } from './lib/recipePriceFallback.js';
+import { resolveRecipeInventoryLinks } from './lib/recipeInventory.js';
 import { resolveUniqueRecipeName } from './lib/recipeName.js';
 import { enrichReciptItems, searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
@@ -332,29 +332,10 @@ export async function processRecipe(
     .limit(1);
   const shop = shopRows[0];
 
-  // Resolution must run on the same handle the rest of the write runs on: a job
-  // that fails its transaction rolls the recipe back, and any SKU created
-  // outside it would survive as a zero-cost orphan (N-28's rule — writes go
-  // through `tx`, never the shared client).
-  const resolveLinkedIngredientIds = async (handle: InventoryDb): Promise<Map<string, string>> => {
-    const linked = new Map<string, string>();
-    for (const ingredient of convertedRecipe.ingredients) {
-      const found = await findOrCreateInventoryItemOn(
-        handle,
-        data.shopId,
-        ingredient.rawMaterialName,
-        ingredient.rawSrcUnit,
-        'recipe',
-      );
-      if (found) linked.set(ingredient.rawMaterialName, found);
-    }
-    return linked;
-  };
-
   if (existingRecipe) {
     // Update existing row: replace extracted fields + ingredients + set unverified
     await deps.db.transaction(async (tx) => {
-      const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
+      const linkedIngredientIds = await resolveRecipeInventoryLinks(tx, data.shopId, convertedRecipe.ingredients);
       // Re-extraction may yield a name another recipe already holds, so suffix
       // the duplicate ("Recipe Name (2)") instead of violating the (shopId, name) index.
       const uniqueName = await resolveUniqueRecipeName(
@@ -382,8 +363,8 @@ export async function processRecipe(
       // Replace ingredients
       await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, existingRecipe.id));
 
-      const bill = convertedRecipe.ingredients.map((ingredient) => {
-        const inventoryItemId = linkedIngredientIds.get(ingredient.rawMaterialName) ?? null;
+      const bill = convertedRecipe.ingredients.map((ingredient, index) => {
+        const inventoryItemId = linkedIngredientIds[index] ?? null;
         return {
           shopId: data.shopId,
           recipeId: existingRecipe.id,
@@ -412,7 +393,7 @@ export async function processRecipe(
   } else {
     // Legacy fallback: no row exists, insert directly as 'unverified' with storagePath
     const inserted = await deps.db.transaction(async (tx) => {
-      const linkedIngredientIds = await resolveLinkedIngredientIds(tx);
+      const linkedIngredientIds = await resolveRecipeInventoryLinks(tx, data.shopId, convertedRecipe.ingredients);
       // The (shopId, name) unique index rejects a name already in the shop, so
       // suffix the duplicate ("Recipe Name (2)") instead of failing the job.
       const uniqueName = await resolveUniqueRecipeName(tx, data.shopId, safeName);
@@ -435,8 +416,8 @@ export async function processRecipe(
       const recipe = newRecipe[0];
       if (!recipe) throw new Error('recipe insert returned no row');
 
-      const bill = convertedRecipe.ingredients.map((ingredient) => {
-        const inventoryItemId = linkedIngredientIds.get(ingredient.rawName) ?? null;
+      const bill = convertedRecipe.ingredients.map((ingredient, index) => {
+        const inventoryItemId = linkedIngredientIds[index] ?? null;
         return {
           shopId: data.shopId,
           recipeId: recipe.id,
