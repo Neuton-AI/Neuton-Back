@@ -553,7 +553,8 @@ test('recipe: both extraction paths apply external fallback before committing th
     const queries: string[] = [];
     deps.searchProduct = async (query) => {
       queries.push(query);
-      return [priceResult({ ItemName: 'Flour', ItemPrice: '5', score: 9500 })];
+      assert.equal(db.transactionCount, 0, 'external searches precede the save transaction');
+      return [priceResult({ ItemName: 'Flour', ItemPrice: '5', score: 9500, UnitQty: 'kg', Quantity: '1' })];
     };
     await processRecipe(deps, jobData, job);
     assert.deepEqual(queries, ['flour']);
@@ -686,7 +687,7 @@ test('recipe: a job that fails its transaction leaves no orphan inventory rows',
 
 });
 
-test('recipe: retrying over an existing row clears a stale failure and resolves inventory in-transaction', async () => {
+test('recipe: retrying over an existing row clears a stale failure and resolves inventory before saving', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
       'select:recipes': [[{ id: 'rec-1' }]],

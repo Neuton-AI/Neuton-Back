@@ -33,8 +33,8 @@ The unique (raw_material_name, sku) index permits the same SKU for different
 material queries and provides a leading material lookup index. A separate SKU
 index supports SKU searches. Historical null SKUs are retained as distinct rows;
 the runtime writer skips products without a SKU. Material queries use the same
-normalizer for lookup and upsert. Until phase 4 supplies proven product
-conversions, fallback searches cache source metadata with null base fields.
+normalizer for lookup and upsert. Phase 4 only persists fallback products with proven base conversions; see the
+product conversion and unresolved-state rules below.
 
 Pricing reads inventory.baseUnitAverageCost for inventory links and
 general_prices.baseUnitCost for supermarket links. A positive recipe base amount
@@ -52,3 +52,32 @@ conversions; phase 5 (#153) completes review interactions. Until those phases ar
 released, newly extracted lines remain incomplete rather than appearing free.
 Do not deploy phases 2–5 against the old schema. Restore the backup to roll back
 this migration; do not amend previously applied migration files.
+
+## Supermarket fallback — phase 4 (#152)
+
+Inventory matching runs first, scoped to the shop. Only unmatched material names
+are searched, once per normalized material per extraction (including failures).
+The highest finite score wins without name-prefix or minimum-score filtering.
+Equal scores use code-point ordering of SKU, chain, product name, measurement
+fields and price. Validation happens after selection: an invalid
+winner leaves both links null rather than selecting a cheaper/lower-ranked item.
+
+The selected product runs through the same `setUnitsData` pipeline as a
+receipt item with a known SKU. It derives `srcUnit` and `baseUnit` from `UnitQty`,
+sets `srcUnitAmount` from `Quantity`, and converts that amount to
+`baseUnitAmount` using the shared receipt rules. `UnitOfMeasure` is untrusted:
+it is never read, parsed, used for tie-breaking or used for conversion.
+`bIsWeighted` does not introduce a separate conversion path.
+
+Values are stored at the existing 3-decimal amount / 6-decimal cost scales;
+`baseUnitCost` is `ItemPrice / baseUnitAmount`, matching receipt per-base-unit
+costing. `rawSrcUnit` preserves `UnitQty`; `rawMaterialName` is the normalized
+recipe material. Missing/unknown conversion data, invalid numbers, overflow and
+amounts/costs rounding to zero remain unresolved.
+
+Search preparation runs outside transactions. The recipe save transaction writes
+ingredients, upserts normalized prices on (raw_material_name, sku), and links them
+atomically. Repeated materials reuse one upsert ID. Existing links are skipped and
+conditional updates protect links acquired since preparation. Completed queue
+redeliveries retain their saved ingredients and prices. No schema migration is
+needed. A feed failure leaves unlinked ingredients available for later review.
