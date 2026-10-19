@@ -24,6 +24,7 @@ import { AppError } from '../../src/lib/errors.js';
 import type { ShopContext } from '../../src/plugins/auth.js';
 import { catalogRoutes } from '../../src/routes/catalog.js';
 import type { ReceiptsDeps } from '../../src/routes/receipts.js';
+import type { searchProduct } from '../../src/lib/supermarket/prices.js';
 
 export const SHOP_ID = '22222222-2222-2222-2222-222222222222';
 export const USER_ID = '33333333-3333-3333-3333-333333333333';
@@ -70,7 +71,7 @@ function errorHandler(error: FastifyError, _request: FastifyRequest, reply: Fast
     .send({ error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } });
 }
 
-export async function buildCatalogApp(role = 'owner'): Promise<CatalogHarness> {
+export async function buildCatalogApp(role = 'owner', search?: typeof searchProduct): Promise<CatalogHarness> {
   const app = Fastify({ logger: false });
   app.setErrorHandler(errorHandler);
 
@@ -97,7 +98,7 @@ export async function buildCatalogApp(role = 'owner'): Promise<CatalogHarness> {
     request.receiptsDeps = deps;
   });
 
-  await app.register(catalogRoutes, { prefix: '/api/v1' });
+  await app.register(catalogRoutes, { prefix: '/api/v1', searchProduct: search });
   await app.ready();
 
   return {
