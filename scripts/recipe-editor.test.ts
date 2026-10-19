@@ -66,7 +66,7 @@ async function harness(responses: Record<string, unknown[]> = {}, search: typeof
   return { ...app, db };
 }
 
-test('barcode pricing stores normalized product price without modifying recipe source fields', async () => {
+test('barcode pricing stores product identity and normalized price without changing the saved recipe', async () => {
   const h = await harness({
     'select:recipes': [[{ id: ID }]],
     'insert:generalPrices': [[{ id: PRICE_ID }]],
@@ -81,7 +81,7 @@ test('barcode pricing stores normalized product price without modifying recipe s
     });
     assert.equal(response.statusCode, 200, response.body);
     assert.deepEqual(response.json().price, {
-      id: PRICE_ID, rawName: product.ItemName, sku: BARCODE, rawMaterialName: 'milk',
+      id: PRICE_ID, rawName: product.ItemName, sku: BARCODE, rawMaterialName: 'original supermarket milk',
       rawSrcUnit: 'l', srcUnit: 'l', quantity: 1,
       baseUnit: 'ml', baseUnitAmount: '1000.000', baseUnitCost: '0.006000',
     });
@@ -90,13 +90,11 @@ test('barcode pricing stores normalized product price without modifying recipe s
   } finally { await h.close(); }
 });
 
-test('barcode pricing rejects missing exact matches, invalid products, and incompatible recipe units without writes', async () => {
+test('barcode pricing rejects missing exact matches and invalid products without writes', async () => {
   const cases = [
     { products: [{ ...product, ItemCode: `${BARCODE}9` }], unit: 'l', status: 404 },
     { products: [{ ...product, Quantity: '' }], unit: 'l', status: 400 },
     { products: [{ ...product, ItemPrice: '-1' }], unit: 'l', status: 400 },
-    { products: [product], unit: 'kg', status: 400 },
-    { products: [product], unit: 'pack', status: 400 },
   ];
   for (const entry of cases) {
     const h = await harness({ 'select:recipes': [[{ id: ID }]] }, async () => entry.products);
@@ -107,6 +105,35 @@ test('barcode pricing rejects missing exact matches, invalid products, and incom
       });
       assert.equal(response.statusCode, entry.status, response.body);
       assert.equal(h.db.callsTo('insert', 'generalPrices').length, 0);
+    } finally { await h.close(); }
+  }
+});
+
+test('scanned product normalization ignores the previous ingredient identity and incompatible or unresolved units', async () => {
+  for (const unit of ['kg', 'pack', 'unknown']) {
+    const h = await harness({
+      'select:recipes': [[{ id: ID }]],
+      'insert:generalPrices': [[{ id: PRICE_ID }]],
+    });
+    try {
+      const response = await h.app.inject({
+        method: 'POST', url: `/api/v1/recipes/${ID}/barcode-price`,
+        payload: { barcode: BARCODE, rawMaterialName: 'Unrelated flour', quantity: 2, rawSrcUnit: unit },
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      const price = response.json().price;
+      assert.equal(price.rawName, product.ItemName);
+      assert.equal(price.rawMaterialName, 'original supermarket milk');
+      assert.equal(price.baseUnit, 'ml');
+      assert.equal(price.baseUnitAmount, '1000.000');
+      assert.equal(price.baseUnitCost, '0.006000');
+      assert.equal(price.id, PRICE_ID);
+      assert.deepEqual(h.db.onlyCallTo('insert', 'generalPrices').values, {
+        rawName: price.rawName, rawMaterialName: price.rawMaterialName, sku: BARCODE,
+        rawSrcUnit: 'l', srcUnit: 'l', baseUnit: 'ml',
+        baseUnitAmount: '1000.000', baseUnitCost: '0.006000',
+      });
+      assert.deepEqual(h.db.callSequence(), ['select:recipes', 'insert:generalPrices']);
     } finally { await h.close(); }
   }
 });
@@ -218,7 +245,7 @@ test('scanned package pricing costs only the recipe amount and feeds recipe tota
     const price = scan.json().price;
     const save = await h.app.inject({
       method: 'PATCH', url: `/api/v1/recipes/${ID}`,
-      payload: { ingredients: [{ ...source, generalPriceId: price.id }] },
+      payload: { ingredients: [{ ...source, rawName: price.rawName, rawMaterialName: price.rawMaterialName, generalPriceId: price.id }] },
     });
     assert.equal(save.statusCode, 200, save.body);
     const [saved] = h.db.onlyCallTo('insert', 'recipeIngredients').values as Record<string, unknown>[];
@@ -229,7 +256,8 @@ test('scanned package pricing costs only the recipe amount and feeds recipe tota
     const recipe = { id: ID, prepTimeMinutes: 0, yieldQuantity: '1', targetMarginPct: null } as typeof recipes.$inferSelect;
     const costing = await costRecipe(SHOP_ID, recipe, '30', '0', h.db as unknown as Database);
     assert.equal(costing.costComplete, true);
-    assert.equal(costing.ingredients[0]?.rawName, source.rawName);
+    assert.equal(costing.ingredients[0]?.rawName, product.ItemName);
+    assert.equal(saved?.rawMaterialName, price.rawMaterialName);
     assert.equal(costing.ingredients[0]?.quantity, 250);
     assert.equal(costing.ingredients[0]?.rawSrcUnit, 'ml');
     assert.equal(costing.ingredients[0]?.lineCost, 1.5);
