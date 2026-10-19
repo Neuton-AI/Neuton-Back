@@ -23,6 +23,8 @@ import {
 } from '../lib/pricing.js';
 import { defaultReceiptsDeps } from './receipts.js';
 import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
+import { convertIngredientToBaseUnit } from '../lib/recipeConversion.js';
+import { linkIngredientByBarcode } from '../lib/recipePriceFallback.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
@@ -53,6 +55,44 @@ const recipeSchema = z.object({
 });
 
 const recipePatchSchema = recipeSchema.partial();
+
+export function mapIngredientValues(ingredient: z.infer<typeof recipeIngredientSchema>) {
+  const baseOmitted = ingredient.baseUnit === undefined && ingredient.baseUnitAmount === undefined;
+  if (baseOmitted) {
+    const converted = convertIngredientToBaseUnit({
+      rawName: ingredient.rawName,
+      rawMaterialName: ingredient.rawMaterialName ?? ingredient.rawName,
+      quantity: ingredient.quantity,
+      rawSrcUnit: ingredient.rawSrcUnit,
+      baseUnit: null,
+      baseUnitAmount: null,
+    });
+    const baseUnit = converted.baseUnit ?? null;
+    const baseUnitAmount = converted.baseUnitAmount === null || !Number.isFinite(converted.baseUnitAmount)
+      ? null
+      : Number(converted.baseUnitAmount).toFixed(3);
+    return {
+      inventoryItemId: ingredient.inventoryItemId ?? null,
+      generalPriceId: ingredient.generalPriceId ?? null,
+      rawName: ingredient.rawName,
+      rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+      quantity: qty(ingredient.quantity),
+      rawSrcUnit: ingredient.rawSrcUnit,
+      baseUnit,
+      baseUnitAmount,
+    };
+  }
+  return {
+    inventoryItemId: ingredient.inventoryItemId ?? null,
+    generalPriceId: ingredient.generalPriceId ?? null,
+    rawName: ingredient.rawName,
+    rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+    quantity: qty(ingredient.quantity),
+    rawSrcUnit: ingredient.rawSrcUnit,
+    baseUnit: ingredient.baseUnit ?? null,
+    baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
+  };
+}
 
 /**
  * The schema refusing to erase a recipe is an FK `23503`, and that refusal is
@@ -104,6 +144,7 @@ export async function costRecipe(
 ) {
   const ingredientRows = await database
     .select({
+      id: recipeIngredients.id,
       inventoryItemId: recipeIngredients.inventoryItemId,
       generalPriceId: recipeIngredients.generalPriceId,
       rawName: recipeIngredients.rawName,
@@ -181,6 +222,7 @@ export async function costRecipe(
     linkedCount,
     totalCount,
     ingredients: ingredientRows.map((ingredient, index) => ({
+      id: ingredient.id,
       name: ingredient.name ?? ingredient.rawName,
       quantity: toNumber(ingredient.quantity),
       rawSrcUnit: ingredient.rawSrcUnit,
@@ -339,6 +381,33 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     return { recipe: { ...recipe, costing } };
   });
 
+  app.post('/recipes/:id/ingredients/:ingredientId/link', mutationGuards, async (request) => {
+    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+    const shop = currentShop(request);
+    const { id, ingredientId } = z
+      .object({ id: z.string().uuid(), ingredientId: z.string().uuid() })
+      .parse(request.params);
+    const body = z.object({ barcode: z.string().trim().min(4).max(64) }).parse(request.body);
+
+    const recipeRows = await deps.db
+      .select()
+      .from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
+      .limit(1);
+    const recipe = recipeRows[0];
+    if (!recipe) throw notFound('Recipe not found');
+
+    await linkIngredientByBarcode(deps.db, {
+      shopId: shop.id,
+      recipeId: id,
+      ingredientId,
+      barcode: body.barcode,
+    });
+
+    const costing = await costRecipe(shop.id, recipe, shop.targetProfitMargin, shop.hourlyLaborCost, deps.db);
+    return { costing };
+  });
+
   app.patch('/recipes/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
@@ -382,14 +451,7 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
             body.ingredients.map((ingredient) => ({
               shopId: shop.id,
               recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId ?? null,
-              generalPriceId: ingredient.generalPriceId ?? null,
-              rawName: ingredient.rawName,
-              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-              quantity: qty(ingredient.quantity),
-              rawSrcUnit: ingredient.rawSrcUnit,
-              baseUnit: ingredient.baseUnit ?? null,
-              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
+              ...mapIngredientValues(ingredient),
             })),
           );
         }

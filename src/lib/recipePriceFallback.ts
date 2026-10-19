@@ -3,6 +3,7 @@ import type { Database } from '../db/client.js';
 import { generalPrices, recipeIngredients } from '../db/schema/index.js';
 import { searchProduct, type PriceResult } from './supermarket/prices.js';
 import { normalizeProductPrice } from './supermarket/productConversion.js';
+import { badRequest, conflict, notFound } from './errors.js';
 
 export function normalizePriceName(name: string): string {
   return name.trim().toLowerCase().replace(/[׳״'"’]/g, '').replace(/\s+/g, ' ');
@@ -84,4 +85,91 @@ export async function persistRecipeFallbackPrices(
       isNull(recipeIngredients.inventoryItemId), isNull(recipeIngredients.generalPriceId),
     ));
   }
+}
+
+export async function findProductByBarcode(
+  barcode: string,
+  search: typeof searchProduct = searchProduct,
+): Promise<PriceResult | null> {
+  const trimmed = barcode.trim();
+  if (!trimmed) return null;
+
+  const firstSearch = await search(trimmed);
+  const exactFirst = firstSearch.filter((product) => product.ItemCode === trimmed);
+  if (exactFirst.length > 0) {
+    return selectFallbackProduct(exactFirst);
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const withZero = '0' + trimmed;
+    const secondSearch = await search(withZero);
+    const exactSecond = secondSearch.filter((product) => product.ItemCode === withZero);
+    if (exactSecond.length > 0) {
+      return selectFallbackProduct(exactSecond);
+    }
+  }
+
+  return null;
+}
+
+export async function linkIngredientByBarcode(
+  database: Pick<Database, 'select' | 'insert' | 'update'>,
+  params: { shopId: string; recipeId: string; ingredientId: string; barcode: string },
+  search: typeof searchProduct = searchProduct,
+): Promise<{ generalPriceId: string }> {
+  const [ingredient] = await database
+    .select({
+      id: recipeIngredients.id,
+      inventoryItemId: recipeIngredients.inventoryItemId,
+      rawMaterialName: recipeIngredients.rawMaterialName,
+    })
+    .from(recipeIngredients)
+    .where(
+      and(
+        eq(recipeIngredients.id, params.ingredientId),
+        eq(recipeIngredients.recipeId, params.recipeId),
+        eq(recipeIngredients.shopId, params.shopId),
+      ),
+    )
+    .limit(1);
+
+  if (!ingredient) {
+    throw notFound('Ingredient not found');
+  }
+
+  if (ingredient.inventoryItemId !== null) {
+    throw conflict('Ingredient is linked to inventory');
+  }
+
+  const product = await findProductByBarcode(params.barcode, search);
+  if (!product) {
+    throw notFound('No product found for this barcode');
+  }
+
+  const materialName = normalizePriceName(ingredient.rawMaterialName);
+  const price = normalizeProductPrice(product, materialName);
+  if (!price) {
+    throw badRequest('Product price data could not be read');
+  }
+
+  const [saved] = await database
+    .insert(generalPrices)
+    .values(price)
+    .onConflictDoUpdate({ target: [generalPrices.rawMaterialName, generalPrices.sku], set: price })
+    .returning({ id: generalPrices.id });
+  if (!saved) throw new Error('general price upsert returned no row');
+
+  await database
+    .update(recipeIngredients)
+    .set({ generalPriceId: saved.id })
+    .where(
+      and(
+        eq(recipeIngredients.id, ingredient.id),
+        eq(recipeIngredients.recipeId, params.recipeId),
+        eq(recipeIngredients.shopId, params.shopId),
+        isNull(recipeIngredients.inventoryItemId),
+      ),
+    );
+
+  return { generalPriceId: saved.id };
 }

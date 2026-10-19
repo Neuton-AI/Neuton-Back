@@ -1,7 +1,7 @@
 import type { RecipeExtraction, RecipeIngredient } from './gemini.js';
 import { convertSrcAmountToBase, getBaseAndCurrentUnit } from './supermarket/conversion.js';
 
-function convertIngredient(ingredient: RecipeIngredient): RecipeIngredient {
+export function convertIngredientToBaseUnit(ingredient: RecipeIngredient): RecipeIngredient {
   const unresolved = { ...ingredient, baseUnit: null, baseUnitAmount: null };
   const { quantity, rawSrcUnit } = ingredient;
   if (quantity === null || !Number.isFinite(quantity) || quantity <= 0 || !rawSrcUnit?.trim()) {
@@ -29,5 +29,5 @@ function convertIngredient(ingredient: RecipeIngredient): RecipeIngredient {
 
 /** Uses receipt ratios; unresolved lines have both base fields null. Never uses package sizes. */
 export function convertRecipeToBaseUnits<T extends RecipeExtraction>(recipe: T): T {
-  return { ...recipe, ingredients: recipe.ingredients.map(convertIngredient) };
+  return { ...recipe, ingredients: recipe.ingredients.map(convertIngredientToBaseUnit) };
 }
