@@ -25,6 +25,7 @@ import { defaultReceiptsDeps } from './receipts.js';
 import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
+import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
 import { searchProduct } from '../lib/supermarket/prices.js';
 
 const recipeIngredientSchema = z.object({
@@ -417,6 +418,23 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     });
 
     return { recipe: updated };
+  });
+
+  /** Create shop-owned pricing without recording a purchase or changing the saved recipe. */
+  app.post('/recipes/:id/manual-product', mutationGuards, async (request, reply) => {
+    const shop = currentShop(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = manualProductSchema.parse(request.body);
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const existing = await database.select({ id: recipes.id }).from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id))).limit(1);
+    if (!existing[0]) throw notFound('Recipe not found');
+    const product = prepareManualProduct(body);
+    // A duplicate must never silently overwrite existing stock or its price history.
+    const [saved] = await database.insert(inventoryItems).values({ ...product, shopId: shop.id })
+      .onConflictDoNothing({ target: [inventoryItems.shopId, inventoryItems.name] }).returning();
+    if (!saved) throw conflict('A product with this name already exists in this shop. Use a different name.');
+    return reply.code(201).send({ product: saved });
   });
 
   /** Price a draft ingredient by exact barcode without changing the saved recipe. */

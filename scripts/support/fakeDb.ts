@@ -118,6 +118,10 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
     return this;
   }
 
+  onConflictDoNothing(): this {
+    return this;
+  }
+
   values(payload: unknown): this {
     this.payload = payload;
     return this;
