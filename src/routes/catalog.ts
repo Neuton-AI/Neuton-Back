@@ -23,6 +23,9 @@ import {
 } from '../lib/pricing.js';
 import { defaultReceiptsDeps } from './receipts.js';
 import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
+import { convertEditedIngredients } from '../lib/recipeEdits.js';
+import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
+import { searchProduct } from '../lib/supermarket/prices.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
@@ -104,6 +107,7 @@ export async function costRecipe(
 ) {
   const ingredientRows = await database
     .select({
+      id: recipeIngredients.id,
       inventoryItemId: recipeIngredients.inventoryItemId,
       generalPriceId: recipeIngredients.generalPriceId,
       rawName: recipeIngredients.rawName,
@@ -181,6 +185,7 @@ export async function costRecipe(
     linkedCount,
     totalCount,
     ingredients: ingredientRows.map((ingredient, index) => ({
+      id: ingredient.id,
       name: ingredient.name ?? ingredient.rawName,
       quantity: toNumber(ingredient.quantity),
       rawSrcUnit: ingredient.rawSrcUnit,
@@ -198,7 +203,7 @@ export async function costRecipe(
   };
 }
 
-export const catalogRoutes: FastifyPluginAsync = async (app) => {
+export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchProduct }> = async (app, options) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
   const mutationGuards = {
     preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
@@ -343,13 +348,8 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     const shop = currentShop(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = recipePatchSchema.parse(request.body);
-
-    const existing = await db
-      .select({ id: recipes.id })
-      .from(recipes)
-      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
-      .limit(1);
-    if (!existing[0]) throw notFound('Recipe not found');
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const ingredients = body.ingredients && convertEditedIngredients(body.ingredients);
 
     const patch: Partial<typeof recipes.$inferInsert> = { updatedAt: new Date() };
     if (body.name !== undefined) patch.name = body.name;
@@ -366,20 +366,31 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
     if (body.allergens !== undefined) patch.allergens = body.allergens;
     if (body.steps !== undefined) patch.steps = body.steps ?? [];
 
-    const updated = await db
-      .update(recipes)
-      .set(patch)
-      .where(eq(recipes.id, id))
-      .returning();
+    const updated = await database.transaction(async (tx) => {
+      const existing = await tx.select({ id: recipes.id }).from(recipes)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
+        .for('update').limit(1);
+      if (!existing[0]) throw notFound('Recipe not found');
 
-    if (body.ingredients !== undefined) {
-      await db.transaction(async (tx) => {
+      const inventoryIds = [...new Set(ingredients?.flatMap((ingredient) =>
+        ingredient.inventoryItemId ? [ingredient.inventoryItemId] : []) ?? [])];
+      if (inventoryIds.length) {
+        const owned = await tx.select({ id: inventoryItems.id }).from(inventoryItems)
+          .where(and(eq(inventoryItems.shopId, shop.id), inArray(inventoryItems.id, inventoryIds)));
+        if (owned.length !== inventoryIds.length) throw forbidden('Ingredient inventory must belong to this shop');
+      }
+
+      const rows = await tx.update(recipes).set(patch)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id))).returning();
+      if (!rows[0]) throw notFound('Recipe not found');
+
+      if (ingredients !== undefined) {
         await tx
           .delete(recipeIngredients)
-          .where(eq(recipeIngredients.recipeId, id));
-        if (body.ingredients?.length) {
+          .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shop.id)));
+        if (ingredients.length) {
           await tx.insert(recipeIngredients).values(
-            body.ingredients.map((ingredient) => ({
+            ingredients.map((ingredient) => ({
               shopId: shop.id,
               recipeId: id,
               inventoryItemId: ingredient.inventoryItemId ?? null,
@@ -393,8 +404,9 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
             })),
           );
         }
-      });
-    }
+      }
+      return rows[0];
+    });
 
     await recordAuditSafe(app, {
       shopId: shop.id,
@@ -404,7 +416,31 @@ export const catalogRoutes: FastifyPluginAsync = async (app) => {
       ipAddress: request.ip,
     });
 
-    return { recipe: updated[0] };
+    return { recipe: updated };
+  });
+
+  /** Price a draft ingredient by exact barcode without changing the saved recipe. */
+  app.post('/recipes/:id/barcode-price', mutationGuards, async (request) => {
+    const shop = currentShop(request);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      barcode: z.string().trim().regex(/^\d{4,64}$/),
+      rawMaterialName: htmlFree(z.string().trim().min(1).max(160)),
+      quantity: z.number().finite().positive().max(999999999.999),
+      rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
+    }).parse(request.body);
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const existing = await database.select({ id: recipes.id }).from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id))).limit(1);
+    if (!existing[0]) throw notFound('Recipe not found');
+
+    // Feed I/O stays outside database transactions, as in recipe extraction.
+    const { price, quantity } = await prepareBarcodePrice(body, options.searchProduct);
+    const [saved] = await database.insert(generalPrices).values(price)
+      .onConflictDoUpdate({ target: [generalPrices.rawMaterialName, generalPrices.sku], set: price })
+      .returning({ id: generalPrices.id });
+    if (!saved) throw new Error('general price upsert returned no row');
+    return { price: { ...price, id: saved.id, quantity } };
   });
 
   /**
