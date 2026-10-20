@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
-import { orderItems, orders, orderItemRecipeName, recipes, shops } from '../db/schema/index.js';
+import { orderItems, orders, orderItemRecipeName, recipes, shops, mediaUploads } from '../db/schema/index.js';
 import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
@@ -217,10 +217,15 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       .where(eq(orderItems.orderId, id))
       .orderBy(asc(orderItems.id));
 
+    const uploads = await deps.db.select({ sources: mediaUploads.sources }).from(mediaUploads)
+      .where(and(eq(mediaUploads.orderId, id), eq(mediaUploads.shopId, shop.id)))
+      .orderBy(asc(mediaUploads.createdAt));
+
     return {
       order: {
         ...order,
         items,
+        sources: uploads.flatMap((upload) => upload.sources),
         netProfit:
           toNumber(order.totalAmount) -
           toNumber(order.deliveryFee) -
@@ -423,6 +428,8 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
    * does it, so "is it already void?" and the write are one decision; the write
    * is idempotent (a double tap answers the same way) and a missing or
    * cross-shop id reads as 404, like every other order write.
+   * Source attachments remain associated with this historical void for review;
+   * cancellation does not delete the document or its issued order record.
    */
   app.delete('/orders/:id', mutationGuards, async (request) => {
     const deps = request.ordersDeps ?? defaultOrdersDeps;

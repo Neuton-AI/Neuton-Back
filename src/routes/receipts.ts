@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
-import { receipts, receiptItems, recipes } from '../db/schema/index.js';
+import { receipts, receiptItems, recipes, mediaUploads } from '../db/schema/index.js';
+import { completeDocument, presignDocument, mediaUploadServices, MAX_SOURCE_BYTES, type MediaUploadDeps } from '../lib/mediaUploads.js';
 import { RECEIPT_STATUSES, RECIPE_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
@@ -67,6 +68,7 @@ export interface ReceiptsDeps {
   db: Database;
   /** Removes the uploaded object when its row goes; a no-op seam in tests. */
   deleteObject: (key: string) => Promise<void>;
+  uploads?: Omit<MediaUploadDeps, 'db'>;
 }
 
 declare module 'fastify' {
@@ -95,11 +97,18 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   app.post('/uploads/presign', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
+    if (request.body && typeof request.body === 'object' && ('sources' in request.body || 'uploadId' in request.body)) {
+      const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+      const result = await presignDocument({ db: deps.db, ...(deps.uploads ?? mediaUploadServices) }, {
+        body: request.body, shopId: shop.id, userId: user.id, currency: shop.currency,
+      });
+      return reply.code(201).send(result);
+    }
     const body = presignSchema.parse(request.body);
 
     const contentType = assertContentType(body.contentType);
-    if (body.byteSize && body.byteSize > env.MAX_UPLOAD_BYTES) {
-      throw tooLarge(`Uploads are limited to ${env.MAX_UPLOAD_BYTES} bytes`);
+    if (body.byteSize && body.byteSize > Math.min(MAX_SOURCE_BYTES, env.MAX_UPLOAD_BYTES)) {
+      throw tooLarge('Each file must be 10 MB or smaller');
     }
 
     const storagePath = buildStoragePath({
@@ -144,6 +153,13 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
   app.post('/uploads/complete', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
     const user = currentUser(request);
+    if (request.body && typeof request.body === 'object' && 'uploadId' in request.body) {
+      const deps = request.receiptsDeps ?? defaultReceiptsDeps;
+      const result = await completeDocument({ db: deps.db, ...(deps.uploads ?? mediaUploadServices) }, {
+        body: request.body, shopId: shop.id, traceId: request.traceId,
+      });
+      return reply.code(202).send(result);
+    }
     const body = z
       .object({
         storagePath: z.string().trim().min(1).max(400),
@@ -330,7 +346,9 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
     // `verifiedBy`/`verifiedAt` ride along on the `select()` above, so the
     // review screen reads them from here without a second request.
-    return { receipt: { ...receipt, items } };
+    const [upload] = await db.select({ sources: mediaUploads.sources }).from(mediaUploads)
+      .where(and(eq(mediaUploads.receiptId, id), eq(mediaUploads.shopId, shop.id))).limit(1);
+    return { receipt: { ...receipt, items, sources: upload?.sources ?? [] } };
   });
 
   /**
@@ -352,7 +370,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const user = currentUser(request);
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
-    const storagePath = await deps.db.transaction(async (tx) => {
+    const storagePaths = await deps.db.transaction(async (tx) => {
       // Lock the row so "is it deletable?" and the delete are one decision —
       // a verification landing in between would otherwise erase a receipt that
       // has just moved stock.
@@ -370,17 +388,21 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
         );
       }
 
+      const uploads = await tx.select({ sources: mediaUploads.sources }).from(mediaUploads)
+        .where(and(eq(mediaUploads.receiptId, id), eq(mediaUploads.shopId, shop.id)));
+
       await tx
         .delete(receipts)
         .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)));
-      return receipt.storagePath;
+      return [...new Set([receipt.storagePath, ...uploads.flatMap((upload) => upload.sources.map((source) => source.storagePath))])]
+        .filter((path): path is string => Boolean(path));
     });
 
     // Row first, object second: a failed object delete then leaks a file, while
     // the other order would leave a row pointing at nothing. Never fails the
     // request either — the receipt is already gone, so a 500 would only turn a
     // successful delete into a doomed retry.
-    if (storagePath) {
+    for (const storagePath of storagePaths) {
       try {
         await deps.deleteObject(storagePath);
       } catch (error) {
@@ -454,7 +476,11 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
       .from(receipts)
       .where(and(eq(receipts.shopId, shop.id), eq(receipts.storagePath, path)))
       .limit(1);
-    if (!rows[0]) throw notFound('File not found');
+    if (!rows[0]) {
+      const uploads = await db.select({ id: mediaUploads.id }).from(mediaUploads)
+        .where(and(eq(mediaUploads.shopId, shop.id), sql`${mediaUploads.sources} @> ${JSON.stringify([{ storagePath: path }])}::jsonb`)).limit(1);
+      if (!uploads[0]) throw notFound('File not found');
+    }
 
     return {
       url: await createPresignedDownloadUrl(path),

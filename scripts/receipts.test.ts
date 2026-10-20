@@ -72,7 +72,7 @@ test('DELETE /receipts/:id hard-removes every status that has not been verified'
       assert.equal(body.ok, true);
       assert.deepEqual(
         h.db.callSequence(),
-        ['select:receipts', 'delete:receipts'],
+        ['select:receipts', 'select:mediaUploads', 'delete:receipts'],
         `${status}: one locked read, one delete, nothing else`,
       );
       assert.deepEqual(
