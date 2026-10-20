@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db, sql as sqlClient, type Database } from './db/client.js';
 import {
   inventoryItems,
@@ -12,6 +12,7 @@ import {
   recipes,
   recipeIngredients,
   shops,
+  mediaUploads,
 } from './db/schema/index.js';
 import {
   createRedisConnection,
@@ -38,6 +39,8 @@ import { enrichReciptItems, searchProduct } from './lib/supermarket/prices.js';
 import { recipeIngredientUnitCost } from './lib/recipeCostQuery.js';
 import { RECEIPT_PROGRESS_STAGES, type ReceiptProgressStage } from './db/schema/receipts.js';
 import { setSrcUnitAmount, setUnitsData } from './lib/supermarket/conversion.js';
+import { validateSourceLimits } from './lib/mediaUploads.js';
+import type { DocumentInput } from './lib/gemini.js';
 
 /**
  * Correlation context shared by a job's logger and its Gemini extraction
@@ -79,6 +82,20 @@ export const defaultWorkerDeps: WorkerDeps = {
 
 function toBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64');
+}
+
+/** Download all parts before extraction; a missing later part never yields a partial document. */
+export async function loadDocumentInput(deps: WorkerDeps, data: MediaJobData): Promise<DocumentInput> {
+  const sources = data.sources ?? [{ storagePath: data.storagePath, contentType: data.contentType }];
+  const documents = [];
+  for (const source of sources) {
+    if (!source.storagePath || !source.storagePath.startsWith(`${data.shopId}/`)) throw new Error('Invalid document source');
+    const bytes = await deps.getObjectBytes(source.storagePath);
+    if ('byteSize' in source && bytes.byteLength !== source.byteSize) throw new Error('Document source size changed after submission');
+    documents.push({ mimeType: source.contentType, data: toBase64(bytes) });
+  }
+  if (!documents[0]) throw new Error('Document has no sources');
+  return { ...documents[0], ...(data.sources ? { sources: documents } : {}) };
 }
 
 /**
@@ -147,17 +164,14 @@ export async function processReceipt(
     })
     .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
 
-  const bytes = await deps.getObjectBytes(storagePath);
+  const document = await loadDocumentInput(deps, data);
   checkDeadline(deadline);
 
   await updateReceiptProgress(deps, data.shopId, storagePath, 'extracting', 'Extracting receipt data with AI');
   await job.updateProgress(10);
 
   const extraction = await deps.extractReceipt(
-    {
-      mimeType: data.contentType,
-      data: toBase64(bytes),
-    },
+    document,
     jobLogContext(data, job),
   );
   checkDeadline(deadline);
@@ -296,12 +310,9 @@ export async function processRecipe(
       .where(eq(recipes.id, existingRecipe.id));
   }
 
-  const bytes = await deps.getObjectBytes(storagePath);
+  const document = await loadDocumentInput(deps, data);
   const extraction = await deps.extractRecipe(
-    {
-      mimeType: data.contentType,
-      data: toBase64(bytes),
-    },
+    document,
     jobLogContext(data, job),
   );
 
@@ -465,12 +476,9 @@ export async function processOrderDocument(
     throw new Error('Cannot process order document without storagePath');
   }
   const jobLogger = workerLogger.child(jobLogContext(data, job));
-  const bytes = await deps.getObjectBytes(storagePath);
+  const document = await loadDocumentInput(deps, data);
   const extraction = await deps.extractOrder(
-    {
-      mimeType: data.contentType,
-      data: toBase64(bytes),
-    },
+    document,
     jobLogContext(data, job),
   );
 
@@ -623,6 +631,11 @@ export async function recordTerminalFailure(
   const message = publicFailureMessage(error);
   const isTimeout = error instanceof Error && error.message.includes('deadline exceeded');
   try {
+    if (data.uploadId) {
+      const [upload] = await deps.db.select({ processedAt: mediaUploads.processedAt }).from(mediaUploads)
+        .where(and(eq(mediaUploads.id, data.uploadId), eq(mediaUploads.shopId, data.shopId))).limit(1);
+      if (!upload || upload.processedAt) return;
+    }
     if (data.kind === 'receipt') {
       await deps.db
         .update(receipts)
@@ -633,7 +646,8 @@ export async function recordTerminalFailure(
           errorMessage: message.slice(0, 1000),
           updatedAt: new Date(),
         })
-        .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath)));
+        .where(and(eq(receipts.shopId, data.shopId), eq(receipts.storagePath, storagePath),
+          inArray(receipts.status, ['pending', 'processing', 'failed'])));
     } else if (data.kind === 'recipe' || data.kind === 'product') {
       await deps.db
         .update(recipes)
@@ -642,7 +656,8 @@ export async function recordTerminalFailure(
           errorMessage: message.slice(0, 1000),
           updatedAt: new Date(),
         })
-        .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath)));
+        .where(and(eq(recipes.shopId, data.shopId), eq(recipes.storagePath, storagePath),
+          inArray(recipes.status, ['pending', 'processing', 'failed'])));
     }
   } catch (updateError) {
     workerLogger
@@ -681,19 +696,42 @@ export async function runJob(
 
   try {
     checkDeadline();
-    switch (data.kind) {
+    const process = async (currentDeps: WorkerDeps, currentData: MediaJobData) => {
+      switch (currentData.kind) {
       case 'receipt':
-        await processReceipt(deps, data, job);
+        await processReceipt(currentDeps, currentData, job);
         break;
       case 'recipe':
       case 'product':
-        await processRecipe(deps, data, job);
+        await processRecipe(currentDeps, currentData, job);
         break;
       case 'order':
-        await processOrderDocument(deps, data, job);
+        await processOrderDocument(currentDeps, currentData, job);
         break;
       default:
-        throw new Error(`Unsupported job kind: ${String(data.kind)}`);
+        throw new Error(`Unsupported job kind: ${String(currentData.kind)}`);
+      }
+    };
+    if (data.uploadId) {
+      // This durable lock also covers a stalled BullMQ job delivered to two workers.
+      // Business writes and processedAt commit together, so a crash cannot replay effects.
+      await deps.db.transaction(async (tx) => {
+        const [upload] = await tx.select().from(mediaUploads)
+          .where(and(eq(mediaUploads.id, data.uploadId!), eq(mediaUploads.shopId, data.shopId))).limit(1).for('update');
+        if (!upload || upload.processedAt) return;
+        if (!upload.queuedAt) throw new Error('Document has not completed uploading');
+        validateSourceLimits(upload.sources);
+        const first = upload.sources[0]!;
+        await process({ ...deps, db: tx as unknown as Database }, {
+          ...data, kind: upload.kind, sources: upload.sources,
+          storagePath: first.storagePath, contentType: first.contentType,
+          originalFilename: first.originalFilename,
+          orderId: upload.orderId ?? undefined,
+        });
+        await tx.update(mediaUploads).set({ processedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
+      });
+    } else {
+      await process(deps, data);
     }
     // Record success for circuit breaker
     geminiCircuitBreaker.recordSuccess();

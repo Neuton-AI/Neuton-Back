@@ -8,6 +8,7 @@ import {
   generalPrices,
   recipeIngredients,
   recipes,
+  mediaUploads,
 } from '../db/schema/index.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
@@ -342,7 +343,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
       shop.targetProfitMargin,
       shop.hourlyLaborCost,
     );
-    return { recipe: { ...recipe, costing } };
+    const [upload] = await db.select({ sources: mediaUploads.sources }).from(mediaUploads)
+      .where(and(eq(mediaUploads.recipeId, id), eq(mediaUploads.shopId, shop.id))).limit(1);
+    return { recipe: { ...recipe, costing, sources: upload?.sources ?? [] } };
   });
 
   app.patch('/recipes/:id', mutationGuards, async (request) => {
@@ -488,6 +491,10 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     const recipe = rows[0];
     if (!recipe) throw notFound('Recipe not found');
 
+    const uploads = await deps.db.select({ sources: mediaUploads.sources }).from(mediaUploads)
+      .where(and(eq(mediaUploads.recipeId, id), eq(mediaUploads.shopId, shop.id)));
+    const storagePaths = [...new Set([recipe.storagePath, ...uploads.flatMap((upload) => upload.sources.map((source) => source.storagePath))])]
+      .filter((path): path is string => Boolean(path));
     let mode: 'hard' | 'soft';
     try {
       await deps.db.transaction(async (tx) => {
@@ -503,6 +510,7 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
         .update(recipes)
         .set({ isActive: false, storagePath: null, imageUrl: null, updatedAt: new Date() })
         .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)));
+      await deps.db.delete(mediaUploads).where(and(eq(mediaUploads.recipeId, id), eq(mediaUploads.shopId, shop.id)));
     }
 
     // Row state first, object second, in both modes: a failed object delete
@@ -510,9 +518,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     // an object that is already gone. It never fails the request — the recipe
     // is deactivated or deleted either way, and a 500 would only turn that
     // success into a doomed retry.
-    if (recipe.storagePath) {
+    for (const storagePath of storagePaths) {
       try {
-        await deps.deleteObject(recipe.storagePath);
+        await deps.deleteObject(storagePath);
       } catch (error) {
         request.log.error({ err: error, recipeId: id }, 'recipe object cleanup failed');
       }

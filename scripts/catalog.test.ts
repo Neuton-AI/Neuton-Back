@@ -79,7 +79,7 @@ test('DELETE /recipes/:id hard-deletes an unordered recipe, its object, and its 
     assert.equal(body.mode, 'hard');
     assert.deepEqual(
       h.db.callSequence(),
-      ['select:recipes', 'delete:recipes'],
+      ['select:recipes', 'select:mediaUploads', 'delete:recipes'],
       'the row is read, then removed — no update kept it alive',
     );
     assert.deepEqual(h.deleted, [STORAGE_PATH], 'the uploaded document goes with the row');
@@ -111,7 +111,7 @@ test('DELETE /recipes/:id deactivates a recipe order lines still reference', asy
 
     assert.equal(response.statusCode, 200, 'the refusal degrades the delete, it does not fail it');
     assert.equal(body.mode, 'soft');
-    assert.deepEqual(db.callSequence(), ['select:recipes', 'delete:recipes', 'update:recipes']);
+    assert.deepEqual(db.callSequence(), ['select:recipes', 'select:mediaUploads', 'delete:recipes', 'update:recipes', 'delete:mediaUploads']);
 
     const update = db.onlyCallTo('update', 'recipes');
     assert.equal(update.set?.isActive, false);

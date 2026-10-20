@@ -17,7 +17,7 @@ await sql.begin(async (tx) => {
     where relnamespace = 'public'::regnamespace
       and relname in ('shops','profiles','shop_members','inventory_items','recipes',
                       'categories','receipts','receipt_items','orders','order_items',
-                      'recipe_ingredients','audit_logs')
+                      'recipe_ingredients','audit_logs','media_uploads')
       and not relrowsecurity
   `;
   if (rls.length > 0) {
@@ -28,7 +28,7 @@ await sql.begin(async (tx) => {
     select count(*)::int as count from pg_policies
     where schemaname = 'public'
   `;
-  console.log(`RLS enabled on 12 tables, ${policyCount[0]?.count} policies present`);
+  console.log(`RLS enabled on 13 tables, ${policyCount[0]?.count} policies present`);
 
   const ownerId = '11111111-1111-1111-1111-111111111111';
   const memberId = '22222222-2222-2222-2222-222222222222';
@@ -70,6 +70,11 @@ await sql.begin(async (tx) => {
     insert into public.inventory_items (shop_id, name, raw_material_name, unit, base_unit, base_unit_amount, base_unit_cost) values
       (${shopA}, 'Flour A', 'Flour', 'kg', 'kg', 1, 0),
       (${shopB}, 'Flour B', 'Flour', 'kg', 'kg', 1, 0)
+  `;
+  await tx`
+    insert into public.media_uploads (shop_id, kind, sources) values
+      (${shopA}, 'receipt', '[{"sourceId":"a","storagePath":"a/receipt.jpg","contentType":"image/jpeg","byteSize":1}]'),
+      (${shopB}, 'receipt', '[{"sourceId":"b","storagePath":"b/receipt.jpg","contentType":"image/jpeg","byteSize":1}]')
   `;
 
   /**
@@ -127,6 +132,15 @@ await sql.begin(async (tx) => {
   );
 
   console.log('\ncross-tenant write:');
+  check('member cannot see another shop upload sources',
+    (await asUser(memberId, (t) => t<{ n: number }[]>`select count(*)::int n from public.media_uploads`))[0]!.n, 1);
+  check('outsider cannot see upload sources',
+    (await asUser(outsiderId, (t) => t<{ n: number }[]>`select count(*)::int n from public.media_uploads`))[0]!.n, 0);
+  let sourcesImmutable = false;
+  try {
+    await asUser(ownerId, (t) => t`update public.media_uploads set sources = '[]' where shop_id = ${shopA}`);
+  } catch { sourcesImmutable = true; }
+  check('authenticated owners cannot mutate immutable upload associations directly', sourcesImmutable ? 1 : 0, 1);
   // A WITH CHECK violation raises rather than filtering, so the pass condition
   // is that Postgres rejects the row.
   let writeBlocked = false;

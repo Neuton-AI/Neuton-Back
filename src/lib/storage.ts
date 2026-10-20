@@ -2,6 +2,7 @@ import {
   S3Client,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -94,6 +95,12 @@ export async function getObjectBytes(key: string): Promise<Uint8Array> {
     throw new Error(`R2 object ${key} exceeds MAX_UPLOAD_BYTES`);
   }
   return bytes;
+}
+
+/** Completion checks actual storage metadata rather than trusting client declarations. */
+export async function getObjectMetadata(key: string) {
+  const result = await r2.send(new HeadObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
+  return { byteSize: result.ContentLength ?? 0, contentType: result.ContentType ?? '' };
 }
 
 export function publicAssetUrl(key: string | null | undefined): string | null {

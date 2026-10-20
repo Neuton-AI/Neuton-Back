@@ -325,7 +325,7 @@ export async function walkModels<T>(
  * Calls one model with the shared structured-extraction contract, or throws:
  * an unusable answer is just another reason to advance to the next model.
  */
-async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContext): Promise<T> {
+async function runStructured<T>(kind: MediaKind, parts: Part[], context?: LogContext): Promise<T> {
   const { instruction, schema } = PROMPTS[kind];
 
   return walkModels(
@@ -334,7 +334,7 @@ async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContex
       // const abortSignal = createGeminiAbortSignal();
       const response = await client.models.generateContent({
         model,
-        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+        contents: [{ role: 'user', parts: [...parts, { text: instruction }] }],
         config: {
           responseMimeType: 'application/json',
           responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
@@ -351,15 +351,33 @@ async function runStructured<T>(kind: MediaKind, part: Part, context?: LogContex
   );
 }
 
+export interface DocumentInput {
+  mimeType: string;
+  data: string;
+  /** When present, includes every source (including the first) in document order. */
+  sources?: { mimeType: string; data: string }[];
+}
+
+export const MULTI_SOURCE_INSTRUCTION = 'These ordered sources form ONE document. Read every source in the given order, preserving the internal page order of each PDF. Include content from later sources in the single combined result. Adjacent photos may overlap: remove only the same physical line visible again in the overlapping region. Preserve legitimate repeated items, ingredient lines and steps at distinct document positions; never deduplicate by name, SKU or matching amounts alone.';
+
+export function documentParts(input: DocumentInput): Part[] {
+  const sources = input.sources ?? [{ mimeType: input.mimeType, data: input.data }];
+  if (sources.length === 1) return [{ inlineData: sources[0] }];
+  return [
+    { text: MULTI_SOURCE_INSTRUCTION },
+    ...sources.flatMap((source, index) => [
+      { text: `Document source ${index + 1} of ${sources.length}` }, { inlineData: source },
+    ]),
+  ];
+}
+
 export async function extractReceipt(
-  inlineData: { mimeType: string; data: string },
+  inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<ReceiptExtraction | null> {
   const raw = await runStructured<ReceiptExtraction>(
     'receipt',
-    {
-      inlineData,
-    },
+    documentParts(inlineData),
     context,
   );
 
@@ -400,10 +418,10 @@ export function parseRecipeSteps(value: unknown): RecipeExtraction['steps'] {
 }
 
 export async function extractRecipe(
-  inlineData: { mimeType: string; data: string },
+  inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<RecipeExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('recipe', { inlineData }, context);
+  const raw = await runStructured<Record<string, unknown>>('recipe', documentParts(inlineData), context);
 
   return parseRecipeExtraction(raw);
 }
@@ -438,10 +456,10 @@ export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtra
 }
 
 export async function extractOrder(
-  inlineData: { mimeType: string; data: string },
+  inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<OrderExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('order', { inlineData }, context);
+  const raw = await runStructured<Record<string, unknown>>('order', documentParts(inlineData), context);
 
   const items = Array.isArray(raw.items) ? raw.items : [];
   return {
