@@ -135,7 +135,8 @@ test('long recipe filenames preserve their unique upload suffix', async () => {
     body: { clientRequestId: UPLOAD, kind: 'recipe', sources: [{ ...sources[0]!, originalFilename: 'a'.repeat(250) }] },
     shopId: SHOP, userId: USER, currency: 'USD',
   });
-  const inserted = h.db.onlyCallTo('insert', 'recipes').values as { name: string };
+  const inserted = h.db.onlyCallTo('insert', 'recipes').values as { name: string; id: string };
+  assert.equal(inserted.id, UPLOAD);
   assert.match(inserted.name, new RegExp(`\\(${UPLOAD}\\)$`));
   assert.ok(inserted.name.length <= 200);
 });
