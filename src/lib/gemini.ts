@@ -5,7 +5,7 @@ import type { LogContext } from './logger/types.js';
 import { isPermanentError, isUnknownModelError } from './jobErrors.js';
 import { stripHtml } from './safeText.js';
 import type { MediaKind } from './queue.js';
-import { BaseUnits } from './supermarket/conversion.js';
+import type { BaseUnits } from './supermarket/conversion.js';
 
 /**
  * Creates an AbortController that fires after the configured Gemini request timeout.
@@ -242,12 +242,29 @@ function asString(value: unknown): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function parseJson<T>(text: string): T {
+function parseJson(text: string): unknown {
   const cleaned = text
     .replace(/^```(?:json)?/i, '')
     .replace(/```$/i, '')
     .trim();
-  return JSON.parse(cleaned) as T;
+  return JSON.parse(cleaned);
+}
+
+function extractionObject(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Expected an extraction object');
+  }
+  return value as Record<string, unknown>;
+}
+
+function extractionItems(value: unknown, optional = false): Record<string, unknown>[] {
+  if (optional && value == null) return [];
+  if (!Array.isArray(value)) throw new Error('Expected an extraction array');
+  return value.map(extractionObject);
+}
+
+function asBaseUnit(value: unknown): BaseUnits | null {
+  return value === 'g' || value === 'ml' || value === 'each' ? value : null;
 }
 
 /**
@@ -325,7 +342,12 @@ export async function walkModels<T>(
  * Calls one model with the shared structured-extraction contract, or throws:
  * an unusable answer is just another reason to advance to the next model.
  */
-async function runStructured<T>(kind: MediaKind, parts: Part[], context?: LogContext): Promise<T> {
+async function runStructured<T>(
+  kind: MediaKind,
+  parts: Part[],
+  normalize: (value: unknown) => T,
+  context?: LogContext,
+): Promise<T> {
   const { instruction, schema } = PROMPTS[kind];
 
   return walkModels(
@@ -345,7 +367,13 @@ async function runStructured<T>(kind: MediaKind, parts: Part[], context?: LogCon
 
       const text = response.text;
       if (!text) throw new UnusableResponseError(model, 'returned no text');
-      return parseJson<T>(text);
+      try {
+        return normalize(parseJson(text));
+      } catch {
+        // A successful HTTP response is not a successful extraction until its
+        // structure and normalized values have crossed our local boundary.
+        throw new UnusableResponseError(model, 'returned invalid extraction JSON');
+      }
     },
     context,
   );
@@ -375,33 +403,41 @@ export async function extractReceipt(
   inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<ReceiptExtraction | null> {
-  const raw = await runStructured<ReceiptExtraction>(
+  return runStructured(
     'receipt',
     documentParts(inlineData),
+    parseReceiptExtraction,
     context,
   );
+}
 
+function parseReceiptExtraction(value: unknown): ReceiptExtraction {
+  const raw = extractionObject(value);
   return {
     merchantName: asString(raw.merchantName),
     receiptDate: asString(raw.receiptDate),
     totalAmount: asNumber(raw.totalAmount),
     taxAmount: asNumber(raw.taxAmount),
     currency: asString(raw.currency)?.toUpperCase() ?? null,
-    items: raw.items.map((item) => {
-      const unitPrice = +((item.totalPrice as unknown as number) / (item.quantity as unknown as number)).toFixed(2)
+    items: extractionItems(raw.items).map((item) => {
+      const quantity = asNumber(item.quantity);
+      const totalPrice = asNumber(item.totalPrice);
+      const ratio = quantity !== null && quantity !== 0 && totalPrice !== null
+        ? totalPrice / quantity : null;
+      const unitPrice = ratio !== null && Number.isFinite(ratio) ? +ratio.toFixed(2) : null;
       return {
         rawName: asString(item.rawName) ?? 'Unknown item',
         rawMaterialName: asString(item.rawMaterialName) ?? 'Unknown item',
-        quantity: asNumber(item.quantity),
+        quantity,
         rawSrcUnit: asString(item.rawSrcUnit),
         srcUnit: asString(item.srcUnit),
         srcUnitAmount: asNumber(item.srcUnitAmount),
-        baseUnit: item.baseUnit,
+        baseUnit: asBaseUnit(item.baseUnit),
         baseUnitAmount: asNumber(item.baseUnitAmount),
         rawSku: asString(item.rawSku),
         unitPrice,
         isSkuEnriched: false,
-        totalPrice: asNumber(item.totalPrice),
+        totalPrice,
         confidence: asNumber(item.confidence),
       };
     }),
@@ -421,13 +457,13 @@ export async function extractRecipe(
   inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<RecipeExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('recipe', documentParts(inlineData), context);
-
-  return parseRecipeExtraction(raw);
+  return runStructured('recipe', documentParts(inlineData), parseRecipeExtraction, context);
 }
 
-export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtraction {
-  const ingredients = Array.isArray(raw.ingredients) ? raw.ingredients : [];
+export function parseRecipeExtraction(value: unknown): RecipeExtraction {
+  const raw = extractionObject(value);
+  const ingredients = extractionItems(raw.ingredients, true);
+  if (raw.steps != null) extractionItems(raw.steps);
   return {
     name: asString(raw.name),
     description: asString(raw.description),
@@ -441,8 +477,7 @@ export function parseRecipeExtraction(raw: Record<string, unknown>): RecipeExtra
         .filter((a) => a.length > 0)
       : [],
     steps: parseRecipeSteps(raw.steps),
-    ingredients: ingredients.map((entry) => {
-      const item = (entry ?? {}) as Record<string, unknown>;
+    ingredients: ingredients.map((item) => {
       return {
         rawName: asString(item.rawName) ?? 'Unknown ingredient',
         rawMaterialName: asString(item.rawMaterialName) ?? 'Unknown material',
@@ -459,14 +494,16 @@ export async function extractOrder(
   inlineData: DocumentInput,
   context?: LogContext,
 ): Promise<OrderExtraction | null> {
-  const raw = await runStructured<Record<string, unknown>>('order', documentParts(inlineData), context);
+  return runStructured('order', documentParts(inlineData), parseOrderExtraction, context);
+}
 
-  const items = Array.isArray(raw.items) ? raw.items : [];
+function parseOrderExtraction(value: unknown): OrderExtraction {
+  const raw = extractionObject(value);
+  const items = extractionItems(raw.items, true);
   return {
     customerName: asString(raw.customerName),
     destinationAddress: asString(raw.destinationAddress),
-    items: items.map((entry) => {
-      const item = (entry ?? {}) as Record<string, unknown>;
+    items: items.map((item) => {
       return {
         name: asString(item.name) ?? 'Unknown item',
         quantity: asNumber(item.quantity),
