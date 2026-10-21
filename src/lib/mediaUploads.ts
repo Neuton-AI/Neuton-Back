@@ -123,6 +123,8 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
     let recipeId: string | null = null;
     if (body.kind === 'receipt') {
       const [receipt] = await tx.insert(receipts).values({
+        // The offline placeholder and the server row share one stable identity.
+        id,
         shopId: input.shopId, uploadedBy: input.userId, storagePath: first.storagePath,
         contentType: first.contentType, originalFilename: first.originalFilename,
         currency: input.currency, status: 'pending', progressMessage: 'Uploading document',
@@ -131,6 +133,7 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
       receiptId = receipt.id;
     } else if (body.kind === 'recipe' || body.kind === 'product') {
       const [recipe] = await tx.insert(recipes).values({
+        id,
         shopId: input.shopId, name: `${(first.originalFilename ?? 'Document').slice(0, 160)} (${id})`,
         storagePath: first.storagePath, status: 'pending', yieldQuantity: '1', yieldUnit: 'portion', allergens: [],
       }).returning({ id: recipes.id });

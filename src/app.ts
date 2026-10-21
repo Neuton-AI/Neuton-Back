@@ -14,6 +14,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { receiptRoutes } from './routes/receipts.js';
 import { orderRoutes } from './routes/orders.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { registerDocumentSync } from './plugins/documentSync.js';
 
 export interface BuildAppOptions {
   logger?: boolean;
@@ -148,6 +149,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   await app.register(requireAuth);
   await app.register(requireShopContext);
+  registerDocumentSync(app);
 
   app.get('/health', async () => ({ ok: true, service: 'neuton-api' }));
 
