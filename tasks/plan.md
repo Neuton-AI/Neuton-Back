@@ -25,7 +25,7 @@ Each phase depends on the previous phase. Within phase 1, each independent corre
 ## Progress
 
 - [x] Ticket #172 created; branch `fix/B/n172-api-interface-alignment` opened.
-- [ ] Phase 1
+- [x] Phase 1 — 371 tests passed, zero skips; typechecks/build/migration validation passed.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4
