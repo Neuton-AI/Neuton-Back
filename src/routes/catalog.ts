@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
 import {
@@ -12,7 +12,7 @@ import {
 } from '../db/schema/index.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { notFound, conflict, forbidden } from '../lib/errors.js';
+import { notFound, conflict } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
@@ -28,6 +28,8 @@ import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
 import { searchProduct } from '../lib/supermarket/prices.js';
+import { assertCatalogLinks } from '../lib/catalogLinks.js';
+import { adjustInventory, inventoryAdjustmentSchema } from '../lib/inventoryAdjustments.js';
 
 const recipeIngredientSchema = z.object({
   inventoryItemId: z.string().uuid().nullable().optional(),
@@ -125,7 +127,7 @@ export async function costRecipe(
     .from(recipeIngredients)
     .leftJoin(
       inventoryItems,
-      eq(inventoryItems.id, recipeIngredients.inventoryItemId),
+      and(eq(inventoryItems.id, recipeIngredients.inventoryItemId), eq(inventoryItems.shopId, shopId)),
     )
     .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
     .where(
@@ -271,7 +273,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     const shop = currentShop(request);
     const body = recipeSchema.parse(request.body);
 
-    const created = await db.transaction(async (tx) => {
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const created = await database.transaction(async (tx) => {
+      await assertCatalogLinks(tx, shop.id, body);
       const inserted = await tx
         .insert(recipes)
         .values({
@@ -376,13 +380,7 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
         .for('update').limit(1);
       if (!existing[0]) throw notFound('Recipe not found');
 
-      const inventoryIds = [...new Set(ingredients?.flatMap((ingredient) =>
-        ingredient.inventoryItemId ? [ingredient.inventoryItemId] : []) ?? [])];
-      if (inventoryIds.length) {
-        const owned = await tx.select({ id: inventoryItems.id }).from(inventoryItems)
-          .where(and(eq(inventoryItems.shopId, shop.id), inArray(inventoryItems.id, inventoryIds)));
-        if (owned.length !== inventoryIds.length) throw forbidden('Ingredient inventory must belong to this shop');
-      }
+      await assertCatalogLinks(tx, shop.id, { categoryId: body.categoryId, ingredients });
 
       const rows = await tx.update(recipes).set(patch)
         .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id))).returning();
@@ -579,7 +577,10 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     const shop = currentShop(request);
     const body = inventorySchema.parse(request.body);
 
-    const rows = await db
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const rows = await database.transaction(async (tx) => {
+      await assertCatalogLinks(tx, shop.id, body);
+      return tx
       .insert(inventoryItems)
       .values({
         shopId: shop.id,
@@ -605,6 +606,7 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
             : unitCost(body.averageUnitCost),
       })
       .returning();
+    });
 
     await recordAuditSafe(app, {
       shopId: shop.id,
@@ -623,40 +625,44 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = inventoryPatchSchema.parse(request.body);
 
-    const existing = await db
-      .select({ id: inventoryItems.id })
-      .from(inventoryItems)
-      .where(and(eq(inventoryItems.id, id), eq(inventoryItems.shopId, shop.id)))
-      .limit(1);
-    if (!existing[0]) throw notFound('Inventory item not found');
+    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
+    const updated = await database.transaction(async (tx) => {
+      const existing = await tx
+        .select({ id: inventoryItems.id })
+        .from(inventoryItems)
+        .where(and(eq(inventoryItems.id, id), eq(inventoryItems.shopId, shop.id)))
+        .limit(1).for('update');
+      if (!existing[0]) throw notFound('Inventory item not found');
+      await assertCatalogLinks(tx, shop.id, body);
 
-    const patch: Partial<typeof inventoryItems.$inferInsert> = { updatedAt: new Date() };
-    if (body.name !== undefined) patch.name = body.name;
-    if (body.rawMaterialName !== undefined) patch.rawMaterialName = body.rawMaterialName;
-    if (body.sku !== undefined) patch.sku = body.sku ?? null;
-    if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
-    if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
-    if (body.unit !== undefined) patch.unit = body.unit;
-    if (body.baseUnit !== undefined) patch.baseUnit = body.baseUnit;
-    if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(3);
-    if (body.baseUnitCost !== undefined) patch.baseUnitCost = body.baseUnitCost.toFixed(6);
-    if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
-    if (body.reorderLevel !== undefined) {
-      patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);
-    }
-    if (body.lastUnitCost !== undefined) {
-      patch.lastUnitCost = body.lastUnitCost === null ? null : unitCost(body.lastUnitCost);
-    }
-    if (body.averageUnitCost !== undefined) {
-      patch.averageUnitCost =
-        body.averageUnitCost === null ? null : unitCost(body.averageUnitCost);
-    }
+      const patch: Partial<typeof inventoryItems.$inferInsert> = { updatedAt: new Date() };
+      if (body.name !== undefined) patch.name = body.name;
+      if (body.rawMaterialName !== undefined) patch.rawMaterialName = body.rawMaterialName;
+      if (body.sku !== undefined) patch.sku = body.sku ?? null;
+      if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
+      if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
+      if (body.unit !== undefined) patch.unit = body.unit;
+      if (body.baseUnit !== undefined) patch.baseUnit = body.baseUnit;
+      if (body.baseUnitAmount !== undefined) patch.baseUnitAmount = body.baseUnitAmount.toFixed(3);
+      if (body.baseUnitCost !== undefined) patch.baseUnitCost = body.baseUnitCost.toFixed(6);
+      if (body.currentQuantity !== undefined) patch.currentQuantity = qty(body.currentQuantity);
+      if (body.reorderLevel !== undefined) {
+        patch.reorderLevel = body.reorderLevel === null ? null : qty(body.reorderLevel);
+      }
+      if (body.lastUnitCost !== undefined) {
+        patch.lastUnitCost = body.lastUnitCost === null ? null : unitCost(body.lastUnitCost);
+      }
+      if (body.averageUnitCost !== undefined) {
+        patch.averageUnitCost =
+          body.averageUnitCost === null ? null : unitCost(body.averageUnitCost);
+      }
 
-    const updated = await db
-      .update(inventoryItems)
-      .set(patch)
-      .where(eq(inventoryItems.id, id))
-      .returning();
+      return tx
+        .update(inventoryItems)
+        .set(patch)
+        .where(and(eq(inventoryItems.id, id), eq(inventoryItems.shopId, shop.id)))
+        .returning();
+    });
 
     await recordAuditSafe(app, {
       shopId: shop.id,
@@ -702,6 +708,7 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
       const existing = rows[0];
       if (!existing) throw notFound('Recipe not found');
       if (existing.status === 'verified') throw conflict('Recipe is already verified');
+      await assertCatalogLinks(tx, shop.id, body);
 
       const patch: Partial<typeof recipes.$inferInsert> = {
         status: 'verified',
@@ -792,40 +799,10 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
   /** Bulk stock adjustment used by the Inventory grid after manual counts. */
   app.post('/inventory/adjust', mutationGuards, async (request) => {
     const shop = currentShop(request);
-    const body = z
-      .object({
-        adjustments: z
-          .array(
-            z.object({
-              inventoryItemId: z.string().uuid(),
-              deltaQuantity: z.coerce.number(),
-            }),
-          )
-          .min(1)
-          .max(200),
-      })
-      .parse(request.body);
-
-    const ids = body.adjustments.map((a) => a.inventoryItemId);
-    const owned = await db
-      .select({ id: inventoryItems.id })
-      .from(inventoryItems)
-      .where(and(inArray(inventoryItems.id, ids), eq(inventoryItems.shopId, shop.id)));
-
-    const ownedIds = new Set(owned.map((row) => row.id));
-    const applied: string[] = [];
-    for (const adjustment of body.adjustments) {
-      if (!ownedIds.has(adjustment.inventoryItemId)) continue;
-      await db
-        .update(inventoryItems)
-        .set({
-          currentQuantity: sql`greatest(${inventoryItems.currentQuantity} + ${adjustment.deltaQuantity}, 0)`,
-          updatedAt: new Date(),
-        })
-        .where(eq(inventoryItems.id, adjustment.inventoryItemId));
-      applied.push(adjustment.inventoryItemId);
-    }
-
-    return { adjusted: applied.length, ids: applied };
+    const body = inventoryAdjustmentSchema.parse(request.body);
+    const key = z.string().uuid().optional().parse(request.headers['idempotency-key']);
+    return adjustInventory((request.receiptsDeps ?? defaultReceiptsDeps).db, {
+      shopId: shop.id, userId: currentUser(request).id, key, adjustments: body.adjustments,
+    });
   });
 };

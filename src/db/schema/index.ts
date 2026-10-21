@@ -5,3 +5,4 @@ export * from './receipts.js';
 export * from './orders.js';
 export * from './uploads.js';
 export * from './sync.js';
+export * from './adjustments.js';
