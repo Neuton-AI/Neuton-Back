@@ -287,11 +287,18 @@ const catalogCache = createCatalogCache({
   parse: parseXmlItems,
 });
 
-export function createProductSearch(getItems: (chain: PriceChain) => Promise<FoundItem[]>) {
+export const CATALOG_RETRY_DELAY_MS = 60_000;
+
+export function createProductSearch(
+  getItems: (chain: PriceChain) => Promise<FoundItem[]>,
+  now: () => number = Date.now,
+) {
+  const retryAfter = new Map<PriceChain, number>();
   return async function search(query: string, limitPerChain = 15): Promise<PriceResult[]> {
     if (!query || query.trim().length === 0) return [];
     const chains: PriceChain[] = ['shufersal', 'carrefour'];
     const results = await Promise.all(chains.map(async (chain): Promise<PriceResult[]> => {
+      if (now() < (retryAfter.get(chain) ?? 0)) return [];
       try {
         const items = await getItems(chain);
         return items
@@ -301,7 +308,12 @@ export function createProductSearch(getItems: (chain: PriceChain) => Promise<Fou
           .slice(0, limitPerChain)
           .map(({ item, score }) => ({ chain, score, ...item }));
       } catch (error) {
-        console.error(`Supermarket search failed for ${chain}:`, error);
+        // A recipe searches each ingredient separately. Give an unavailable feed
+        // time to recover instead of repeating its full HTTP retry budget.
+        if (now() >= (retryAfter.get(chain) ?? 0)) {
+          retryAfter.set(chain, now() + CATALOG_RETRY_DELAY_MS);
+          console.error(`Supermarket search failed for ${chain}; retrying after ${CATALOG_RETRY_DELAY_MS}ms:`, error);
+        }
         return [];
       }
     }));
