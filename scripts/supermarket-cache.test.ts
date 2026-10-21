@@ -4,9 +4,39 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createCatalogCache, CATALOG_TTL_MS } from '../src/lib/supermarket/catalog-cache.js';
-import { parseXmlItems } from '../src/lib/supermarket/prices.js';
+import { CATALOG_RETRY_DELAY_MS, createProductSearch, parseXmlItems } from '../src/lib/supermarket/prices.js';
 
 const xml = '<Root><Items><Item><ItemCode>123</ItemCode><ItemName>Milk</ItemName><ItemPrice>7.5</ItemPrice></Item></Items></Root>';
+
+test('sequential ingredient searches skip an unavailable chain until cooldown expires', async (t) => {
+  let time = 1_800_000_000_000;
+  let offline = true;
+  let failedChainCalls = 0;
+  const errors: unknown[] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => errors.push(args));
+  const search = createProductSearch(async chain => {
+    if (chain === 'shufersal') {
+      failedChainCalls++;
+      if (offline) throw new Error('request timed out');
+    }
+    return parseXmlItems(xml);
+  }, () => time);
+  for (const query of ['Milk', '123', 'missing', 'Milk']) {
+    const results = await search(query);
+    assert.ok(results.every(item => item.chain === 'carrefour'));
+    if (query !== 'missing') assert.equal(results.length, 1);
+  }
+  assert.equal(failedChainCalls, 1);
+  assert.equal(errors.length, 1);
+  time += CATALOG_RETRY_DELAY_MS - 1;
+  await search('Milk');
+  assert.equal(failedChainCalls, 1);
+  offline = false;
+  time++;
+  assert.equal((await search('Milk')).length, 2);
+  assert.equal(failedChainCalls, 2);
+  assert.equal(errors.length, 1);
+});
 
 async function fixture(t: TestContext) {
   await mkdir('Temp', { recursive: true });

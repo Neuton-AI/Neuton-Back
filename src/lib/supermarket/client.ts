@@ -1,66 +1,51 @@
 import { gunzipSync } from 'node:zlib';
 
-const REQUEST_INTERVAL_MS = 1500;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 2;
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB
 
-let lastRequestTime = 0;
-
-async function rateLimitedWait(): Promise<void> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  const waitMs = REQUEST_INTERVAL_MS - elapsed;
-  if (waitMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
-  lastRequestTime = Date.now();
-}
-
-export async function fetchWithRateLimit(url: string, options: RequestInit = {}): Promise<Response> {
-  // await rateLimitedWait();
-
+/** Keep the deadline and retries active until the body has been read. */
+async function fetchWithRetries(url: string): Promise<string> {
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let retryable = true;
+    const timeout = setTimeout(() => controller.abort(
+      new Error(`Supermarket request timed out after ${REQUEST_TIMEOUT_MS}ms for ${url}`),
+    ), REQUEST_TIMEOUT_MS);
 
     try {
-      if (attempt > 0) {
-        // await rateLimitedWait();
-      }
-
       const response = await fetch(url, {
-        ...options,
         signal: controller.signal,
         headers: {
           'User-Agent': 'neuton-supermarket-prices/1.0',
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'he-IL,he;q=0.9,en;q=0.8',
-          ...options.headers,
         },
       });
 
-      clearTimeout(timeout);
-
-      if (!response.ok && response.status >= 500 && attempt < MAX_RETRIES) {
-        lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
-        continue;
+      if (!response.ok) {
+        retryable = response.status >= 500;
+        await response.body?.cancel();
+        const error = new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+        throw error;
+      } else {
+        return await decodeBody(response, url);
       }
-
-      return response;
     } catch (err) {
+      if (!retryable) throw err;
+      // Reading an aborted response body may throw a generic AbortError.
+      lastError = controller.signal.aborted ? controller.signal.reason
+        : err instanceof Error ? err : new Error(String(err));
+    } finally {
       clearTimeout(timeout);
-      lastError = err instanceof Error ? err : new Error(String(err));
-
-      if (attempt < MAX_RETRIES) {
-        continue;
-      }
     }
   }
 
-  throw lastError ?? new Error('Request failed after retries');
+  throw new Error(`Supermarket request failed after ${MAX_RETRIES + 1} attempts for ${url}: ${lastError?.message}`, {
+    cause: lastError,
+  });
 }
 
 /** Read a response body, transparently unzipping .gz price files. */
@@ -94,11 +79,7 @@ async function decodeBody(response: Response, what: string): Promise<string> {
 }
 
 export async function fetchText(url: string): Promise<string> {
-  const res = await fetchWithRateLimit(url);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-  }
-  return decodeBody(res, url);
+  return fetchWithRetries(url);
 }
 
 export async function fetchXml(url: string): Promise<string> {
