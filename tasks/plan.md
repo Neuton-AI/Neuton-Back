@@ -1,5 +1,15 @@
 # API/interface alignment — #172
 
+## Current continuation: NestJS migration (#178)
+
+The approved migration extends this API alignment work. Execution phases and
+verification are recorded in [the migration plan](../docs/nestjs-migration.md).
+The original phase history below is retained. Later user decisions supersede
+its compatibility assumptions: stock keys are mandatory (#174), legacy uploads
+are removed (#175), query names use camelCase without aliases (#176), and the
+existing extraction/review flow is sufficient with user input taking precedence
+(#173, closed). These supersede the earlier optional-key and alias proposals.
+
 Tasks tracked in [GitHub #172](https://github.com/Neuton-AI/Neuton-Back/issues/172). The audit report is the specification; preserve existing client wire contracts while fixing defects.
 
 ## Ordered phases
