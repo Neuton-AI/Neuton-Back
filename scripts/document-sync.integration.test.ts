@@ -5,8 +5,9 @@ import test from 'node:test';
 
 // Explicit opt-in prevents this suite from applying fixtures to a configured production database.
 test(
-  'sync retries, conflicts, tenant isolation and tombstones use real domain transactions',
+  'sync retries, conflicts, tombstones and order create completion preserve commit and rollback effects',
   {
+    timeout: 60_000,
     skip:
       !process.env.SYNC_TEST_DATABASE_URL &&
       'Set SYNC_TEST_DATABASE_URL to a migrated disposable database',
@@ -94,7 +95,7 @@ test(
           headers,
           payload: { documents: [] },
         });
-      const first = (await check()).json().toPull[0];
+      const first = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId);
       assert.equal(first.id, recipeId);
       const version = first.updatedAt + 100;
       const mutationId = randomUUID();
@@ -126,7 +127,7 @@ test(
       const pushed = await patch('First edit', version, mutationId);
       assert.equal(pushed.statusCode, 200, pushed.body);
       assert.equal(pushed.json().recipe.name, 'First edit');
-      assert.equal((await check()).json().toPull[0].updatedAt, version);
+      assert.equal((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt, version);
       assert.deepEqual(
         (await patch('First edit', version, mutationId)).json(),
         pushed.json(),
@@ -157,7 +158,7 @@ test(
       assert.deepEqual(equal.json(), { toPush: [], toPull: [] });
       const invalid = await patch('', version + 200);
       assert.equal(invalid.statusCode, 400);
-      assert.equal((await check()).json().toPull[0].updatedAt, version + 100);
+      assert.equal((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt, version + 100);
       assert.equal(
         (
           await app.inject({
@@ -185,16 +186,74 @@ test(
       await db.execute(
         sql`update recipe_ingredients set inventory_item_id=${inventoryId}::uuid where recipe_id=${recipeId}::uuid`,
       );
-      const beforeCostChange = (await check()).json().toPull[0].updatedAt;
+      const beforeCostChange = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       await db.execute(
         sql`update inventory_items set base_unit_cost=0.003 where id=${inventoryId}::uuid`,
       );
-      assert.ok((await check()).json().toPull[0].updatedAt > beforeCostChange);
-      const beforeShopChange = (await check()).json().toPull[0].updatedAt;
+      assert.ok((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt > beforeCostChange);
+      const beforeShopChange = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       await db.execute(
         sql`update shops set target_profit_margin=35 where id=${shopId}::uuid`,
       );
-      const beforeDelete = (await check()).json().toPull[0].updatedAt;
+      // A failure saving the sync retry receipt must roll back the domain
+      // mutation without publishing a successful order audit.
+      const orderRecipeId = randomUUID();
+      await db.execute(sql`insert into recipes(id,shop_id,name,status)
+        values (${orderRecipeId}::uuid,${shopId}::uuid,'Order fixture','unverified')`);
+      await db.execute(sql`insert into recipe_ingredients(shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,quantity,raw_src_unit,base_unit,base_unit_amount)
+        values (${shopId}::uuid,${orderRecipeId}::uuid,${inventoryId}::uuid,'Flour','Flour',1,'g','g',1)`);
+      const rejectedMutation = randomUUID();
+      const constraintName = `sync_order_rollback_${shopId.replaceAll('-', '')}`;
+      const orderPayload = { items: [{ recipeId: orderRecipeId, quantity: 1 }] };
+      const orderVersion = Date.now() + 100_000;
+      const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
+        app.inject({ method, url: `/api/v1/orders${path}`, headers: {
+          ...headers, 'x-sync-id': mutation, 'x-sync-version': String(version),
+        }, ...(path === '' ? { payload: orderPayload } : {}) });
+      const audits = () => db.execute(sql`select event_type from audit_logs
+        where shop_id=${shopId}::uuid and event_type like 'ORDER_%' order by created_at`);
+      const rejectReceipt = async (mutate: () => ReturnType<typeof mutateOrder>) => {
+        await db.execute(sql`alter table document_mutations add constraint ${sql.identifier(constraintName)}
+          check (id <> ${sql.raw(`'${rejectedMutation}'`)}::uuid) not valid`);
+        try {
+          const failed = await mutate();
+          assert.equal(failed.statusCode, 500, failed.body);
+        } finally {
+          await db.execute(sql`alter table document_mutations drop constraint ${sql.identifier(constraintName)}`);
+        }
+      };
+      await rejectReceipt(() => mutateOrder('POST', '', rejectedMutation, orderVersion));
+      assert.equal((await db.execute(sql`select count(*)::int as count from orders where shop_id=${shopId}::uuid`))[0]?.count, 0);
+      assert.equal((await db.execute(sql`select last_order_number from shops where id=${shopId}::uuid`))[0]?.last_order_number, 0);
+      assert.equal((await audits()).length, 0);
+
+      const createMutation = randomUUID();
+      const created = await mutateOrder('POST', '', createMutation, orderVersion);
+      assert.equal(created.statusCode, 201, created.body);
+      const createdOrderId = created.json().order.id;
+      assert.deepEqual((await mutateOrder('POST', '', createMutation, orderVersion)).json(), created.json());
+      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED']);
+      const orderState = () => db.execute(sql`select status from orders where id=${createdOrderId}::uuid`);
+
+      await rejectReceipt(() => mutateOrder('POST', `/${createdOrderId}/verify`, rejectedMutation, orderVersion + 100));
+      assert.equal((await orderState())[0]?.status, 'processing');
+      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED']);
+      const verifyMutation = randomUUID();
+      const verified = await mutateOrder('POST', `/${createdOrderId}/verify`, verifyMutation, orderVersion + 100);
+      assert.equal(verified.statusCode, 200, verified.body);
+      assert.deepEqual((await mutateOrder('POST', `/${createdOrderId}/verify`, verifyMutation, orderVersion + 100)).json(), verified.json());
+      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED']);
+
+      await rejectReceipt(() => mutateOrder('DELETE', `/${createdOrderId}`, rejectedMutation, orderVersion + 200));
+      assert.equal((await orderState())[0]?.status, 'delivered');
+      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED']);
+      const cancelMutation = randomUUID();
+      const cancelled = await mutateOrder('DELETE', `/${createdOrderId}`, cancelMutation, orderVersion + 200);
+      assert.equal(cancelled.statusCode, 200, cancelled.body);
+      assert.deepEqual((await mutateOrder('DELETE', `/${createdOrderId}`, cancelMutation, orderVersion + 200)).json(), cancelled.json());
+      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED', 'ORDER_CANCELLED']);
+
+      const beforeDelete = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       assert.ok(beforeDelete > beforeShopChange);
       const removed = await app.inject({
         method: 'DELETE',
@@ -206,7 +265,7 @@ test(
         },
       });
       assert.equal(removed.statusCode, 200, removed.body);
-      assert.equal((await check()).json().toPull[0].deleted, true);
+      assert.equal((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).deleted, true);
       assert.equal(
         (await patch('Resurrection', version + 400)).json().syncConflict,
         true,
