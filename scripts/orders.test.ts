@@ -155,6 +155,21 @@ test('POST /orders/:id/verify rejects an already-delivered order with 400', asyn
   }
 });
 
+test('POST /orders/:id/verify reports a concurrent transition as 409', async () => {
+  const h = await harness('member', {
+    'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
+    // Cancellation or another verification wins after the initial read.
+    'update:orders': [[]],
+  });
+  try {
+    const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
+    assert.equal(status, 409);
+    assert.equal(body.error.code, 'CONFLICT');
+  } finally {
+    await h.close();
+  }
+});
+
 test('the old order status endpoint is no longer registered', async () => {
   const h = await harness();
   try {

@@ -62,10 +62,12 @@ test('verified purchases accumulate total base units and serialize concurrent SM
   const shopId = randomUUID();
   const userId = randomUUID();
   try {
+    // Profiles reference Supabase auth users on a fully migrated database.
+    await connection`INSERT INTO auth.users(id,email) VALUES (${userId},'receipt-inventory-test@example.com')`;
     await db.insert(schema.profiles).values({ id: userId });
     await db.insert(schema.shops).values({ id: shopId, name: 'Receipt inventory regression', slug: shopId });
     async function purchase(cost: number, quantity: number, accepted = true) {
-      const [receipt] = await db.insert(schema.receipts).values({ shopId, status: 'unverified' }).returning();
+      const [receipt] = await db.insert(schema.receipts).values({ shopId, status: 'unverified', storagePath: `${shopId}/receipts/${randomUUID()}.png` }).returning();
       assert.ok(receipt);
       const [line] = await db.insert(schema.receiptItems).values({
         receiptId: receipt.id, shopId, rawName: 'Flour', rawMaterialName: 'Flour',
@@ -97,6 +99,7 @@ test('verified purchases accumulate total base units and serialize concurrent SM
   } finally {
     await db.delete(schema.shops).where(eq(schema.shops.id, shopId));
     await db.delete(schema.profiles).where(eq(schema.profiles.id, userId));
+    await connection`DELETE FROM auth.users WHERE id=${userId}`;
     await connection.end();
   }
 });

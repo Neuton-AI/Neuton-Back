@@ -6,7 +6,7 @@ import { orderItems, orders, orderItemRecipeName, recipes, shops, mediaUploads }
 import { ORDER_STATUSES } from '../db/schema/enums.js';
 import { currentShop, currentUser } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { money, quantity as qty, toNumber } from '../lib/money.js';
 import {
@@ -89,7 +89,7 @@ async function priceOrderItems(
       averageUnitCost: recipeIngredientUnitCost,
     })
     .from(recipeIngredients)
-    .leftJoin(inventoryItems, eq(inventoryItems.id, recipeIngredients.inventoryItemId))
+    .leftJoin(inventoryItems, and(eq(inventoryItems.id, recipeIngredients.inventoryItemId), eq(inventoryItems.shopId, shopId)))
     .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
     .where(eq(recipeIngredients.shopId, shopId));
 
@@ -380,7 +380,8 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
    *
    * Any authenticated shop member may mark an order delivered (standard shop
    * guards, NOT owner/admin-only). Only the forward transition is allowed;
-   * anything else is a 400, and cross-shop access reads as 404 so one shop
+   * an already-terminal order is a 400; a competing transition after the read
+   * is a 409. Cross-shop access reads as 404 so one shop
    * can never probe another shop's orders.
    */
   app.post('/orders/:id/verify', guards, async (request) => {
@@ -402,10 +403,15 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     const updated = await deps.db
       .update(orders)
       .set({ status: 'delivered' })
-      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)))
+      .where(and(
+        eq(orders.id, id),
+        eq(orders.shopId, shop.id),
+        eq(orders.status, 'processing'),
+        isNull(orders.deletedAt),
+      ))
       .returning();
     const next = updated[0];
-    if (!next) throw notFound('Order not found');
+    if (!next) throw conflict('Order changed during verification; reload before retrying');
 
     await recordAuditSafe(app, {
       shopId: shop.id,
