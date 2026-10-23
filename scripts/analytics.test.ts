@@ -73,6 +73,7 @@ test('trendPercent reports direction and never divides by zero', () => {
   assert.equal(trendPercent(50, 100), -50);
   assert.equal(trendPercent(0, 100), -100);
   assert.equal(trendPercent(40, 0), 100, 'a zero baseline reads as 100%, not Infinity');
+  assert.equal(trendPercent(-40, 0), -100, 'a loss from zero must report negative growth');
   assert.equal(trendPercent(0, 0), 0);
   assert.equal(trendPercent(50, -100), 150, 'a negative baseline uses its magnitude');
 });
@@ -405,7 +406,7 @@ test('dashboard: a loss reports a negative margin instead of clamping at zero', 
     const { body } = await h.get('/api/v1/analytics/dashboard');
     assert.equal(body.summary.netProfit, -125);
     assert.equal(body.summary.profitMarginPercent, -125);
-    assert.equal(body.trend.profitPercent, 100, 'a zero baseline reports 100 whatever the sign');
+    assert.equal(body.trend.profitPercent, -100, 'a loss from zero reports negative growth');
   } finally {
     await h.close();
   }

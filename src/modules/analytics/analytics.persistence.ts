@@ -58,9 +58,9 @@ export function previousPeriodStart(
   return start;
 }
 
-/** Share change as a percentage. A zero baseline reports 100% rather than Infinity. */
+/** Share change as a percentage. A nonzero change from zero reports a signed 100%. */
 export function trendPercent(current: number, previous: number): number {
-  if (previous === 0) return current === 0 ? 0 : 100;
+  if (previous === 0) return current === 0 ? 0 : Math.sign(current) * 100;
   return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
 }
 
