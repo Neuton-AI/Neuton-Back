@@ -220,7 +220,6 @@ function scoreMatch(name: string, barcode: string, manufacturer: string, query: 
 
   // Barcode exact match always wins
   if (q && b === q) return 10000;
-  if (q && b.includes(q)) return 9000;
 
   // Exact full-name match
   if (q && name.toLowerCase() === q) return 9500;
@@ -242,25 +241,24 @@ function scoreMatch(name: string, barcode: string, manufacturer: string, query: 
   const extraRatio = extraTokens.length / nTokens.length;
 
   // Base score: recall * (1 - extraRatio) - penalizes names with lots of extra stuff
-  let score = Math.round(5000 * recallRatio * (1 - extraRatio));
+  let score = Math.round(6000 * recallRatio * (1 - extraRatio));
 
-  // Position bonus: query tokens appearing early in name
-  const firstMatchIdx = nTokens.findIndex(t => qTokens.includes(t));
-  if (firstMatchIdx === 0) {
-    score += 3000;  // massive bonus for index 0 (product type)
-  } else if (firstMatchIdx === 1) {
-    score += 500;
-  } else if (firstMatchIdx >= 2) {
-    score += Math.max(0, 200 - firstMatchIdx * 50);
+  // Whole query match bonus
+  const n = normalizeQuery(name);
+  if (q && n.includes(q)) {
+    score += 2000;
+    if (n.startsWith(q)) {
+      score += 2000;
+    }
   }
 
   // Manufacturer token overlap (small boost)
   const manOverlap = qTokens.filter(t => mTokens.includes(t)).length;
-  score += manOverlap * 200;
+  score += manOverlap * 50;
 
   // Logarithmic length penalty: longer names get slightly reduced score
   // log(3)≈1.1, log(8)≈2.1, log(20)≈3.0 - gentle curve
-  const lenFactor = 1 / Math.log(Math.max(2, nTokens.length));
+  const lenFactor = Math.max(0.4, 1 / Math.log(Math.max(3, nTokens.length)));
   score = Math.round(score * lenFactor);
 
   // Floor at 0
@@ -288,6 +286,7 @@ const catalogCache = createCatalogCache({
 });
 
 export const CATALOG_RETRY_DELAY_MS = 60_000;
+export const SEARCH_MIN_SCORE = 2500;
 
 export function createProductSearch(
   getItems: (chain: PriceChain) => Promise<FoundItem[]>,
@@ -303,7 +302,7 @@ export function createProductSearch(
         const items = await getItems(chain);
         return items
           .map((item) => ({ item, score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query) }))
-          .filter(({ score }) => score > 0)
+          .filter(({ score }) => score > SEARCH_MIN_SCORE)
           .sort((a, b) => b.score - a.score)
           .slice(0, limitPerChain)
           .map(({ item, score }) => ({ chain, score, ...item }));
