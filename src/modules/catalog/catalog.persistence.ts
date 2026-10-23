@@ -4,15 +4,25 @@ import { db, type Database } from '../../db/client.js';
 import { categories, recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import type { Category, InventoryItem, Recipe } from '../../db/schema/catalog.js';
-import { notFound } from '../../lib/errors.js';
+import { notFound, conflict } from '../../lib/errors.js';
 import { assertCatalogLinks } from '../../lib/catalogLinks.js';
 import { quantity } from '../../lib/money.js';
-import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto, RecipePatchInput, PreparedRecipeIngredient } from './contracts.js';
+import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto, RecipePatchInput, PreparedRecipeIngredient, VerifyRecipeInput } from './contracts.js';
 
 export type CatalogReadDatabase = Pick<Database, 'select'>;
 export type CatalogTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type CatalogDatabase = Database | CatalogTransaction;
 export const CATALOG_DATABASE = Symbol('CATALOG_DATABASE');
+
+function ingredientValues(shopId: string, recipeId: string, ingredients: readonly PreparedRecipeIngredient[]) {
+  return ingredients.map(ingredient => ({
+    shopId, recipeId, inventoryItemId: ingredient.inventoryItemId ?? null,
+    generalPriceId: ingredient.generalPriceId ?? null, rawName: ingredient.rawName,
+    rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+    quantity: quantity(ingredient.quantity), rawSrcUnit: ingredient.rawSrcUnit,
+    baseUnit: ingredient.baseUnit ?? null, baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
+  }));
+}
 
 function mapCategory(category: Category): CategoryDto {
   return {
@@ -75,13 +85,7 @@ export class CatalogPersistence {
         allergens: input.allergens, steps: input.steps ?? [], status: 'pending',
       }).returning();
       if (!recipe) throw new Error('Recipe insert returned no row');
-      await tx.insert(recipeIngredients).values(input.ingredients.map(ingredient => ({
-        shopId, recipeId: recipe.id, inventoryItemId: ingredient.inventoryItemId ?? null,
-        generalPriceId: ingredient.generalPriceId ?? null, rawName: ingredient.rawName,
-        rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-        quantity: quantity(ingredient.quantity), rawSrcUnit: ingredient.rawSrcUnit,
-        baseUnit: ingredient.baseUnit ?? null, baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
-      })));
+      await tx.insert(recipeIngredients).values(ingredientValues(shopId, recipe.id, input.ingredients));
       return mapRecipe(recipe);
     });
   }
@@ -122,26 +126,52 @@ export class CatalogPersistence {
           .delete(recipeIngredients)
           .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
         if (ingredients.length) {
-          await tx.insert(recipeIngredients).values(
-            ingredients.map((ingredient) => ({
-              shopId: shopId,
-              recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId ?? null,
-              generalPriceId: ingredient.generalPriceId ?? null,
-              rawName: ingredient.rawName,
-              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-              quantity: quantity(ingredient.quantity),
-              rawSrcUnit: ingredient.rawSrcUnit,
-              baseUnit: ingredient.baseUnit ?? null,
-              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
-            })),
-          );
+          await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, ingredients));
         }
       }
       return rows[0];
     });
 
     return mapRecipe(updated);
+  }
+
+  async verifyRecipe(shopId: string, id: string, input: VerifyRecipeInput): Promise<RecipeDto> {
+    const recipe = await this.database.transaction(async (tx) => {
+      const rows = await tx
+        .select({ id: recipes.id, status: recipes.status })
+        .from(recipes)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+        .for('update')
+        .limit(1);
+      const existing = rows[0];
+      if (!existing) throw notFound('Recipe not found');
+      if (existing.status === 'verified') throw conflict('Recipe is already verified');
+      await assertCatalogLinks(tx, shopId, input);
+
+      const patch: Partial<typeof recipes.$inferInsert> = {
+        status: 'verified',
+        errorMessage: null,
+        updatedAt: new Date(),
+      };
+
+      const updated = await tx
+        .update(recipes)
+        .set(patch)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+        .returning();
+      if (!updated[0]) throw notFound('Recipe not found');
+
+      if (input.ingredients) {
+        await tx.delete(recipeIngredients).where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
+        if (input.ingredients.length) {
+          await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, input.ingredients));
+        }
+      }
+
+      return updated[0];
+    });
+
+    return mapRecipe(recipe);
   }
 
   async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {

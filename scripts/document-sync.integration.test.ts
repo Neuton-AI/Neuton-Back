@@ -232,6 +232,15 @@ test(
       }, payload: { name: 'Must roll back' } }));
       assert.equal((await db.execute(sql`select name from recipes where id=${recipeId}::uuid`))[0]?.name, nameBefore);
       assert.equal((await recipeAudits())[0]?.count, auditCountBefore, 'rolled-back recipe edit emits no audit');
+      const ingredientsBefore = [...await db.execute(sql`select id,raw_name,quantity,base_unit_amount
+        from recipe_ingredients where recipe_id=${recipeId}::uuid order by id`)];
+      await rejectReceipt(() => app.inject({ method: 'POST', url: `/api/v1/recipes/${recipeId}/verify`, headers: {
+        ...headers, 'x-sync-id': rejectedMutation, 'x-sync-version': String(beforeRecipeRollback.updatedAt + 100),
+      }, payload: { ingredients: [{ rawName: 'Must roll back', quantity: 2, rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 2000 }] } }));
+      assert.equal((await db.execute(sql`select status from recipes where id=${recipeId}::uuid`))[0]?.status, 'unverified');
+      assert.deepEqual([...await db.execute(sql`select id,raw_name,quantity,base_unit_amount
+        from recipe_ingredients where recipe_id=${recipeId}::uuid order by id`)], ingredientsBefore);
+      assert.equal((await recipeAudits())[0]?.count, auditCountBefore, 'rolled-back verification emits no audit');
       await rejectReceipt(() => mutateOrder('POST', '', rejectedMutation, orderVersion));
       assert.equal((await db.execute(sql`select count(*)::int as count from orders where shop_id=${shopId}::uuid`))[0]?.count, 0);
       assert.equal((await db.execute(sql`select last_order_number from shops where id=${shopId}::uuid`))[0]?.last_order_number, 0);

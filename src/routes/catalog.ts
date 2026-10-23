@@ -5,7 +5,6 @@ import { db } from '../db/client.js';
 import {
   inventoryItems,
   generalPrices,
-  recipeIngredients,
   recipes,
   mediaUploads,
 } from '../db/schema/index.js';
@@ -19,7 +18,7 @@ import { defaultReceiptsDeps } from './receipts.js';
 import type { ActorContext } from '../modules/identity/contracts.js';
 import { CatalogService, type CatalogAfterCommit } from '../modules/catalog/catalog.service.js';
 import { CatalogPersistence, type CatalogTransaction } from '../modules/catalog/catalog.persistence.js';
-import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema, recipeSchema, recipePatchSchema, recipeIngredientSchema } from '../modules/catalog/contracts.js';
+import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema, recipeSchema, recipePatchSchema, verifyRecipeSchema } from '../modules/catalog/contracts.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
 import { searchProduct } from '../lib/supermarket/prices.js';
@@ -346,79 +345,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     return { ok: true };
   });
 
-  /** Verifies a recipe and saves reviewed ingredients in one transaction. */
-  app.post('/recipes/:id/verify', mutationGuards, async (request) => {
-    const shop = currentShop(request);
-    const user = currentUser(request);
-    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const deps = request.receiptsDeps ?? defaultReceiptsDeps;
-
-    const body = z
-      .object({
-        ingredients: z.array(recipeIngredientSchema).min(1).optional(),
-      })
-      .parse(request.body);
-
-    const recipe = await deps.db.transaction(async (tx) => {
-      const rows = await tx
-        .select({ id: recipes.id, status: recipes.status })
-        .from(recipes)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
-        .for('update')
-        .limit(1);
-      const existing = rows[0];
-      if (!existing) throw notFound('Recipe not found');
-      if (existing.status === 'verified') throw conflict('Recipe is already verified');
-      await assertCatalogLinks(tx, shop.id, body);
-
-      const patch: Partial<typeof recipes.$inferInsert> = {
-        status: 'verified',
-        errorMessage: null,
-        updatedAt: new Date(),
-      };
-
-      const updated = await tx
-        .update(recipes)
-        .set(patch)
-        .where(eq(recipes.id, id))
-        .returning();
-      if (!updated[0]) throw notFound('Recipe not found');
-
-      if (body.ingredients) {
-        await tx.delete(recipeIngredients).where(eq(recipeIngredients.recipeId, id));
-        if (body.ingredients.length) {
-          await tx.insert(recipeIngredients).values(
-            body.ingredients.map((ingredient) => ({
-              shopId: shop.id,
-              recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId ?? null,
-              generalPriceId: ingredient.generalPriceId ?? null,
-              rawName: ingredient.rawName,
-              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-              quantity: qty(ingredient.quantity),
-              rawSrcUnit: ingredient.rawSrcUnit,
-              baseUnit: ingredient.baseUnit ?? null,
-              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
-            })),
-          );
-        }
-      }
-
-      return updated[0];
-    });
-
-    await recordAuditSafe(app, {
-      shopId: shop.id,
-      userId: user.id,
-      eventType: 'RECIPE_UPDATED',
-      resourceId: id,
-      ipAddress: request.ip,
-      metadata: { action: 'verify' },
-    });
-
-    return { recipe };
-  });
-
+  app.post('/recipes/:id/verify', mutationGuards, async (request) =>
+    catalogService(request).verifyRecipe(catalogActor(request), recipeIdSchema.parse(request.params).id,
+      verifyRecipeSchema.parse(request.body)));
   /** Fully costed recipes available to the order item picker, including out-of-stock recipes. */
   app.get('/recipes/orderable', guards, async (request) =>
     catalogService(request).orderable(catalogActor(request)));

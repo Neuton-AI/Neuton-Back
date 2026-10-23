@@ -140,10 +140,14 @@ including real PostgreSQL outer rollback/commit with no premature audit or
 success log; test typecheck/build passed. Recipe editing is also migrated:
 metadata-only changes retain saved ingredients, reviewed quantities are converted
 with the existing rules, and sync binds the service to the outer transaction.
-Its focused regressions passed 31/31 plus the extended real sync rollback check;
-test typecheck/build passed. Verification and inventory mutations remain next.
-The latest full-suite result above precedes these write slices; do not report
-it as a full rerun afterward.
+Its focused regressions passed 31/31 plus the extended real sync rollback check.
+Verification is now migrated too: reviewed corrections and status update are
+atomic, repeated approval returns 409, and failed sync restores both status and
+ingredients without a success audit. The latest full regression run after all
+these write slices passed 398/398 with zero skips against disposable PostgreSQL;
+test typecheck and production build passed. Remaining catalog work includes
+inventory mutations, manual/barcode pricing, and deletion; receipt, upload, and
+durable-cleanup slices are also still pending.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,

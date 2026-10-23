@@ -169,5 +169,15 @@ these intentional behavior changes in distinct tested commits.
   transaction binding defers success diagnostics and recipe audit until outer
   commit. Latest focused regressions passed 19/19 with zero skips, including
   disposable PostgreSQL rollback/commit checks; test typecheck/build passed.
-  This focused run follows the 394-test read checkpoint, not a new full-suite
-  result. Recipe editing/verification and inventory mutations remain pending.
+  This focused run followed the 394-test read checkpoint.
+
+- Subsequent catalog write checkpoint: recipe editing and verification now
+  delegate to transaction-bound services. Metadata-only edits retain ingredients;
+  edited quantities use existing conversion rules, and verification preserves
+  supplied corrections. Sync defers catalog success effects until outer commit.
+  Real sync failures restore recipe metadata, approval status, and ingredient
+  rows without premature audits. Shared ingredient mapping avoids three
+  competing write formats. Full regression suite passed 398/398, zero skips,
+  against disposable PostgreSQL; test typecheck/build passed. Review and
+  implementation were performed directly without agents. Inventory writes,
+  manual/barcode pricing, deletion, receipts, uploads and cleanup remain pending.

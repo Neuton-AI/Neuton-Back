@@ -246,3 +246,31 @@ test('recipe edits retain ingredients for metadata-only changes and convert revi
     await nest.close();
   }
 });
+
+test('recipe verification saves user corrections atomically and rejects repeated approval', async () => {
+  const database = new FakeDb({
+    'select:recipes': [[{ id: recipe.id, status: 'unverified' }], [{ id: recipe.id, status: 'verified' }]],
+    'update:recipes': [[{ ...recipe, status: 'verified' }]],
+  });
+  const nest = await buildNestCatalogApp(database as unknown as Database, 'admin');
+  try {
+    const response = await request(nest.app.getHttpServer()).post(`/api/v1/recipes/${recipe.id}/verify`).set(headers).send({
+      ingredients: [{ rawName: 'User corrected flour', quantity: 2, rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 2000 }],
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.recipe.status, 'verified');
+    assert.equal(database.onlyCallTo('update', 'recipes').set?.status, 'verified');
+    assert.deepEqual(database.onlyCallTo('insert', 'recipeIngredients').values, [{
+      shopId: SHOP_ID, recipeId: recipe.id, inventoryItemId: null, generalPriceId: null,
+      rawName: 'User corrected flour', rawMaterialName: 'User corrected flour',
+      quantity: '2.000', rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: '2000.000',
+    }]);
+    assert.equal(database.calls.every(call => call.inTransaction), true);
+    assert.deepEqual(nest.audits[0]?.metadata, { action: 'verify' });
+    assert.equal((await request(nest.app.getHttpServer()).post(`/api/v1/recipes/${recipe.id}/verify`)
+      .set(headers).send({})).status, 409);
+    assert.equal(nest.audits.length, 1);
+  } finally {
+    await nest.close();
+  }
+});

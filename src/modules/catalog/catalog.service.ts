@@ -6,7 +6,7 @@ import { convertEditedIngredients } from '../../lib/recipeEdits.js';
 import { CatalogPersistence, type CatalogTransaction } from './catalog.persistence.js';
 import { costRecipe } from './costing.js';
 import { CatalogAudit } from './catalog.audit.js';
-import type { CategoryDto, CreateCategoryInput, CreateRecipeInput, RecipePatchInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+import type { CategoryDto, CreateCategoryInput, CreateRecipeInput, RecipePatchInput, VerifyRecipeInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
 
 export const CATALOG_COMMIT_EFFECTS = Symbol('CATALOG_COMMIT_EFFECTS');
 export type CatalogAfterCommit = (effect: () => Promise<void>) => void;
@@ -61,6 +61,19 @@ export class CatalogService {
         resourceId: id, ipAddress: actor.ipAddress,
       });
       actor.log.info({ event: 'recipe_updated', recipeId: id }, 'recipe updated');
+    });
+    return { recipe };
+  }
+
+  async verifyRecipe(actor: ActorContext, id: string, input: VerifyRecipeInput): Promise<{ recipe: RecipeDto }> {
+    requireActorRole(actor, ['owner', 'admin']);
+    const recipe = await this.persistence.verifyRecipe(actor.shop.id, id, input);
+    await this.committed(async () => {
+      await this.audit.record(actor, {
+        shopId: actor.shop.id, userId: actor.user.id, eventType: 'RECIPE_UPDATED',
+        resourceId: id, ipAddress: actor.ipAddress, metadata: { action: 'verify' },
+      });
+      actor.log.info({ event: 'recipe_verified', recipeId: id }, 'recipe verified');
     });
     return { recipe };
   }

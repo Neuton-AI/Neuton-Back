@@ -168,3 +168,5 @@ export type CreateRecipeInput = z.infer<typeof recipeSchema>;
 export type RecipePatchInput = z.infer<typeof recipePatchSchema>;
 export type RecipeIngredientInput = z.infer<typeof recipeIngredientSchema>;
 export type PreparedRecipeIngredient = Omit<RecipeIngredientInput, 'baseUnit'> & { baseUnit?: string | null };
+export const verifyRecipeSchema = z.object({ ingredients: z.array(recipeIngredientSchema).min(1).optional() });
+export type VerifyRecipeInput = z.infer<typeof verifyRecipeSchema>;
