@@ -291,6 +291,7 @@ const catalogCache = createCatalogCache({
 });
 
 export const CATALOG_RETRY_DELAY_MS = 60_000;
+export const SEARCH_MIN_SCORE = 2500;
 
 export function createProductSearch(
   getItems: (chain: PriceChain) => Promise<FoundItem[]>,
@@ -306,7 +307,7 @@ export function createProductSearch(
         const items = await getItems(chain);
         return items
           .map((item) => ({ item, score: scoreMatch(item.ItemName, item.ItemCode, item.ManufactureName, query) }))
-          .filter(({ score }) => score > 0)
+          .filter(({ score }) => score > SEARCH_MIN_SCORE)
           .sort((a, b) => b.score - a.score)
           .slice(0, limitPerChain)
           .map(({ item, score }) => ({ chain, score, ...item }));

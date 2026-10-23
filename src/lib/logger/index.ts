@@ -1,4 +1,3 @@
-import type { FastifyBaseLogger } from 'fastify';
 import { env } from '../../env.js';
 import {
   createTransport,
@@ -23,21 +22,10 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
 };
 
 /** Loki stream label + every line's `environment` field. */
-const environment = env.LOG_ENV ?? (env.NODE_ENV === 'production' ? 'production' : 'development');
+const environment =
+  env.LOG_ENV ?? (env.NODE_ENV === 'production' ? 'production' : 'development');
 /** Every line's `version` field (release identifier, issue #99 DOD). */
 const version = env.APP_VERSION ?? env.GIT_SHA ?? 'dev';
-
-/**
- * Maps Fastify/pino level strings onto the facade's levels: `silent` turns
- * the logger off, `trace` degrades to `debug` (the facade has no trace level),
- * anything unknown turns the logger off rather than crashing a request.
- */
-function normalizeLevel(value: string): LogLevel | null {
-  if (value === 'silent') return null;
-  if (value === 'trace') return 'debug';
-  if (value in LEVEL_ORDER) return value as LogLevel;
-  return null;
-}
 
 function isLogMeta(value: unknown): value is LogMeta {
   return (
@@ -66,7 +54,12 @@ function normalizeArgs(first: unknown, second: unknown): NormalizedArgs {
     };
   }
   return {
-    message: typeof first === 'string' ? first : typeof second === 'string' ? second : undefined,
+    message:
+      typeof first === 'string'
+        ? first
+        : typeof second === 'string'
+          ? second
+          : undefined,
     meta: isLogMeta(first) ? first : isLogMeta(second) ? second : {},
   };
 }
@@ -88,7 +81,7 @@ export class LoggerImpl implements Logger {
     this.#minLevel = minLevel;
   }
 
-  /** `null` means silenced (Fastify's `silent` level). */
+  /** `null` silences this logger. */
   get level(): LogLevel | null {
     return this.#minLevel;
   }
@@ -98,9 +91,7 @@ export class LoggerImpl implements Logger {
   }
 
   /**
-   * Write path shared with the Fastify adapter. `first`/`second` may be any of
-   * the accepted call shapes; `write` is public because the adapter forwards
-   * loosely-typed Fastify log calls into it.
+   * Normalize supported call shapes before writing to the transport.
    */
   write(level: LogLevel, first?: unknown, second?: unknown): void {
     if (this.#minLevel === null) return;
@@ -151,68 +142,25 @@ export class LoggerImpl implements Logger {
 
   /** Shares the transport; `context` is merged over the parent's. */
   child(context: LogContext): LoggerImpl {
-    return new LoggerImpl(this.transport, { ...this.context, ...context }, this.#minLevel, this.dynamic);
+    return new LoggerImpl(
+      this.transport,
+      { ...this.context, ...context },
+      this.#minLevel,
+      this.dynamic,
+    );
   }
 
   /**
    * Returns a copy whose context provider is re-evaluated on every write.
-   * Fastify request loggers use this so fields populated mid-request (after
-   * auth) appear without rebuilding the logger per log line.
+   * Fields populated later can appear without rebuilding the logger per line.
    */
   withDynamic(dynamic: () => LogContext): LoggerImpl {
-    return new LoggerImpl(this.transport, this.context, this.#minLevel, dynamic);
-  }
-}
-
-/**
- * Adapter between the facade's LogFn and Fastify's logger contract. Also
- * satisfies `validateLogger` (info/error/debug/fatal/warn/trace/child);
- * `trace` and `silent` exist purely for that contract — trace degrades to
- * debug via level normalization and silent is a no-op.
- */
-export class FastifyLoggerAdapter implements FastifyBaseLogger {
-  constructor(private readonly logger: LoggerImpl) {}
-
-  get level(): LogLevel | 'silent' {
-    return this.logger.level ?? 'silent';
-  }
-
-  set level(value: string) {
-    this.logger.level = normalizeLevel(value);
-  }
-
-  info(first?: unknown, second?: unknown): void {
-    this.logger.write('info', first, second);
-  }
-
-  error(first?: unknown, second?: unknown): void {
-    this.logger.write('error', first, second);
-  }
-
-  debug(first?: unknown, second?: unknown): void {
-    this.logger.write('debug', first, second);
-  }
-
-  fatal(first?: unknown, second?: unknown): void {
-    this.logger.write('fatal', first, second);
-  }
-
-  warn(first?: unknown, second?: unknown): void {
-    this.logger.write('warn', first, second);
-  }
-
-  /** No trace level in this architecture (issue #99): absorbed as debug. */
-  trace(first?: unknown, second?: unknown): void {
-    this.logger.write('debug', first, second);
-  }
-
-  /** Fastify/pino compatibility only: writes nothing. */
-  silent(): void {
-    // intentionally empty
-  }
-
-  child(bindings: LogContext, _options?: unknown): FastifyBaseLogger {
-    return new FastifyLoggerAdapter(this.logger.child(bindings));
+    return new LoggerImpl(
+      this.transport,
+      this.context,
+      this.#minLevel,
+      dynamic,
+    );
   }
 }
 
@@ -226,7 +174,11 @@ class LazyTransport implements Transport {
 
   constructor(private readonly create: () => Transport) {}
 
-  write(level: LogLevel, message: string | undefined, meta: Record<string, unknown>): void {
+  write(
+    level: LogLevel,
+    message: string | undefined,
+    meta: Record<string, unknown>,
+  ): void {
     (this.#target ??= this.create()).write(level, message, meta);
   }
 
@@ -260,22 +212,19 @@ class LoggerFactoryImpl implements LoggerFactory {
     if (Object.keys(context).length === 0) {
       const cached = this.#roots.get(service);
       if (cached) return cached;
-      const root = new LoggerImpl(this.#transportFor(service), {}, this.#minLevel());
+      const root = new LoggerImpl(
+        this.#transportFor(service),
+        {},
+        this.#minLevel(),
+      );
       this.#roots.set(service, root);
       return root;
     }
-    return new LoggerImpl(this.#transportFor(service), context, this.#minLevel());
-  }
-
-  createFastifyLogger(service: LoggerService = 'api'): FastifyBaseLogger {
-    return new FastifyLoggerAdapter(this.create(service));
-  }
-
-  createRequestLogger(
-    provider: () => LogContext,
-    service: LoggerService = 'api',
-  ): FastifyBaseLogger {
-    return new FastifyLoggerAdapter(this.create(service).withDynamic(provider));
+    return new LoggerImpl(
+      this.#transportFor(service),
+      context,
+      this.#minLevel(),
+    );
   }
 
   async shutdown(): Promise<void> {
@@ -294,7 +243,11 @@ class LoggerFactoryImpl implements LoggerFactory {
     const existing = this.#transports.get(service);
     if (existing) return existing;
     const transport = new LazyTransport(() =>
-      createTransport(resolveTransportKind(), { service, environment, version }),
+      createTransport(resolveTransportKind(), {
+        service,
+        environment,
+        version,
+      }),
     );
     this.#transports.set(service, transport);
     return transport;

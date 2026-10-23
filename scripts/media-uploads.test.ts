@@ -198,3 +198,12 @@ test('an active stable queue job is not duplicated or restarted', async () => {
   } as never, { uploadId: UPLOAD, kind: 'receipt' } as MediaJobData);
   assert.equal(result.jobId, `upload-${UPLOAD}`);
 });
+
+test('ungrouped jobs are rejected before queue, database, or extraction effects', async () => {
+  const data = { kind: 'receipt', shopId: SHOP } as MediaJobData;
+  const forbidden = async () => { throw new Error('Queue must not be touched'); };
+  await assert.rejects(enqueueMediaJobOn({ getJob: forbidden, add: forbidden } as never, data), /Grouped uploadId is required/);
+  const db = new FakeDb();
+  await assert.rejects(runJob(data, { id: 'legacy' } as Job<MediaJobData>, { db } as unknown as WorkerDeps), /Legacy upload jobs are no longer supported/);
+  assert.equal(db.calls.length, 0);
+});

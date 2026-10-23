@@ -6,3 +6,4 @@ export * from './orders.js';
 export * from './uploads.js';
 export * from './sync.js';
 export * from './adjustments.js';
+export * from './storage-cleanup.js';

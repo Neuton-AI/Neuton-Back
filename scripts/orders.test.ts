@@ -24,6 +24,26 @@ import { orderItemRecipeName } from '../src/db/schema/index.js';
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const ORDER_ID = '44444444-4444-4444-4444-444444444444';
 
+// Database row fixtures include all fields emitted by the shared explicit DTO mapper.
+const orderRow = {
+  id: ORDER_ID,
+  shopId: SHOP_ID,
+  userId: null,
+  orderNumber: 1,
+  customerName: null,
+  orderDate: new Date('2026-01-01T00:00:00.000Z'),
+  destinationAddress: null,
+  deliveryDistanceKm: '0.00',
+  deliveryFee: '0.00',
+  appliedProfitMargin: null,
+  totalCost: '4.00',
+  totalAmount: '10.00',
+  documentUrl: null,
+  status: 'processing',
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  deletedAt: null,
+};
+
 const recipeRow = {
   id: RECIPE_ID,
   name: 'Focaccia',
@@ -69,7 +89,7 @@ test('POST /orders always creates processing orders, even when the client sends 
   const h = await harness('owner', {
     ...recipeResponses(),
     'update:shops': [[{ lastOrderNumber: 1 }]],
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
+    'insert:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
     'insert:orderItems': [[]],
   });
   try {
@@ -93,7 +113,7 @@ test('POST /orders always creates processing orders, even when the client sends 
 test('GET /orders returns status and supports ?status filter', async () => {
   const h = await harness('owner', {
     'select:orders': [
-      [{ id: ORDER_ID, status: 'processing', totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
+      [{ ...orderRow, id: ORDER_ID, status: 'processing', totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
       [{ count: 1 }],
     ],
   });
@@ -122,8 +142,8 @@ test('GET /orders rejects an unknown status with 400', async () => {
 test('POST /orders/:id/verify moves processing -> delivered for any shop member', async () => {
   for (const role of ['owner', 'admin', 'member']) {
     const h = await harness(role, {
-      'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
-      'update:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered' }]],
+      'select:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
+      'update:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'delivered' }]],
     });
     try {
       const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
@@ -139,7 +159,7 @@ test('POST /orders/:id/verify moves processing -> delivered for any shop member'
 
 test('POST /orders/:id/verify rejects an already-delivered order with 400', async () => {
   const h = await harness('member', {
-    'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', deletedAt: null }]],
+    'select:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', deletedAt: null }]],
   });
   try {
     const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);
@@ -157,7 +177,7 @@ test('POST /orders/:id/verify rejects an already-delivered order with 400', asyn
 
 test('POST /orders/:id/verify reports a concurrent transition as 409', async () => {
   const h = await harness('member', {
-    'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
+    'select:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', deletedAt: null }]],
     // Cancellation or another verification wins after the initial read.
     'update:orders': [[]],
   });
@@ -197,6 +217,7 @@ test('GET /orders/:id returns status and the invoice number', async () => {
     'select:orders': [
       [
         {
+          ...orderRow,
           id: ORDER_ID,
           shopId: SHOP_ID,
           status: 'delivered',
@@ -225,7 +246,7 @@ test('POST /orders freezes the recipe name onto every line as it is created', as
   const h = await harness('owner', {
     ...recipeResponses(),
     'update:shops': [[{ lastOrderNumber: 1 }]],
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
+    'insert:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
     'insert:orderItems': [[]],
   });
   try {
@@ -251,7 +272,7 @@ test('POST /orders freezes the recipe name onto every line as it is created', as
 test('GET /orders/:id labels lines from the snapshot first, recipes only as a fallback', async () => {
   const h = await harness('owner', {
     'select:orders': [
-      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
+      [{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'delivered', totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
     ],
     'select:orderItems': [
       [{ id: '77777777-7777-7777-7777-777777777777', recipeId: RECIPE_ID, name: 'Focaccia', quantity: '2.000', unitCost: '6.00', unitPrice: '9.00' }],
@@ -288,7 +309,7 @@ test('POST /orders claims the next per-shop number inside the creation transacti
   const h = await harness('owner', {
     ...recipeResponses(),
     'update:shops': [[{ lastOrderNumber: 7 }]],
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 7 }]],
+    'insert:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 7 }]],
     'insert:orderItems': [[]],
   });
   try {
@@ -329,6 +350,7 @@ test('GET /orders exposes the invoice number and falls back to it for ties', asy
     'select:orders': [
       [
         {
+          ...orderRow,
           id: ORDER_ID,
           orderNumber: 42,
           status: 'processing',
@@ -360,7 +382,7 @@ test('GET /orders exposes the invoice number and falls back to it for ties', asy
 test('GET /orders accepts ?status=cancelled so a void stays findable', async () => {
   const h = await harness('owner', {
     'select:orders': [
-      [{ id: ORDER_ID, status: 'cancelled', orderNumber: 42, totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
+      [{ ...orderRow, id: ORDER_ID, status: 'cancelled', orderNumber: 42, totalAmount: '10.00', deliveryFee: '0', totalCost: '4.00' }],
       [{ count: 1 }],
     ],
   });
@@ -379,9 +401,9 @@ test('GET /orders accepts ?status=cancelled so a void stays findable', async () 
 test('DELETE /orders/:id cancels the order so its number is never freed', async () => {
   const h = await harness('owner', {
     'select:orders': [
-      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 42, deletedAt: null }],
+      [{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 42, deletedAt: null }],
     ],
-    'update:orders': [[{ id: ORDER_ID, status: 'cancelled', orderNumber: 42 }]],
+    'update:orders': [[{ ...orderRow, id: ORDER_ID, status: 'cancelled', orderNumber: 42 }]],
   });
   try {
     const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
@@ -403,7 +425,7 @@ test('DELETE /orders/:id cancels the order so its number is never freed', async 
 test('DELETE /orders/:id answers the same way on an order that is already cancelled', async () => {
   const h = await harness('owner', {
     'select:orders': [
-      [{ id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', orderNumber: 42, deletedAt: null }],
+      [{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', orderNumber: 42, deletedAt: null }],
     ],
   });
   try {
@@ -431,7 +453,7 @@ test('DELETE /orders/:id reads a missing or cross-shop order as 404', async () =
 
 test('POST /orders/:id/verify cannot revive a cancelled order', async () => {
   const h = await harness('member', {
-    'select:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', deletedAt: null }]],
+    'select:orders': [[{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', deletedAt: null }]],
   });
   try {
     const { status, body } = await h.post(`/api/v1/orders/${ORDER_ID}/verify`);

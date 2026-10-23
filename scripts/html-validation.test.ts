@@ -21,6 +21,7 @@ import { buildOrdersApp, SHOP_ID } from './support/ordersApp.js';
 import { buildShopApp } from './support/shopApp.js';
 import { buildCatalogApp } from './support/catalogApp.js';
 import { buildReceiptsApp } from './support/receiptsApp.js';
+import type { Order } from '../src/db/schema/orders.js';
 
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const ORDER_ID = '44444444-4444-4444-4444-444444444444';
@@ -91,7 +92,24 @@ test('POST /orders stores plain text verbatim — the guard rejects, it never re
     ],
     'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '1.000', averageUnitCost: '2.00' }]],
     'update:shops': [[{ lastOrderNumber: 1 }]],
-    'insert:orders': [[{ id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 1 }]],
+    'insert:orders': [[{
+      id: ORDER_ID,
+      shopId: SHOP_ID,
+      userId: null,
+      status: 'processing',
+      orderNumber: 1,
+      customerName,
+      destinationAddress,
+      orderDate: new Date('2026-01-01T00:00:00.000Z'),
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      deletedAt: null,
+      deliveryDistanceKm: '0.00',
+      deliveryFee: '5.00',
+      appliedProfitMargin: '30.00',
+      totalCost: '3.63',
+      totalAmount: '10.18',
+      documentUrl: null,
+    } satisfies Order]],
     'insert:orderItems': [[]],
   });
   try {
@@ -190,12 +208,11 @@ test('POST /uploads/presign refuses an HTML originalFilename', async () => {
   try {
     const { status, body } = await post(h, '/api/v1/uploads/presign', {
       kind: 'receipt',
-      contentType: 'image/jpeg',
-      originalFilename: '<img src=x onerror=alert(2)>.jpg',
+      sources: [{ contentType: 'image/jpeg', byteSize: 1, originalFilename: '<img src=x onerror=alert(2)>.jpg' }],
     });
 
     assert.equal(status, 400);
-    assert.deepEqual(flaggedPaths(body), ['originalFilename']);
+    assert.deepEqual(flaggedPaths(body), ['sources']);
     assert.deepEqual(h.db.calls, [], 'nothing reaches the database');
   } finally {
     await h.close();

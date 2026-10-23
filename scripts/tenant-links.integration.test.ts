@@ -6,7 +6,7 @@ import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
-import { costRecipe } from '../src/routes/catalog.js';
+import { costRecipe } from '../src/modules/catalog/costing.js';
 import { recipes } from '../src/db/schema/index.js';
 import * as tables from '../src/db/schema/index.js';
 

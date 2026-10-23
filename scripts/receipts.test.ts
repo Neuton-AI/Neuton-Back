@@ -72,14 +72,13 @@ test('DELETE /receipts/:id hard-removes every status that has not been verified'
       assert.equal(body.ok, true);
       assert.deepEqual(
         h.db.callSequence(),
-        ['select:receipts', 'select:mediaUploads', 'delete:receipts'],
+        ['select:receipts', 'select:mediaUploads', 'insert:storageObjectDeletions', 'delete:receipts'],
         `${status}: one locked read, one delete, nothing else`,
       );
-      assert.deepEqual(
-        h.deleted,
-        [STORAGE_PATH],
-        `${status}: the uploaded object goes with the row`,
-      );
+      assert.deepEqual(h.deleted, [], 'storage cleanup is deferred durably');
+      const intent=h.db.onlyCallTo('insert','storageObjectDeletions');
+      assert.equal(intent.inTransaction,true);
+      assert.deepEqual((intent.values as {storagePath:string}[]).map(row=>row.storagePath),[STORAGE_PATH]);
     } finally {
       await h.close();
     }
@@ -121,7 +120,7 @@ test('DELETE /receipts/:id reads a receipt this shop does not own as 404', async
   }
 });
 
-test('DELETE /receipts/:id keeps the delete when the object cleanup fails', async () => {
+test('DELETE /receipts/:id commits deletion and durable cleanup without calling R2', async () => {
   const h = await harness(
     { 'select:receipts': [[{ id: RECEIPT_ID, status: 'unverified', storagePath: STORAGE_PATH }]] },
     { deleteFails: true },
@@ -129,11 +128,12 @@ test('DELETE /receipts/:id keeps the delete when the object cleanup fails', asyn
   try {
     const { status, body } = await h.del(`/api/v1/receipts/${RECEIPT_ID}`);
 
-    // The row is already gone: reporting a failure would only invite a retry
-    // that now 404s, while the object leak stays either way.
+    // The committed intent survives the receipt row, and retries independently
+    // of the storage service's availability.
     assert.equal(status, 200, 'an unreachable bucket must not resurrect the receipt');
     assert.equal(body.ok, true);
-    assert.deepEqual(h.deleted, [STORAGE_PATH], 'the cleanup was attempted');
+    assert.deepEqual(h.deleted, [], 'request never performs irreversible storage I/O');
+    assert.equal(h.db.onlyCallTo('insert','storageObjectDeletions').inTransaction,true);
     assert.equal(h.db.callsTo('delete', 'receipts').length, 1);
   } finally {
     await h.close();

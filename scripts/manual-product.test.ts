@@ -1,11 +1,13 @@
 import './support/testEnv.js';
+import { inventoryRow } from './support/inventoryFixture.js';
+import { recipeRow } from './support/recipeFixture.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
 import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
 import { manualProductSchema, prepareManualProduct } from '../src/lib/manualProduct.js';
 import { ingredientLineCost } from '../src/lib/pricing.js';
-import { costRecipe } from '../src/routes/catalog.js';
+import { costRecipe } from '../src/modules/catalog/costing.js';
 import type { Database } from '../src/db/client.js';
 import type { recipes } from '../src/db/schema/index.js';
 
@@ -32,7 +34,7 @@ test('manual package prices use recipe conversions and preserve a legitimate zer
 
 test('manual product endpoint creates shop-owned pricing with no stock or shared cache writes', async () => {
   const h = await buildCatalogApp();
-  const db = new FakeDb({ 'select:recipes': [[{ id: ID }]], 'insert:inventoryItems': [[{ id: PRODUCT_ID }]] });
+  const db = new FakeDb({ 'select:recipes': [[{ id: ID }]], 'insert:inventoryItems': [[inventoryRow({ id: PRODUCT_ID })]] });
   h.use({ db: db as never, deleteObject: async () => {} });
   try {
     const response = await h.app.inject({ method: 'POST', url: `/api/v1/recipes/${ID}/manual-product`, payload: input });
@@ -73,12 +75,12 @@ test('manual product guards validation, ownership, permissions, incompatible uni
 
 test('a saved manual product link retains recipe quantities and produces the correct recipe costing', async () => {
   const h = await buildCatalogApp();
-  const product = { ...prepareManualProduct(input), id: PRODUCT_ID };
+  const product = inventoryRow({ ...prepareManualProduct(input), id: PRODUCT_ID });
   const db = new FakeDb({
     'select:recipes': [[{ id: ID }], [{ id: ID }]],
     'insert:inventoryItems': [[product]],
     'select:inventoryItems': [[{ id: PRODUCT_ID }]],
-    'update:recipes': [[{ id: ID }]],
+    'update:recipes': [[recipeRow({ id: ID })]],
   });
   h.use({ db: db as never, deleteObject: async () => {} });
   try {

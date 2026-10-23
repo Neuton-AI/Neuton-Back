@@ -717,6 +717,7 @@ test('recipe: retrying over an existing row clears a stale failure and resolves 
 
 const ORDER = {
   id: 'order-1',
+  status: 'processing',
   shopId: SHOP_ID,
   customerName: null,
   destinationAddress: null,
@@ -983,8 +984,22 @@ test('terminal failure: a failing update is swallowed so the job still reports i
 // runJob
 // ---------------------------------------------------------------------------
 
+function groupedHarness(options: Parameters<typeof harness>[0] = {}): Harness {
+  const h = harness(options);
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  h.jobData.uploadId = id;
+  const documentId = h.jobData.orderId ?? 'document-1';
+  const upload = { id, shopId: SHOP_ID, kind: h.jobData.kind, queuedAt: new Date(), processedAt: null,
+    receiptId: h.jobData.kind === 'receipt' ? documentId : null,
+    recipeId: !['receipt','order'].includes(h.jobData.kind) ? documentId : null,
+    orderId: h.jobData.kind === 'order' ? documentId : null,
+    sources: [{sourceId:id,storagePath:STORAGE_PATH,contentType:'image/jpeg',byteSize:2,originalFilename:'receipt.jpg'}] };
+  h.db.prepend('select','mediaUploads',[upload]).prepend('select','mediaUploads',[upload]).prepend('select','mediaUploads',[upload]);
+  h.db.prepend('select', h.jobData.kind === 'receipt' ? 'receipts' : h.jobData.kind === 'order' ? 'orders' : 'recipes', [{id:documentId}]);
+  return h;
+}
 test('runJob: routes every media kind to its handler', async () => {
-  const orderRun = harness({
+  const orderRun = groupedHarness({
     responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }] } },
@@ -994,7 +1009,7 @@ test('runJob: routes every media kind to its handler', async () => {
   assert.equal(orderRun.db.callsTo('insert', 'orderItems').length, 0, 'an unmatched catalog writes no lines');
 
   // `product` shares the recipe pipeline.
-  const productRun = harness({
+  const productRun = groupedHarness({
     responses: { 'select:shops': [[]], 'insert:recipes': [[{ id: 'rec-1', name: 'Bread' }]] },
     data: { kind: 'product' },
     extractions: { recipe: { ...RECIPE, ingredients: [] } },
@@ -1002,10 +1017,10 @@ test('runJob: routes every media kind to its handler', async () => {
   await runJob(productRun.jobData, productRun.job, productRun.deps);
   assert.equal(productRun.db.onlyCallTo('insert', 'recipes').inTransaction, true);
 
-  const recipeRun = harness({ data: { kind: 'recipe' }, extractions: { recipe: null } });
+  const recipeRun = groupedHarness({ data: { kind: 'recipe' }, extractions: { recipe: null } });
   await assert.rejects(() => runJob(recipeRun.jobData, recipeRun.job, recipeRun.deps), /recipe extraction/);
 
-  const receiptRun = harness({
+  const receiptRun = groupedHarness({
     responses: { 'select:receipts': [[]] },
     extractions: { receipt: receipt() },
   });
@@ -1014,7 +1029,7 @@ test('runJob: routes every media kind to its handler', async () => {
 });
 
 test('runJob: an unknown kind is rejected', async () => {
-  const { deps, job, jobData } = harness();
+  const { deps, job, jobData } = groupedHarness();
   // The kind is deliberately off-union: the route must reject it at runtime.
   const bogus = { ...jobData, kind: 'invoice' } as unknown as MediaJobData;
 
@@ -1023,7 +1038,7 @@ test('runJob: an unknown kind is rejected', async () => {
 
 test('runJob: a permanent upstream failure stops retrying and records the receipt', async () => {
   const error = Object.assign(new Error('quota'), { status: 402 });
-  const { db, deps, job, jobData } = harness();
+  const { db, deps, job, jobData } = groupedHarness();
   deps.extractReceipt = async () => {
     throw error;
   };
@@ -1044,7 +1059,7 @@ test('runJob: a permanent upstream failure stops retrying and records the receip
 
 test('runJob: a transient failure is rethrown untouched and records nothing', async () => {
   const error = new Error('ECONNRESET');
-  const { db, deps, job, jobData } = harness();
+  const { db, deps, job, jobData } = groupedHarness();
   deps.extractReceipt = async () => {
     throw error;
   };
@@ -1056,7 +1071,7 @@ test('runJob: a transient failure is rethrown untouched and records nothing', as
 
 test('runJob: a model-not-found 404 advances to the next model instead of killing the job', async () => {
   const error = Object.assign(new Error('models/x is not found for API version v1beta'), { status: 404 });
-  const { db, deps, job, jobData } = harness();
+  const { db, deps, job, jobData } = groupedHarness();
   deps.extractReceipt = async () => {
     throw error;
   };
@@ -1067,7 +1082,7 @@ test('runJob: a model-not-found 404 advances to the next model instead of killin
 });
 
 test('runJob: a permanent failure on a recipe job records failure on the recipe row', async () => {
-    const { db, deps, job, jobData } = harness({ data: { kind: 'recipe' } });
+    const { db, deps, job, jobData } = groupedHarness({ data: { kind: 'recipe' } });
     deps.extractRecipe = async () => {
       throw Object.assign(new Error('unauthorized'), { status: 401 });
     };
@@ -1130,4 +1145,37 @@ test('order: unresolved ingredient aborts before replacing historical snapshots'
   assert.equal(db.callsTo('delete', 'orderItems').length, 0);
   assert.equal(db.callsTo('insert', 'orderItems').length, 0);
   assert.equal(db.callsTo('update', 'orders').length, 0);
+});
+
+test('late order extraction cannot replace approved or cancelled snapshots', async () => {
+  for (const status of ['delivered', 'cancelled']) {
+    const h = harness({
+      responses: {
+        'select:orders': [[{ ...ORDER, status }]],
+        'select:recipes': [[{ ...CATALOG_RECIPE }]],
+        'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50' }]],
+        'select:recipeIngredients': [
+          [
+            {
+              recipeId: CATALOG_RECIPE.id,
+              quantity: '1',
+              averageUnitCost: '1',
+            },
+          ],
+        ],
+      },
+      data: { kind: 'order', orderId: ORDER.id },
+      extractions: {
+        order: {
+          customerName: 'Model',
+          destinationAddress: null,
+          items: [{ name: 'Focaccia', quantity: 1, unitPrice: 1 }],
+        },
+      },
+    });
+    await processOrderDocument(h.deps, h.jobData, h.job);
+    assert.equal(h.db.callsTo('delete', 'orderItems').length, 0);
+    assert.equal(h.db.callsTo('insert', 'orderItems').length, 0);
+    assert.equal(h.db.callsTo('update', 'orders').length, 0);
+  }
 });

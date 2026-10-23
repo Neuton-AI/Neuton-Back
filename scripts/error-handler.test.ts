@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import type { FastifyInstance } from 'fastify';
+import {httpClient} from './support/httpClient.js';
 import { buildApp } from '../src/app.js';
 
 /**
@@ -23,11 +23,10 @@ import { buildApp } from '../src/app.js';
  * probe would pass against the unfixed code and prove nothing.
  */
 
-let app: FastifyInstance;
+let app:ReturnType<typeof httpClient>;
 
 before(async () => {
-  app = await buildApp({ logger: false });
-  await app.ready();
+  app = httpClient(await buildApp({ logger: false }));
 });
 
 after(async () => {

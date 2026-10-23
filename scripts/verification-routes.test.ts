@@ -1,4 +1,5 @@
 import './support/testEnv.js';
+import { recipeRow } from './support/recipeFixture.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
@@ -19,7 +20,7 @@ async function catalog(responses: Record<string, unknown[]> = {}, role = 'owner'
 test('recipe verification saves corrections and verifies in one transaction', async () => {
   const h = await catalog({
     'select:recipes': [[{ id: ID, status: 'unverified' }]],
-    'update:recipes': [[{ id: ID, status: 'verified' }]],
+    'update:recipes': [[recipeRow({ id: ID, status: 'verified' })]],
   });
   try {
     const response = await h.app.inject({
@@ -27,7 +28,7 @@ test('recipe verification saves corrections and verifies in one transaction', as
       payload: { ingredients: [INGREDIENT] },
     });
     assert.equal(response.statusCode, 200);
-    assert.deepEqual(response.json(), { recipe: { id: ID, status: 'verified' } });
+    assert.deepEqual(response.json(), { recipe: JSON.parse(JSON.stringify(recipeRow({ id: ID, status: 'verified' }))) });
     assert.equal(h.db.onlyCallTo('update', 'recipes').set?.status, 'verified');
     assert.equal(h.db.onlyCallTo('delete', 'recipeIngredients').inTransaction, true);
     const insert = h.db.onlyCallTo('insert', 'recipeIngredients');
@@ -43,7 +44,7 @@ test('recipe verification saves corrections and verifies in one transaction', as
 test('recipe verification without corrections preserves ingredients', async () => {
   const h = await catalog({
     'select:recipes': [[{ id: ID, status: 'unverified' }]],
-    'update:recipes': [[{ id: ID, status: 'verified' }]],
+    'update:recipes': [[recipeRow({ id: ID, status: 'verified' })]],
   });
   try {
     const response = await h.app.inject({
@@ -135,7 +136,7 @@ test('receipt verification uses its own route and preserves corrected source uni
 test('recipe verification retains normalized supermarket ingredient corrections', async () => {
   const h = await catalog({
     'select:recipes': [[{ id: ID, status: 'unverified' }]],
-    'update:recipes': [[{ id: ID, status: 'verified' }]],
+    'update:recipes': [[recipeRow({ id: ID, status: 'verified' })]],
   });
   try {
     const response = await h.app.inject({

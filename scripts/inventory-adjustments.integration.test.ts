@@ -24,7 +24,7 @@ test('stock batches rollback, serialize retries, reject payload reuse and foreig
     await connection`INSERT INTO inventory_items(id,shop_id,current_quantity) VALUES (${first},${SHOP_ID},10),(${second},${SHOP_ID},10),(${other},${otherShop},10)`;
     const database = drizzle(connection, { schema: tables });
     h.use({ db: database as never, deleteObject: async () => {} });
-    const send = (adjustments: { inventoryItemId: string; deltaQuantity: number }[], key?: string) => h.app.inject({
+    const send = (adjustments: { inventoryItemId: string; deltaQuantity: number }[], key: string = randomUUID()) => h.app.inject({
       method: 'POST', url: '/api/v1/inventory/adjust', payload: { adjustments }, headers: key ? { 'idempotency-key': key } : {},
     });
     const amounts = async () => Object.fromEntries((await connection`SELECT id,current_quantity FROM inventory_items`).map(row => [row.id, Number(row.current_quantity)]));
