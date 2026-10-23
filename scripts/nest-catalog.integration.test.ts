@@ -7,6 +7,10 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import request from 'supertest';
 import * as schema from '../src/db/schema/index.js';
 import { buildNestCatalogApp, SHOP_ID } from './support/nestCatalogApp.js';
+import { TEST_SHOP, USER_ID } from './support/catalogApp.js';
+import { CatalogService } from '../src/modules/catalog/catalog.service.js';
+import type { ActorContext } from '../src/modules/identity/contracts.js';
+import { LoggerImpl } from '../src/lib/logger/index.js';
 
 const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 
@@ -37,7 +41,8 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
       (${SHOP_ID},'No threshold','flour','kg','g',1000,0.01,0,null,true),
       (${SHOP_ID},'Inactive','flour','kg','g',1000,0.01,0,1,false),
       (${foreignShop},'Foreign','flour','kg','g',1000,0.01,0,1,true)`;
-    app = await buildNestCatalogApp(drizzle(connection, { schema }), 'member');
+    const database = drizzle(connection, { schema });
+    app = await buildNestCatalogApp(database, 'member');
     const get = (path: string) => request(app!.app.getHttpServer()).get(`/api/v1${path}`)
       .set({ authorization: 'Bearer test', 'x-shop-id': SHOP_ID });
     const categories = await get('/categories');
@@ -81,6 +86,31 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     assert.deepEqual(draft.body.recipe.sources, []);
     assert.equal((await get(`/recipes/${inactiveId}`)).status, 200);
     assert.equal((await get(`/recipes/${foreignId}`)).status, 404);
+
+    const events: Record<string, unknown>[] = [];
+    const actor: ActorContext = {
+      shop: TEST_SHOP, user: { id: USER_ID, email: null, fullName: null, avatarUrl: null },
+      role: 'owner', requestId: 'category-test', traceId: 'category-test',
+      log: new LoggerImpl({ write: (_level, _message, meta) => { events.push(meta); } }, {}, 'debug'),
+    };
+    const service = app.app.get(CatalogService);
+    const effects: (() => Promise<void>)[] = [];
+    await assert.rejects(database.transaction(async tx => {
+      await service.inTransaction(tx, effect => effects.push(effect)).createCategory(actor, { name: 'Rollback category' });
+      assert.equal(events.length, 0);
+      throw new Error('rollback category transaction');
+    }), /rollback category transaction/);
+    assert.equal((await connection`SELECT count(*)::int AS count FROM categories WHERE name='Rollback category'`)[0]?.count, 0);
+    assert.equal(events.length, 0);
+    assert.equal(effects.length, 1);
+    effects.length = 0;
+    await database.transaction(async tx => {
+      await service.inTransaction(tx, effect => effects.push(effect)).createCategory(actor, { name: 'Committed category' });
+      assert.equal(events.length, 0);
+    });
+    assert.equal(events.length, 0);
+    for (const effect of effects) await effect();
+    assert.deepEqual(events.map(event => event.event), ['category_created']);
   } finally {
     await app?.close();
     await connection.unsafe(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`);

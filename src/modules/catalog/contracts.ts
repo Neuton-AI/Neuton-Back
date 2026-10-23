@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { htmlFree } from '../../lib/safeText.js';
+
+export const createCategorySchema = z.object({ name: htmlFree(z.string().trim().min(1).max(80)) });
+export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
 export const inventoryQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),

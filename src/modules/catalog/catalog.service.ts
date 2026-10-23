@@ -1,14 +1,35 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { toNumber } from '../../lib/money.js';
-import { CatalogPersistence } from './catalog.persistence.js';
+import { CatalogPersistence, type CatalogTransaction } from './catalog.persistence.js';
 import { costRecipe } from './costing.js';
-import type { CategoryDto, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+import type { CategoryDto, CreateCategoryInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+
+export const CATALOG_COMMIT_EFFECTS = Symbol('CATALOG_COMMIT_EFFECTS');
+export type CatalogAfterCommit = (effect: () => Promise<void>) => void;
 
 @Injectable()
 export class CatalogService {
-  constructor(@Inject(CatalogPersistence) private readonly persistence: CatalogPersistence) {}
+  constructor(
+    @Inject(CatalogPersistence) private readonly persistence: CatalogPersistence,
+    @Optional() @Inject(CATALOG_COMMIT_EFFECTS) private readonly afterCommit?: CatalogAfterCommit,
+  ) {}
+
+  inTransaction(transaction: CatalogTransaction, afterCommit: CatalogAfterCommit): CatalogService {
+    return new CatalogService(new CatalogPersistence(transaction), afterCommit);
+  }
+
+  async createCategory(actor: ActorContext, input: CreateCategoryInput): Promise<{ category: CategoryDto }> {
+    requireActorRole(actor, ['owner', 'admin']);
+    const category = await this.persistence.createCategory(actor.shop.id, input.name);
+    const report = async () => {
+      actor.log.info({ event: 'category_created', categoryId: category.id }, 'category created');
+    };
+    if (this.afterCommit) this.afterCommit(report);
+    else await report();
+    return { category };
+  }
 
   async categories(actor: ActorContext): Promise<{ categories: CategoryDto[] }> {
     requireActorRole(actor, ['owner', 'admin', 'member']);

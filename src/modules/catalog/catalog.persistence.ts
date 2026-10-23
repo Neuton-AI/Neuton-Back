@@ -3,12 +3,21 @@ import { Inject, Injectable } from '@nestjs/common';
 import { db, type Database } from '../../db/client.js';
 import { categories, recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
-import type { InventoryItem, Recipe } from '../../db/schema/catalog.js';
+import type { Category, InventoryItem, Recipe } from '../../db/schema/catalog.js';
 import { notFound } from '../../lib/errors.js';
 import type { CategoryDto, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto } from './contracts.js';
 
 export type CatalogReadDatabase = Pick<Database, 'select'>;
+export type CatalogTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type CatalogDatabase = Database | CatalogTransaction;
 export const CATALOG_DATABASE = Symbol('CATALOG_DATABASE');
+
+function mapCategory(category: Category): CategoryDto {
+  return {
+    id: category.id, shopId: category.shopId, name: category.name,
+    createdAt: category.createdAt.toISOString(),
+  };
+}
 
 function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
   return {
@@ -39,14 +48,18 @@ function mapRecipe(recipe: Recipe): RecipeDto {
 
 @Injectable()
 export class CatalogPersistence {
-  constructor(@Inject(CATALOG_DATABASE) readonly database: CatalogReadDatabase = db) {}
+  constructor(@Inject(CATALOG_DATABASE) readonly database: CatalogDatabase = db) {}
 
   async listCategories(shopId: string): Promise<CategoryDto[]> {
     const rows = await this.database.select().from(categories)
       .where(eq(categories.shopId, shopId)).orderBy(asc(categories.name));
-    return rows.map(row => ({
-      id: row.id, shopId: row.shopId, name: row.name, createdAt: row.createdAt.toISOString(),
-    }));
+    return rows.map(mapCategory);
+  }
+
+  async createCategory(shopId: string, name: string): Promise<CategoryDto> {
+    const [category] = await this.database.insert(categories).values({ shopId, name }).returning();
+    if (!category) throw new Error('Category insert returned no row');
+    return mapCategory(category);
   }
 
   async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {

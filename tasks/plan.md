@@ -130,7 +130,11 @@ test fail (source restored). Recipe list/detail/orderable reads now share the
 same services and explicit nested DTOs. All five read endpoints are implemented
 in Nest and delegated from Fastify; reviewed values and draft access are retained.
 Full regression suite: 394/394 passed with zero skips against disposable
-PostgreSQL; test typecheck and production build passed. Catalog writes are next.
+PostgreSQL; test typecheck and production build passed. Category creation is
+also migrated to the shared service and Nest adapter, with role/input rejection,
+explicit output mapping, and transaction-bound post-commit success logging.
+Focused regressions passed 17/17; PostgreSQL rollback/commit evidence, test
+typecheck, and build passed. Remaining recipe and inventory writes are next.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,

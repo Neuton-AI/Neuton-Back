@@ -3,7 +3,6 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { db } from '../db/client.js';
 import {
-  categories,
   inventoryItems,
   generalPrices,
   recipeIngredients,
@@ -20,7 +19,7 @@ import { defaultReceiptsDeps } from './receipts.js';
 import type { ActorContext } from '../modules/identity/contracts.js';
 import { CatalogService } from '../modules/catalog/catalog.service.js';
 import { CatalogPersistence } from '../modules/catalog/catalog.persistence.js';
-import { inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from '../modules/catalog/contracts.js';
+import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from '../modules/catalog/contracts.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
@@ -121,15 +120,8 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     catalogService(request).categories(catalogActor(request)));
 
   app.post('/categories', mutationGuards, async (request, reply) => {
-    const shop = currentShop(request);
-    const body = z
-      .object({ name: htmlFree(z.string().trim().min(1).max(80)) })
-      .parse(request.body);
-    const rows = await db
-      .insert(categories)
-      .values({ shopId: shop.id, name: body.name })
-      .returning();
-    return reply.code(201).send({ category: rows[0] });
+    const result = await catalogService(request).createCategory(catalogActor(request), createCategorySchema.parse(request.body));
+    return reply.code(201).send(result);
   });
 
   app.get('/recipes', guards, async (request) =>

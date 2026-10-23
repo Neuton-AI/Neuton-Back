@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import type { ShopRole } from '../../src/modules/identity/contracts.js';
-import type { CatalogReadDatabase } from '../../src/modules/catalog/catalog.persistence.js';
+import type { CatalogDatabase } from '../../src/modules/catalog/catalog.persistence.js';
 import { CATALOG_DATABASE, CatalogPersistence } from '../../src/modules/catalog/catalog.persistence.js';
 import { CatalogController } from '../../src/modules/catalog/catalog.controller.js';
 import { CatalogService } from '../../src/modules/catalog/catalog.service.js';
@@ -11,7 +11,7 @@ import { SHOP_ID, USER_ID, TEST_SHOP } from './catalogApp.js';
 
 export { SHOP_ID };
 
-export async function buildNestCatalogApp(database: CatalogReadDatabase, role: ShopRole = 'owner') {
+export async function buildNestCatalogApp(database: CatalogDatabase, role: ShopRole = 'owner') {
   @Module({
     imports: [IdentityModule.register({
       sessionVerifier: { verify: async () => ({ id: USER_ID, email: null }) },

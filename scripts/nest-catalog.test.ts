@@ -154,3 +154,27 @@ test('static orderable route includes costed out-of-stock recipes and excludes u
     await nest.close();
   }
 });
+
+test('category creation validates input, enforces roles, and maps the committed row explicitly', async () => {
+  const database = new FakeDb({ 'insert:categories': [[{ ...category, privateColumn: 'hidden' }]] });
+  const nest = await buildNestCatalogApp(database as unknown as Database);
+  const memberDatabase = new FakeDb();
+  const member = await buildNestCatalogApp(memberDatabase as unknown as Database, 'member');
+  try {
+    const invalid = await request(nest.app.getHttpServer()).post('/api/v1/categories').set(headers)
+      .send({ name: '<script>bad</script>' });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(database.calls, []);
+    assert.equal((await request(member.app.getHttpServer()).post('/api/v1/categories')
+      .set(headers).send({ name: 'Flour' })).status, 403);
+    assert.deepEqual(memberDatabase.calls, []);
+    const created = await request(nest.app.getHttpServer()).post('/api/v1/categories').set(headers)
+      .send({ name: '  Flour  ' });
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body, { category: JSON.parse(JSON.stringify(category)) });
+    assert.deepEqual(database.onlyCallTo('insert', 'categories').values, { shopId: SHOP_ID, name: 'Flour' });
+  } finally {
+    await nest.close();
+    await member.close();
+  }
+});
