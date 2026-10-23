@@ -14,10 +14,22 @@ authentication, BullMQ, and R2. Payments, coupons, and MCP are future consumers
 of the boundaries established here; implementing them is outside this mission.
 
 Primary tracker: [#178](https://github.com/Neuton-AI/Neuton-Back/issues/178).
-The original API audit work is tracked in
-[#172](https://github.com/Neuton-AI/Neuton-Back/issues/172). Its unfinished work
-is preserved at the end of this document; completing the framework migration
-does not automatically complete every remaining audit improvement.
+The original API audit is tracked separately in
+[#172](https://github.com/Neuton-AI/Neuton-Back/issues/172). This plan tracks the
+five phases of #178; remaining audit improvements are outside this migration.
+
+## Phase progress — #178
+
+- [x] Phase 1 — HTTP foundation, identity, and orders: Nest/Express setup, shared authorization, and order services implemented.
+- [x] Phase 2 — Catalog, inventory, receipts, and uploads: shared services, explicit DTOs, durable storage cleanup, and grouped uploads implemented.
+- [x] Phase 3 — Session, profile, shops, and analytics: feature services and Nest adapters implemented; camelCase queries and explicit boolean parsing enforced.
+- [x] Phase 4 — Sync and workers: explicit transaction orchestration and processing services implemented; replay, rollback, and user corrections preserved.
+- [x] Phase 5 — Production cutover and legacy removal: Nest/Express startup, mandatory stock keys, Fastify removal, final verification, and draft PRs completed.
+
+Final verification: **414/414 backend tests, zero skips**, including disposable
+PostgreSQL tests; production/test typechecks, build, and migration validation
+passed. Frontend: **457/457 tests**, lint, types, and build passed. Both PRs
+passed CI. Implementation is complete; merge and deployment have not occurred.
 
 ## Execution rules and current position
 
@@ -104,7 +116,7 @@ Established shared Nest/Express setup for security headers, CORS, explicit
 proxy trust, rate limits, body limits/raw bytes, safe error responses, request
 and trace correlation, and completion logging. Added tenant identity/actor
 resolution and shared order services for quote, list/detail, create, verify,
-and cancellation. Fastify orders now delegate to those services.
+and cancellation. The temporary Fastify delegates were removed in phase 5.
 
 Verified tenant/role rejection, explicit response serialization, invoice
 numbering, concurrent transitions, sync replay, and outer rollback. Fixed the
@@ -123,8 +135,8 @@ second full 389-test run was performed after the fixture-only correction.
 Completed on 2026-10-23, implemented and reviewed directly without agents.
 Catalog reads and writes, inventory mutations, manual/barcode pricing, recipe
 verification/deletion, receipt review/verification/deletion, and grouped upload
-transport now have shared services and Nest adapters. Production Fastify routes
-are thin delegates to the same operations; the runtime cutover remains phase 5.
+transport now have shared services and Nest adapters. Temporary Fastify delegates
+were removed when the runtime cutover completed in phase 5.
 User corrections and the unverified review workflow are preserved.
 
 Deletion now records deduplicated storage-cleanup intents in the domain
@@ -162,7 +174,7 @@ now rejected. Keep the cleanup table and pending intents if rolling back; do
 not drop durable work. Watch `storage_cleanup_retry`,
 `storage_cleanup_dispatch_failed`, and due/expired-lease backlog. This phase
 has not been merged or deployed. Mandatory stock keys (#174) and camelCase-only
-queries (#176) remain explicitly assigned to later phases.
+queries (#176) were subsequently completed in phases 5 and 3 respectively.
 
 The following completed slice descriptions retain the acceptance criteria:
 
@@ -177,7 +189,7 @@ The following completed slice descriptions retain the acceptance criteria:
    defaults, decimal/date mapping, omission of unknown database fields, zero
    prices, unresolved costs, out-of-stock orderable recipes, and existing
    costing/editor/manual-product regressions. Preserve behavior in this
-   extraction; the separately planned boolean-parsing fix is still pending.
+   extraction; the boolean-parsing fix was subsequently completed in phase 3.
 2. **Catalog writes.** Move category, recipe, ingredient, inventory, manual
    product, barcode-price, stock adjustment, and verification operations into
    services, in small independently tested commits. Reuse owned-link validation
@@ -313,8 +325,8 @@ as locally verified.
 
 ## Risks, rollback, and deferred audit work
 
-- **Partial cutover:** keep the known production entry point until every
-  feature is ready. A feature checkpoint is not a production cutover.
+- **Deployment:** the code cutover is complete. Deploy the tested backend and
+  coordinated client together after applying the required cleanup migration.
 - **Transaction escape:** services must use the caller's transaction for all
   related writes; test injected failure at the durable replay receipt boundary.
 - **Storage loss and deadlocks:** commit cleanup intent with deletion, retry it
@@ -328,64 +340,12 @@ as locally verified.
   redeploy the last tested artifact; coordinate client contract changes and
   cleanup-schema changes independently. Do not drop durable cleanup intent
   merely to roll back an HTTP framework deployment.
-- **Deferred #172 work:** boolean query parsing, pagination/batched costing,
+- **Deferred #172 work:** pagination/batched costing,
   complete sync traversal, broader mutation retry policy, public API
   documentation, and remaining error classification still need explicit slices
-  and evidence. Migration alone does not mark them done. No optional key or
-  legacy query alias proposal below overrides honi's settled decisions.
+  and evidence. Migration alone does not mark them done.
 
 Operational details and historical checkpoints remain in
 [docs/nestjs-migration.md](../docs/nestjs-migration.md). Update this mission plan
 when scope, dependencies, or completion state changes so work can resume without
 reconstructing the conversation.
-
----
-
-# Historical API/interface alignment plan — #172
-
-The following is retained as the original audit plan and progress record.
-Its compatibility proposals are historical; the settled decisions above take
-precedence. Its phase numbers refer to #172, not the five migration phases.
-
-## Current continuation: NestJS migration (#178)
-
-The approved migration extends this API alignment work. Execution phases and
-verification are recorded in [the migration plan](../docs/nestjs-migration.md).
-The original phase history below is retained. Later user decisions supersede
-its compatibility assumptions: stock keys are mandatory (#174), legacy uploads
-are removed (#175), query names use camelCase without aliases (#176), and the
-existing extraction/review flow is sufficient with user input taking precedence
-(#173, closed). These supersede the earlier optional-key and alias proposals.
-
-Tasks tracked in [GitHub #172](https://github.com/Neuton-AI/Neuton-Back/issues/172). The audit report is the specification; preserve existing client wire contracts while fixing defects.
-
-## Ordered phases
-
-1. Correctness: atomic/replay-safe stock batches, atomic order transitions, validated model responses, and tenant-owned category/inventory links. Verify rollback, concurrent duplicates, payload mismatch, transition races, malformed model output, and two-tenant rejection.
-2. Boundary/cleanup: explicit boolean query parsing and durable post-commit object deletion. Verify false/invalid query flags and outer transaction rollback.
-3. Contracts: explicit service inputs/outputs and public response schemas, retaining serialized fields/types. Verify representative HTTP contracts and typechecks.
-4. Collections: additive pagination and batched recipe costing; coordinated sync chunking without losing tombstones. Verify stable page boundaries and complete sync traversal.
-5. Retry policy: document every mutation, fill non-idempotent create/legacy gaps, define in-flight waits and retention. Verify retry/unknown outcome behavior.
-6. Error/docs: classify known conflicts, normalize correlation, generate API docs and compatibility checks. Verify stable error codes and contract diffs.
-7. Naming: additive aliases and documented exceptions; no breaking enum/field renames. Verify old/new inputs and response compatibility.
-
-Each phase depends on the previous phase. Within phase 1, each independent correctness fix is a separately tested slice. Run focused regression tests per slice and repository verification at checkpoints. Real database tests must use an explicitly configured disposable local database. Never migrate the developer's configured database.
-
-## Decisions and risks
-
-- Existing callers may omit retry identities. Keep old requests accepted but document unsafe retries; accept a durable client key for retry-safe stock changes.
-- Retain retry receipts until the shop is deleted, matching the existing durable synchronization model.
-- Tenant ownership checks belong in the shared write boundary, under locks so concurrent deletes cannot invalidate validation before the write.
-- Keep this ticket's branch separate from the previously audited branch; base is local `origin/main`, matching the audited commit.
-- Do not claim phase completion until its tests and verification pass. Database migrations are delivered as forward-only files; production application is outside this task.
-
-## Progress
-
-- [x] Ticket #172 created; branch `fix/B/n172-api-interface-alignment` opened.
-- [x] Phase 1 — 371 tests passed, zero skips; typechecks/build/migration validation passed.
-- [ ] Phase 2
-- [ ] Phase 3
-- [ ] Phase 4
-- [ ] Phase 5
-- [ ] Phase 6
-- [ ] Phase 7
