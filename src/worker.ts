@@ -169,13 +169,22 @@ function startWorker(): void {
     'neuton vision worker ready',
   );
 
+  let stopping = false;
   const shutdown = async (signal: string) => {
+    if (stopping) return;
+    stopping = true;
     workerLogger.info(`${signal} received, closing worker`);
-    await worker.close();
-    await sqlClient.end({ timeout: 5 }).catch(() => {});
-    // Flushes the Loki worker's last batch before the process exits (issue #99).
-    await loggerFactory.shutdown();
-    process.exit(0);
+    const timer = setTimeout(() => process.exit(1), 15000);
+    timer.unref();
+    try {
+      await worker.close();
+      await sqlClient.end({ timeout: 5 });
+      await loggerFactory.shutdown();
+      clearTimeout(timer);
+      process.exit(0);
+    } catch {
+      process.exit(1);
+    }
   };
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));

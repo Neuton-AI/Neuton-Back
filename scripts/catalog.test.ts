@@ -131,7 +131,7 @@ test('DELETE /recipes/:id leaves a database failure that is not an FK refusal al
   const db = new FakeDb({
     'select:recipes': [[{ id: RECIPE_ID, storagePath: STORAGE_PATH }]],
   });
-  db.failOn('delete', 'recipes', Object.assign(new Error('connection terminated'), { code: 'XX000' }));
+  db.failOn('delete', 'recipes', Object.assign(new Error('unexpected internal database failure'), { code: 'XX000' }));
   const app = await buildCatalogApp();
   const deleted: string[] = [];
   app.use({ db: db as never, deleteObject: async (key) => { deleted.push(key); } });

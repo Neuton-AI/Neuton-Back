@@ -35,15 +35,6 @@ export interface AnalyticsDeps {
   now: () => Date;
 }
 
-declare module 'fastify' {
-  interface FastifyRequest {
-    /**
-     * Per-request override of `defaultAnalyticsDeps`. Production never sets it;
-     * it exists so the aggregations can be tested against scripted rows.
-     */
-    analyticsDeps?: AnalyticsDeps;
-  }
-}
 
 export const defaultAnalyticsDeps: AnalyticsDeps = {
   db,

@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createLoggerFactory, FastifyLoggerAdapter, LoggerImpl } from '../src/lib/logger/index.js';
+import { createLoggerFactory, LoggerImpl } from '../src/lib/logger/index.js';
 import type { LogLevel } from '../src/lib/logger/types.js';
 import type { Transport } from '../src/lib/logger/transports/index.js';
 
@@ -89,32 +89,31 @@ test('levels filter below the threshold; null silences; setLevel reopens', () =>
   assert.equal(lines.length, 2);
 });
 
-test('the Fastify adapter satisfies the logger contract and maps levels', () => {
+test('the logging facade retains call shapes and level controls', () => {
   const { transport, lines } = capture();
-  const adapter = new FastifyLoggerAdapter(new LoggerImpl(transport, {}, 'debug'));
+  const adapter = new LoggerImpl(transport, {}, 'debug');
 
   adapter.info('m', { a: 1 });
   assert.deepEqual(lines[0], { level: 'info', message: 'm', meta: { a: 1 } });
 
   assert.equal(adapter.level, 'debug');
-  adapter.level = 'trace';
-  assert.equal(adapter.level, 'debug');
 
-  adapter.level = 'silent';
+
+  adapter.level = null;
   adapter.error('dropped');
   assert.equal(lines.length, 1);
-  assert.equal(adapter.level, 'silent');
+  assert.equal(adapter.level, null);
 
   adapter.level = 'debug';
-  adapter.trace('absorbed as debug');
+  adapter.debug('debug resumed');
   assert.equal(lines[1]?.level, 'debug');
-  adapter.silent();
+
   assert.equal(lines.length, 2);
 });
 
 test('adapter children inherit bindings into every line', () => {
   const { transport, lines } = capture();
-  const adapter = new FastifyLoggerAdapter(new LoggerImpl(transport, {}, 'debug'));
+  const adapter = new LoggerImpl(transport, {}, 'debug');
 
   adapter.child({ reqId: 'req-1' }).info('m');
 

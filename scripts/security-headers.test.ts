@@ -1,8 +1,8 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import type { FastifyInstance } from 'fastify';
-import { buildApp } from '../src/app.js';
+import {probeApplication} from './support/probeApp.js';
+
 
 /**
  * N-115: `helmet({ contentSecurityPolicy: false })` shipped every Helmet
@@ -14,14 +14,10 @@ import { buildApp } from '../src/app.js';
  * that only decorates matched routes would satisfy a `/health`-only test.
  */
 
-let app: FastifyInstance;
+let app:Awaited<ReturnType<typeof probeApplication>>;
 
 before(async () => {
-  app = await buildApp({ logger: false });
-  app.get('/__/boom/security-headers', async () => {
-    throw new Error('boom');
-  });
-  await app.ready();
+  app = await probeApplication();
 });
 
 after(async () => {

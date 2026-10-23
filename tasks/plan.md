@@ -30,12 +30,14 @@ does not automatically complete every remaining audit improvement.
   to unrelated fixes to obtain a green checkpoint.
 - At every completed phase or commit checkpoint announce:
   "honi, x was done, now starting with y".
-- Phases 1 and 2 are complete. The next implementation is phase 3: session,
-  profile, shops, and analytics. Preserve unrelated user edits.
-- Production still starts through Fastify. Move existing routes onto shared
-  feature services during the transition; replace production startup only
-  after all capabilities have their Nest equivalents. Temporary adapters must
-  be deleted during phase 5, together with their obsolete dependencies.
+- All five implementation phases are complete. Production startup now composes
+  NestJS with Express. Fastify routes, plugins, interception, harnesses and direct
+  dependencies are removed. Work was implemented directly without agents.
+- Final verification passed 414/414 backend tests, zero skips, including all
+  disposable PostgreSQL cases. Production/test typechecks, build and migration
+  validation passed. Frontend verification passed 457/457 tests, lint, types and
+  build for the unchanged companion upload branch. Review and PR preparation
+  are the final delivery steps; merging/deployment remain separate.
 
 ## Decisions that are already settled
 
@@ -216,7 +218,7 @@ retries and tenant checks pass; remaining Fastify adapters contain no duplicated
 business implementation. Durable cleanup must have startup/shutdown wiring
 before production deletion starts depending on it.
 
-### Phase 3 — Session, profile, shops, and analytics
+### Phase 3 — Session, profile, shops, and analytics (complete)
 
 1. Move session/profile/password and shop create/read/update/delivery operations
    into their owning services and Nest adapters. Distinguish authenticated
@@ -234,7 +236,7 @@ Phase exit: every capability in the current shops and analytics routes has a
 tested Nest equivalent; cross-tenant and unauthorized requests fail; serialized
 responses and aggregates match their contracts.
 
-### Phase 4 — Explicit sync orchestration and worker application services
+### Phase 4 — Explicit sync orchestration and worker application services (complete)
 
 1. Replace `onRoute` wrapping, request collaborator replacement, and buffered
    replies with explicit mutation orchestration calling domain services. Keep
@@ -253,7 +255,7 @@ business API. Real database tests prove replay, payload mismatch, version
 conflict, rollback, redelivery, and concurrent processing protections. A failed
 sync receipt cannot leave a committed business operation or cleanup effect.
 
-### Phase 5 — Contract changes, production cutover, and legacy removal
+### Phase 5 — Contract changes, production cutover, and legacy removal (complete)
 
 1. Make stock idempotency keys mandatory (#174), retaining atomic claim/replay
    and payload mismatch checks. Inspect clients before updating them; generate

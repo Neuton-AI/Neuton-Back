@@ -57,8 +57,8 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     assert.deepEqual(names(await get('/inventory?search=No%20ThResHold')), ['No threshold']);
     assert.deepEqual(names(await get('/inventory?lowStockOnly=true')), ['Threshold']);
     assert.deepEqual(names(await get('/inventory?includeInactive=true&lowStockOnly=true')), ['Inactive', 'Threshold']);
-    // Query boolean policy is unchanged in this extraction; a later audit slice fixes coercion.
-    assert.deepEqual(names(await get('/inventory?includeInactive=false')), ['Inactive', 'No threshold', 'Threshold']);
+    // False must keep the active-only filter; a nonempty string is not a true flag.
+    assert.deepEqual(names(await get('/inventory?includeInactive=false')), ['No threshold', 'Threshold']);
 
     const verifiedId = randomUUID();
     const draftId = randomUUID();

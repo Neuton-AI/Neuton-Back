@@ -1,9 +1,5 @@
-import type { FastifyBaseLogger } from 'fastify';
-
 /**
- * Log levels exposed by the facade. Deliberately stops at `fatal`: pino's
- * `trace`/`silent` exist only so the adapter satisfies Fastify's logger
- * contract and map onto "debug" and "off".
+ * Log levels exposed consistently across HTTP, workers and providers.
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -44,14 +40,6 @@ export interface Logger {
  */
 export interface LoggerFactory {
   create(service: LoggerService, context?: LogContext): Logger;
-  /** Root Fastify logger, passed to Fastify as `loggerInstance`. */
-  createFastifyLogger(service?: LoggerService): FastifyBaseLogger;
-  /**
-   * Per-request Fastify logger. `provider` is evaluated on every write so
-   * fields set mid-request (`userId`, `shopId` after auth hooks) show up on
-   * each line without re-creating the logger.
-   */
-  createRequestLogger(provider: () => LogContext, service?: LoggerService): FastifyBaseLogger;
   /** Flushes every transport this process opened. Idempotent. */
   shutdown(): Promise<void>;
 }

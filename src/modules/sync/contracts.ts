@@ -14,6 +14,7 @@ export const syncVersionSchema = z.coerce
   .positive()
   .max(Number.MAX_SAFE_INTEGER);
 export interface SyncMutation {
+  allowedRoles?: readonly import('../identity/contracts.js').ShopRole[];
   mutationId: unknown;
   version: unknown;
   kind: 'receipt' | 'recipe' | 'order';

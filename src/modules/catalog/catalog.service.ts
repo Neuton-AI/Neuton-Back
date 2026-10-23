@@ -193,7 +193,7 @@ export class CatalogService {
   async adjustInventory(
     actor: ActorContext,
     input: z.infer<typeof inventoryAdjustmentSchema>,
-    key?: string,
+    key: string,
   ): Promise<{ adjusted: number; ids: string[] }> {
     requireActorRole(actor, ['owner', 'admin']);
     return this.inventoryPersistence.adjust({

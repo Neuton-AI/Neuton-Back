@@ -23,7 +23,7 @@ export class SyncService {
     input: SyncMutation,
     operation: (tx?: SyncTransaction, afterCommit?: CommitEffect) => Promise<T>,
   ): Promise<{ status: number; body: unknown }> {
-    requireActorRole(actor, ['owner', 'admin']);
+    requireActorRole(actor, input.allowedRoles ?? ['owner', 'admin']);
     if (input.mutationId === undefined)
       return { status: input.status, body: await operation() };
     const id = z.string().uuid().parse(input.mutationId),

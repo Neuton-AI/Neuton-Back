@@ -51,7 +51,7 @@ export function committedLog(
 ) {
   const effect = async () => {
     if (typeof meta === 'string') log.info(meta);
-    else log.info({event:'document_processing_committed',...meta}, message);
+    else log.info({ event: 'document_processing_committed', ...meta }, message);
   };
   if (deps.afterCommit) deps.afterCommit(effect);
   else void effect();
@@ -466,6 +466,8 @@ export async function applyOrderDocument(
     jobLogger.warn({ orderId: data.orderId }, 'target order not found');
     return;
   }
+  // A late extraction must not replace approved snapshots or revive a cancellation.
+  if (order.status !== 'processing') return;
 
   const recipeRows = await deps.db
     .select()
@@ -668,7 +670,15 @@ export async function recordTerminalFailure(
         userId: data.uploadedBy ?? undefined,
         traceId: data.traceId,
       })
-      .error({ errorType: updateError instanceof Error ? updateError.constructor.name : typeof updateError }, 'could not record terminal failure');
+      .error(
+        {
+          errorType:
+            updateError instanceof Error
+              ? updateError.constructor.name
+              : typeof updateError,
+        },
+        'could not record terminal failure',
+      );
   }
 }
 

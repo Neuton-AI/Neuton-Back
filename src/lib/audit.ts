@@ -1,4 +1,3 @@
-import type { FastifyInstance } from 'fastify';
 import { db } from '../db/client.js';
 import { auditLogs } from '../db/schema/index.js';
 
@@ -37,12 +36,4 @@ export async function recordAudit(input: AuditInput): Promise<void> {
     ipAddress: input.ipAddress ?? null,
     metadata: input.metadata ?? null,
   });
-}
-
-export async function recordAuditSafe(app: FastifyInstance, input: AuditInput): Promise<void> {
-  try {
-    await recordAudit(input);
-  } catch (error) {
-    app.log.error({ err: error, eventType: input.eventType }, 'audit write failed');
-  }
 }

@@ -1,8 +1,7 @@
 import { stdSerializers } from 'pino';
 
 /**
- * Moved verbatim from the old inline Fastify logger config (issue #99 DOD):
- * credentials must never reach Loki or stdout.
+ * Credentials must never reach Loki or stdout.
  */
 export const REDACT_PATHS = [
   'req.headers.authorization',
@@ -16,11 +15,7 @@ export const REDACT_PATHS = [
 export const REDACT_CENSOR = '[redacted]';
 
 /**
- * Minimal serializers owned by the transports. Fastify passes its own
- * `req`/`res` serializers through `loggerInstance.child({}, opts)`, but the
- * facade ignores them — defining them here keeps every line shaped the same
- * regardless of which layer produced it, and avoids serializing raw headers
- * twice.
+ * Transport-owned serializers keep the same safe shape across entry points.
  */
 export const SERIALIZERS = {
   err: stdSerializers.err,

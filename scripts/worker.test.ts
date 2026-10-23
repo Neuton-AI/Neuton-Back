@@ -717,6 +717,7 @@ test('recipe: retrying over an existing row clears a stale failure and resolves 
 
 const ORDER = {
   id: 'order-1',
+  status: 'processing',
   shopId: SHOP_ID,
   customerName: null,
   destinationAddress: null,
@@ -1144,4 +1145,37 @@ test('order: unresolved ingredient aborts before replacing historical snapshots'
   assert.equal(db.callsTo('delete', 'orderItems').length, 0);
   assert.equal(db.callsTo('insert', 'orderItems').length, 0);
   assert.equal(db.callsTo('update', 'orders').length, 0);
+});
+
+test('late order extraction cannot replace approved or cancelled snapshots', async () => {
+  for (const status of ['delivered', 'cancelled']) {
+    const h = harness({
+      responses: {
+        'select:orders': [[{ ...ORDER, status }]],
+        'select:recipes': [[{ ...CATALOG_RECIPE }]],
+        'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50' }]],
+        'select:recipeIngredients': [
+          [
+            {
+              recipeId: CATALOG_RECIPE.id,
+              quantity: '1',
+              averageUnitCost: '1',
+            },
+          ],
+        ],
+      },
+      data: { kind: 'order', orderId: ORDER.id },
+      extractions: {
+        order: {
+          customerName: 'Model',
+          destinationAddress: null,
+          items: [{ name: 'Focaccia', quantity: 1, unitPrice: 1 }],
+        },
+      },
+    });
+    await processOrderDocument(h.deps, h.jobData, h.job);
+    assert.equal(h.db.callsTo('delete', 'orderItems').length, 0);
+    assert.equal(h.db.callsTo('insert', 'orderItems').length, 0);
+    assert.equal(h.db.callsTo('update', 'orders').length, 0);
+  }
 });

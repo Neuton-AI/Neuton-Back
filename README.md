@@ -1,5 +1,34 @@
 # Neuton-Back
 
+## Runtime and module boundaries
+
+The API runs on NestJS with Express. `src/app.ts` composes identity, shops,
+catalog, orders, receipts, uploads, analytics and synchronization. Controllers
+validate contracts and pass authenticated context into application services;
+persistence owns tenant-scoped database access and explicit public mapping.
+Sync calls transaction-bound services directly. The BullMQ adapter calls the
+document-processing service through a queue-independent progress interface.
+
+Run `npm run build`, then `npm start` and `npm run start:worker` as separate
+processes. Apply all pending migrations, including
+`0030_storage_object_deletions.sql`, before deploying. Start and stop storage
+cleanup with the API process; leased cleanup work survives restarts.
+
+Query parameters use camelCase only. Delivery preview uses `distanceKm`.
+Catalog boolean flags accept `true`/`false`; the string `false` keeps filters
+disabled. Stock adjustments require a UUID `Idempotency-Key`: create one key
+per intent and reuse it after timeouts or an unknown response. Uploads use
+the grouped presign/complete flow exclusively, including single-image uploads.
+
+`TRUST_PROXY` is an explicit comma-separated list of deployment proxy addresses
+or subnets; an empty value trusts none. Configure the actual proxy topology
+before deployment. `RATE_LIMIT_WINDOW` accepts a positive duration such as
+`1 minute` or `30 seconds`. Signed-webhook raw bytes are retained by the shared
+HTTP setup. Request/trace IDs and safe error diagnostics accompany responses.
+
+See [migration and rollout notes](docs/nestjs-migration.md) and the
+[implementation plan](tasks/plan.md) for verification evidence and rollback.
+
 ## Verification endpoints
 
 All verification actions are domain-specific POST requests under `/api/v1`.

@@ -93,13 +93,6 @@ export async function loadDocumentInput(
   return { ...documents[0], ...(data.sources ? { sources: documents } : {}) };
 }
 
-/**
- * Thin `WorkerDeps` wrapper over the shared inventory helper, kept so
- * `scripts/worker.test.ts` can still exercise it through the worker's own
- * signature. The handlers below deliberately do **not** use it: they take a
- * transaction handle instead, so inventory writes commit or roll back with the
- * receipt they belong to.
- */
 function checkDeadline(deadline: Date | null): void {
   if (deadline && new Date() > deadline) {
     throw new Error('Processing deadline exceeded');
@@ -208,8 +201,6 @@ export async function processRecipe(
 
   const convertedRecipe = convertRecipeToBaseUnits(extraction);
 
-
-
   const shop = await recipeShop(deps, data.shopId);
   const linkedIngredientIds = await recipeLinks(
     deps,
@@ -278,6 +269,7 @@ export { findOrCreateInventoryItem } from './processing.persistence.js';
 export class DocumentProcessingService {
   constructor(private readonly deps: WorkerDeps = defaultWorkerDeps) {}
   async run(data: MediaJobData, job: ProcessingJob) {
+    if (!data.uploadId) throw new Error('Grouped uploadId is required');
     const effects: Array<() => Promise<void>> = [];
     await processGroup(
       {

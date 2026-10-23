@@ -84,7 +84,7 @@ export class CatalogController {
     return this.catalog.adjustInventory(
       actor,
       inventoryAdjustmentSchema.parse(body),
-      z.string().uuid().optional().parse(key),
+      z.string().uuid().parse(key),
     );
   }
   @Patch('inventory/:id')

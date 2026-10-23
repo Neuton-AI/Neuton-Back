@@ -2,6 +2,77 @@
 
 Tracking: https://github.com/Neuton-AI/Neuton-Back/issues/178
 
+## Completion status — 2026-10-23
+
+All five implementation phases are complete. `src/app.ts` now composes the
+production Nest/Express application; `src/index.ts` owns API and cleanup
+lifecycle. Fastify routes, plugins, reply interception, logger adapters, test
+harnesses and direct dependencies are removed. Historical checkpoint notes
+below describe the transition and are superseded by this completion record.
+
+Final backend regression run: **414/414 passed, zero skips**, with disposable
+PostgreSQL cases enabled. Production typecheck, test typecheck, build and
+migration validation passed. `npm ls` confirms no Fastify stack is installed.
+Frontend verification for the companion upload commit passed lint, types,
+**457/457 tests** and build. No tests were skipped to make this migration pass.
+
+Phase 3 checkpoint: `dcbafc4`. Phase 4 checkpoint: `da35772`. Phase 5 replaces
+the runtime and carries the final mandatory-stock-key decision. Missing or
+invalid keys fail before DB work, including direct application calls; concurrent
+replays and payload/user mismatches retain the durable transaction guarantees.
+There is no current frontend caller of `/inventory/adjust`; future clients must
+persist one UUID per intent and reuse it for retries.
+
+Queries use camelCase only. `distanceKm` replaces `distance_km`, unknown query
+aliases are rejected, and `false` is parsed as false for catalog flags. Existing
+frontend query callers already use camelCase. Nest exposes explicit shop,
+profile, order, catalog, receipt, upload and analytics responses.
+
+Review retained member permission to verify orders, safe provider failure
+responses, and operation-specific authorization on sync replays. Late document
+extraction cannot overwrite delivered/cancelled order snapshots. Onboarding
+rolls profile, shop and ownership back together. Shop rename collision checks
+exclude only the renamed shop, rather than filtering out other shops.
+Regression tests cover each fix. Deliberately inverting the late-order guard
+exposed a weak fixture; adding usable pricing data made the test detect the
+mutation, and restored production source passed. The final full run follows
+those fixes. Worker success logs wait for the durable processed marker's commit.
+
+### Module conventions
+
+Contracts validate external input and explicitly describe public output. A
+controller resolves session/tenant context and calls a service; services own
+authorization and operations, while persistence owns Drizzle access and mapping.
+Use `inTransaction(tx, afterCommit)` when sync owns the outer transaction.
+Required external deletion uses durable cleanup intents; callbacks are for
+best-effort post-commit diagnostics/audit. The sync orchestrator invokes service
+callbacks directly and records the retry receipt in their transaction. Workers
+use the document-processing service with a queue-independent progress port;
+BullMQ startup/retry/circuit policy remains in the worker adapter.
+
+### Final rollout and rollback
+
+1. Apply pending migrations through `0030_storage_object_deletions.sql` before
+   this API version. Framework replacement itself needs no schema change. Only
+   disposable test databases were migrated during this implementation.
+2. Roll out the grouped-only backend and companion frontend together. Drain old
+   ungrouped jobs first. The companion is
+   [frontend PR #171](https://github.com/Neuton-AI/Neuton-Front/pull/171).
+3. Set `TRUST_PROXY` to the actual proxy address/subnet list; blank trusts none.
+   Keep rate-limit configuration valid, including positive `RATE_LIMIT_WINDOW`
+   durations. The shared HTTP setup retains raw bytes for signed webhooks.
+4. Check request/trace correlation, error status/latency, auth failures, queue
+   redelivery and storage cleanup backlog. Observe `storage_cleanup_retry`,
+   `storage_cleanup_dispatch_failed`, `http_request_failed` and safe post-commit
+   diagnostics. Dashboard/alert delivery requires the deployment environment
+   and has not been claimed as locally verified.
+5. Roll back using a tested compatible API/client artifact pair. Preserve the
+   cleanup table and pending/leased intents; never discard durable deletion
+   work. Restart a compatible dispatcher so expired leases can recover.
+
+No merge, production migration or deployment was performed. Payments, coupons,
+MCP functionality and unrelated unfinished #172 audit items remain out of scope.
+
 ## Contract and boundaries
 
 Use NestJS with Express and feature-owned contracts, application services,

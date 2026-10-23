@@ -30,7 +30,7 @@ import {
   receiptSpendDay,
   spentSince,
   trendPercent,
-} from '../src/routes/analytics.js';
+} from '../src/modules/analytics/analytics.persistence.js';
 
 async function harness(responses: FakeResponses = {}) {
   const db = new FakeDb(responses);

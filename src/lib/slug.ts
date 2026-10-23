@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import slugify from 'slugify';
 import type { Database } from '../db/client.js';
 import { shops } from '../db/schema/index.js';
@@ -21,14 +21,12 @@ export async function generateUniqueSlug(
   const exists = async (candidate: string): Promise<boolean> => {
     const conditions = [eq(shops.slug, candidate)];
     if (options.excludeShopId) {
-      conditions.push(eq(shops.id, options.excludeShopId));
+      conditions.push(ne(shops.id, options.excludeShopId));
     }
     const rows = await db
       .select({ id: shops.id })
       .from(shops)
-      .where(
-        and(...conditions),
-      )
+      .where(and(...conditions))
       .limit(1);
     return rows.length > 0;
   };
