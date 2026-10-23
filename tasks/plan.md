@@ -119,6 +119,11 @@ second full 389-test run was performed after the fixture-only correction.
 
 Work in the following slices, committing and updating evidence after each:
 
+Current checkpoint: shared costing extracted from the HTTP route into catalog
+contracts, costing, and persistence. Existing pricing/editor/manual-product and
+real PostgreSQL tenant-link tests passed 30/30, zero skips; test typecheck and
+production build passed. The five catalog read adapters remain the next slice.
+
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,
    and services. Move `costRecipe` out of the route module and make legacy and

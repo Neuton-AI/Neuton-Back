@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import { db, type Database } from '../db/client.js';
+import { db } from '../db/client.js';
 import {
   categories,
   inventoryItems,
@@ -16,14 +16,8 @@ import { notFound, conflict } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
-import {
-  calculateRetailPrice,
-  calculateUnitCost,
-  ingredientLineCost,
-  checkBatchStock,
-} from '../lib/pricing.js';
 import { defaultReceiptsDeps } from './receipts.js';
-import { recipeIngredientUnitCost } from '../lib/recipeCostQuery.js';
+import { costRecipe } from '../modules/catalog/costing.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
@@ -101,111 +95,6 @@ const inventorySchema = z.object({
 });
 
 const inventoryPatchSchema = inventorySchema.partial();
-
-export async function costRecipe(
-  shopId: string,
-  recipe: typeof recipes.$inferSelect,
-  shopMargin: string,
-  hourlyLaborCost: string,
-  database: Pick<Database, 'select'> = db,
-) {
-  const ingredientRows = await database
-    .select({
-      id: recipeIngredients.id,
-      inventoryItemId: recipeIngredients.inventoryItemId,
-      generalPriceId: recipeIngredients.generalPriceId,
-      rawName: recipeIngredients.rawName,
-      rawSrcUnit: recipeIngredients.rawSrcUnit,
-      rawMaterialName: recipeIngredients.rawMaterialName,
-      baseUnit: recipeIngredients.baseUnit,
-      baseUnitAmount: recipeIngredients.baseUnitAmount,
-      quantity: recipeIngredients.quantity,
-      name: sql<string>`coalesce(${inventoryItems.name}, ${generalPrices.rawName})`,
-      currentQuantity: inventoryItems.currentQuantity,
-      averageUnitCost: recipeIngredientUnitCost,
-    })
-    .from(recipeIngredients)
-    .leftJoin(
-      inventoryItems,
-      and(eq(inventoryItems.id, recipeIngredients.inventoryItemId), eq(inventoryItems.shopId, shopId)),
-    )
-    .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-    .where(
-      and(
-        eq(recipeIngredients.shopId, shopId),
-        eq(recipeIngredients.recipeId, recipe.id),
-      ),
-    )
-    .orderBy(asc(recipeIngredients.id));
-
-  const lineCosts = ingredientRows.map((i) => ingredientLineCost({
-    quantity: i.baseUnitAmount, averageUnitCost: i.averageUnitCost,
-  }));
-  const linkedIngredients = ingredientRows.filter((_, index) => lineCosts[index] !== null);
-  const totalCount = ingredientRows.length;
-  const linkedCount = linkedIngredients.length;
-
-  const breakdown = calculateUnitCost({
-    ingredients: ingredientRows.map((i) => ({
-      quantity: i.baseUnitAmount,
-      averageUnitCost: i.averageUnitCost,
-    })),
-    prepTimeMinutes: recipe.prepTimeMinutes,
-    hourlyLaborCost,
-    yieldQuantity: recipe.yieldQuantity,
-  });
-
-  const fullyLinked = breakdown.costComplete;
-
-  const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
-    breakdown.unitCost,
-    shopMargin,
-    fullyLinked ? recipe.targetMarginPct : null,
-  );
-
-  const finalRetailPrice = fullyLinked ? retailPrice : null;
-
-  const batchAvailable =
-    fullyLinked &&
-    linkedIngredients.every((ingredient) => {
-      const stock = checkBatchStock({
-        requiredQuantity: toNumber(ingredient.quantity),
-        currentQuantity: toNumber(ingredient.currentQuantity ?? '0'),
-      });
-      return stock.inStock;
-    });
-
-  return {
-    costComplete: fullyLinked,
-    unresolvedCount: breakdown.unresolvedCount,
-    unitCost: fullyLinked ? breakdown.unitCost : null,
-    ingredientsCost: breakdown.ingredientsCost,
-    laborCost: breakdown.laborCost,
-    batchCost: fullyLinked ? breakdown.batchCost : null,
-    retailPrice: finalRetailPrice,
-    appliedMarginPercent: fullyLinked ? appliedMarginPercent : '0.00',
-    yieldQuantity: toNumber(recipe.yieldQuantity),
-    inStock: batchAvailable,
-    linkedCount,
-    totalCount,
-    ingredients: ingredientRows.map((ingredient, index) => ({
-      id: ingredient.id,
-      name: ingredient.name ?? ingredient.rawName,
-      quantity: toNumber(ingredient.quantity),
-      rawSrcUnit: ingredient.rawSrcUnit,
-      rawMaterialName: ingredient.rawMaterialName,
-      baseUnit: ingredient.baseUnit,
-      baseUnitAmount: ingredient.baseUnitAmount,
-      averageUnitCost: ingredient.averageUnitCost == null ? null : toNumber(ingredient.averageUnitCost),
-      lineCost: lineCosts[index] == null ? null : Math.round(lineCosts[index]! * 10_000) / 10_000,
-      currentQuantity: ingredient.currentQuantity ? toNumber(ingredient.currentQuantity) : 0,
-      inventoryItemId: ingredient.inventoryItemId,
-      generalPriceId: ingredient.generalPriceId,
-      rawName: ingredient.rawName,
-      linked: lineCosts[index] !== null,
-    })),
-  };
-}
 
 export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchProduct }> = async (app, options) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };

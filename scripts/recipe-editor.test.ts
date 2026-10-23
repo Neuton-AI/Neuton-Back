@@ -5,7 +5,7 @@ import { FakeDb } from './support/fakeDb.js';
 import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
 import { priceResult } from './support/priceResult.js';
 import type { searchProduct } from '../src/lib/supermarket/prices.js';
-import { costRecipe } from '../src/routes/catalog.js';
+import { costRecipe } from '../src/modules/catalog/costing.js';
 import type { Database } from '../src/db/client.js';
 import type { recipes } from '../src/db/schema/index.js';
 import { prepareBarcodePrice } from '../src/lib/recipeBarcodePrice.js';

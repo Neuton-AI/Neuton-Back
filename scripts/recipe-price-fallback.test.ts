@@ -2,7 +2,7 @@ import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareRecipeFallbackPrices, persistRecipeFallbackPrices, selectFallbackProduct, normalizePriceName } from '../src/lib/recipePriceFallback.js';
-import { costRecipe } from '../src/routes/catalog.js';
+import { costRecipe } from '../src/modules/catalog/costing.js';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { recipeIngredientUnitCost } from '../src/lib/recipeCostQuery.js';
 import type { Database } from '../src/db/client.js';
