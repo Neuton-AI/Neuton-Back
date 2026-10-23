@@ -6,6 +6,13 @@ export const inventoryQuerySchema = z.object({
   includeInactive: z.coerce.boolean().default(false),
 });
 export type InventoryQuery = z.infer<typeof inventoryQuerySchema>;
+export const recipeQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  includeInactive: z.coerce.boolean().default(false),
+  includeUnverified: z.coerce.boolean().default(false),
+});
+export const recipeIdSchema = z.object({ id: z.string().uuid() });
+export type RecipeQuery = z.infer<typeof recipeQuerySchema>;
 
 export interface CategoryDto {
   id: string;
@@ -43,6 +50,50 @@ export interface RecipeCostingInput {
   prepTimeMinutes: number;
   yieldQuantity: string;
   targetMarginPct: string | null;
+}
+
+export interface RecipeDto extends RecipeCostingInput {
+  shopId: string;
+  categoryId: string | null;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  yieldUnit: string;
+  allergens: string[] | null;
+  steps: { stepNumber: number; instruction: string }[];
+  isActive: boolean;
+  status: string;
+  storagePath: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecipeSourceDto {
+  sourceId: string;
+  storagePath: string;
+  contentType: string;
+  originalFilename: string | null;
+  byteSize: number;
+}
+
+export interface CostedRecipeDto extends RecipeDto {
+  costing: RecipeCostingDto;
+}
+
+export interface RecipeDetailDto extends CostedRecipeDto {
+  sources: RecipeSourceDto[];
+}
+
+export interface OrderableRecipeDto {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  yieldQuantity: string;
+  yieldUnit: string;
+  costComplete: true;
+  unitCost: number | null;
+  retailPrice: number | null;
 }
 
 export interface RecipeIngredientCostDto {

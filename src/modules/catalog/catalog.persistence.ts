@@ -1,10 +1,11 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
 import { db, type Database } from '../../db/client.js';
-import { categories, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
+import { categories, recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
-import type { InventoryItem } from '../../db/schema/catalog.js';
-import type { CategoryDto, InventoryDto, InventoryQuery } from './contracts.js';
+import type { InventoryItem, Recipe } from '../../db/schema/catalog.js';
+import { notFound } from '../../lib/errors.js';
+import type { CategoryDto, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto } from './contracts.js';
 
 export type CatalogReadDatabase = Pick<Database, 'select'>;
 export const CATALOG_DATABASE = Symbol('CATALOG_DATABASE');
@@ -19,6 +20,20 @@ function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
     reorderLevel: item.reorderLevel, lastUnitCost: item.lastUnitCost,
     averageUnitCost: item.averageUnitCost, isActive: item.isActive,
     createdAt: item.createdAt.toISOString(), updatedAt: item.updatedAt.toISOString(),
+  };
+}
+
+function mapRecipe(recipe: Recipe): RecipeDto {
+  return {
+    id: recipe.id, shopId: recipe.shopId, categoryId: recipe.categoryId,
+    name: recipe.name, description: recipe.description, imageUrl: recipe.imageUrl,
+    prepTimeMinutes: recipe.prepTimeMinutes, yieldQuantity: recipe.yieldQuantity,
+    yieldUnit: recipe.yieldUnit, targetMarginPct: recipe.targetMarginPct,
+    allergens: recipe.allergens?.slice() ?? null,
+    steps: recipe.steps.map(step => ({ stepNumber: step.stepNumber, instruction: step.instruction })),
+    isActive: recipe.isActive, status: recipe.status, storagePath: recipe.storagePath,
+    errorMessage: recipe.errorMessage,
+    createdAt: recipe.createdAt.toISOString(), updatedAt: recipe.updatedAt.toISOString(),
   };
 }
 
@@ -44,6 +59,32 @@ export class CatalogPersistence {
     const rows = await this.database.select().from(inventoryItems)
       .where(and(...conditions)).orderBy(asc(inventoryItems.name));
     return rows.map(mapInventory);
+  }
+
+  async listRecipes(shopId: string, query: RecipeQuery): Promise<RecipeDto[]> {
+    const conditions = [eq(recipes.shopId, shopId)];
+    if (!query.includeInactive) conditions.push(eq(recipes.isActive, true));
+    if (!query.includeUnverified) conditions.push(eq(recipes.status, 'verified'));
+    if (query.search) conditions.push(sql`${recipes.name} ilike ${`%${query.search}%`}`);
+    const rows = await this.database.select().from(recipes)
+      .where(and(...conditions)).orderBy(asc(recipes.name));
+    return rows.map(mapRecipe);
+  }
+
+  async recipe(shopId: string, id: string): Promise<RecipeDto> {
+    const [recipe] = await this.database.select().from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId))).limit(1);
+    if (!recipe) throw notFound('Recipe not found');
+    return mapRecipe(recipe);
+  }
+
+  async recipeSources(shopId: string, id: string): Promise<RecipeSourceDto[]> {
+    const [upload] = await this.database.select({ sources: mediaUploads.sources }).from(mediaUploads)
+      .where(and(eq(mediaUploads.recipeId, id), eq(mediaUploads.shopId, shopId))).limit(1);
+    return (upload?.sources ?? []).map(source => ({
+      sourceId: source.sourceId, storagePath: source.storagePath, contentType: source.contentType,
+      originalFilename: source.originalFilename, byteSize: source.byteSize,
+    }));
   }
 }
 

@@ -152,3 +152,13 @@ these intentional behavior changes in distinct tested commits.
   Real sync create/verify/cancel rollback and replay checks passed; suppressing
   post-commit effects makes the audit regression fail (source restored).
   Fixed a buffered Fastify reply thenable hang exposed by synced creation.
+
+- Phase 2 catalog read checkpoint: extracted shared costing and tenant-scoped
+  read services for categories, inventory, recipe list/detail, and orderable
+  recipes. Both transports use explicit DTOs, including nested steps/sources.
+  Preserved draft review, corrected ingredients, decimal/date representations,
+  low-stock thresholds, and complete-cost out-of-stock orderable results.
+  Full regression suite passed 394/394 with zero skips against disposable
+  PostgreSQL; test typecheck/build passed. Mutation of the category shop filter
+  is detected by the real database test and restored. Catalog writes, receipts,
+  uploads, cleanup and later phases remain pending.

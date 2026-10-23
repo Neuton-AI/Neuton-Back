@@ -1,9 +1,9 @@
-import { Controller, Get, Inject, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query, UseGuards } from '@nestjs/common';
 import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { CatalogService } from './catalog.service.js';
-import { inventoryQuerySchema } from './contracts.js';
+import { inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from './contracts.js';
 
 @Controller('api/v1')
 @UseGuards(ShopGuard)
@@ -18,5 +18,20 @@ export class CatalogController {
   @Get('inventory')
   inventory(@CurrentActor() actor: ActorContext, @Query() query: unknown) {
     return this.catalog.inventory(actor, inventoryQuerySchema.parse(query));
+  }
+
+  @Get('recipes')
+  recipes(@CurrentActor() actor: ActorContext, @Query() query: unknown) {
+    return this.catalog.recipes(actor, recipeQuerySchema.parse(query));
+  }
+
+  @Get('recipes/orderable')
+  orderable(@CurrentActor() actor: ActorContext) {
+    return this.catalog.orderable(actor);
+  }
+
+  @Get('recipes/:id')
+  recipe(@CurrentActor() actor: ActorContext, @Param() params: unknown) {
+    return this.catalog.recipe(actor, recipeIdSchema.parse(params).id);
   }
 }

@@ -126,7 +126,11 @@ production build passed. Categories and inventory now use shared read services,
 explicit DTOs, and Nest/Fastify adapters. Their focused regressions passed
 14/14, zero skips, including real PostgreSQL shop isolation and filter checks;
 test typecheck/build passed. Removing the category shop filter makes the tenant
-test fail (source restored). Recipe list/detail/orderable reads are next.
+test fail (source restored). Recipe list/detail/orderable reads now share the
+same services and explicit nested DTOs. All five read endpoints are implemented
+in Nest and delegated from Fastify; reviewed values and draft access are retained.
+Full regression suite: 394/394 passed with zero skips against disposable
+PostgreSQL; test typecheck and production build passed. Catalog writes are next.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,

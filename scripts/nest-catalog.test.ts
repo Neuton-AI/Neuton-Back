@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import request from 'supertest';
 import type { Database } from '../src/db/client.js';
-import type { Category, InventoryItem } from '../src/db/schema/catalog.js';
+import type { Category, InventoryItem, Recipe } from '../src/db/schema/catalog.js';
 import { FakeDb } from './support/fakeDb.js';
 import { buildNestCatalogApp, SHOP_ID } from './support/nestCatalogApp.js';
 import { buildCatalogApp } from './support/catalogApp.js';
@@ -22,6 +22,21 @@ const inventory = {
   averageUnitCost: '1.5000', isActive: true, createdAt, updatedAt: createdAt,
 } satisfies InventoryItem;
 const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const recipe = {
+  id: '66666666-6666-6666-6666-666666666666', shopId: SHOP_ID,
+  categoryId: category.id, name: 'Reviewed bread', description: null,
+  imageUrl: null, prepTimeMinutes: 0, yieldQuantity: '2.000', yieldUnit: 'portion',
+  targetMarginPct: null, allergens: ['gluten'],
+  steps: [{ stepNumber: 1, instruction: 'Use the reviewed quantity' }],
+  isActive: true, status: 'unverified', storagePath: `${SHOP_ID}/recipe.jpg`,
+  errorMessage: null, createdAt, updatedAt: createdAt,
+} satisfies Recipe;
+const ingredient = {
+  id: 'line', inventoryItemId: inventory.id, generalPriceId: null,
+  rawName: 'User corrected flour', rawMaterialName: 'corrected flour',
+  rawSrcUnit: 'g', baseUnit: 'g', baseUnitAmount: '100.000', quantity: '100.000',
+  name: 'Flour', currentQuantity: '0.000', averageUnitCost: '0.002000',
+};
 
 test('Nest catalog reads map explicit fields and preserve legacy decimal/date envelopes', async () => {
   const database = new FakeDb({
@@ -43,7 +58,11 @@ test('Nest catalog reads map explicit fields and preserve legacy decimal/date en
       assert.equal(previous.statusCode, 200);
       assert.deepEqual(next.body, previous.json());
       assert.equal(JSON.stringify(next.body).includes('privateColumn'), false);
+      if (path === '/categories') {
+        assert.deepEqual(next.body.categories, [JSON.parse(JSON.stringify(category))]);
+      }
       if (path === '/inventory') {
+        assert.deepEqual(next.body.items[0], { ...JSON.parse(JSON.stringify(inventory)), isLowStock: true });
         assert.equal(next.body.items[0].baseUnitCost, '0.002000');
         assert.equal(next.body.items[0].createdAt, createdAt.toISOString());
         assert.equal(next.body.items[0].isLowStock, true, 'threshold equality counts as low');
@@ -68,6 +87,69 @@ test('Nest catalog rejects unauthenticated, foreign-shop and invalid queries bef
       search: 'x'.repeat(121),
     }).set(headers)).status, 400);
     assert.deepEqual(database.calls, []);
+  } finally {
+    await nest.close();
+  }
+});
+
+test('Nest recipe list/detail preserve reviewed values with explicit nested DTOs and legacy parity', async () => {
+  const row = { ...recipe, privateColumn: 'hidden', steps: [{ ...recipe.steps[0]!, privateNote: 'hidden' }] };
+  const source = {
+    sourceId: 'page', storagePath: `${SHOP_ID}/page.jpg`, contentType: 'image/jpeg',
+    originalFilename: 'bread.jpg', byteSize: 50, privateNote: 'hidden',
+  };
+  const database = new FakeDb({
+    'select:recipes': [[row], [row], [row], [row]],
+    'select:recipeIngredients': [[ingredient], [ingredient], [ingredient], [ingredient]],
+    'select:mediaUploads': [[{ sources: [source] }], [{ sources: [source] }]],
+  });
+  const db = database as unknown as Database;
+  const nest = await buildNestCatalogApp(db, 'member');
+  const legacy = await buildCatalogApp('member');
+  legacy.use({ db, deleteObject: async () => {} });
+  try {
+    for (const path of ['/recipes?includeUnverified=true', `/recipes/${recipe.id}`]) {
+      const next = await request(nest.app.getHttpServer()).get(`/api/v1${path}`).set(headers);
+      const previous = await legacy.app.inject({ method: 'GET', url: `/api/v1${path}` });
+      assert.equal(next.status, 200);
+      assert.deepEqual(next.body, previous.json());
+      const value = next.body.recipe ?? next.body.recipes[0];
+      const { costing, sources, ...publicRecipe } = value;
+      assert.deepEqual(publicRecipe, JSON.parse(JSON.stringify(recipe)), 'retain every existing public recipe field');
+      assert.deepEqual(value.steps, recipe.steps);
+      assert.equal(value.yieldQuantity, '2.000');
+      assert.equal(value.createdAt, createdAt.toISOString());
+      assert.equal(costing.ingredients[0].rawName, 'User corrected flour');
+      assert.equal(costing.ingredients[0].baseUnitAmount, '100.000');
+      assert.equal(costing.inStock, false);
+      assert.equal(costing.unitCost, 0.1);
+      assert.equal(JSON.stringify(next.body).includes('hidden'), false);
+      if (sources) assert.deepEqual(sources, [{
+        sourceId: source.sourceId, storagePath: source.storagePath, contentType: source.contentType,
+        originalFilename: source.originalFilename, byteSize: source.byteSize,
+      }]);
+    }
+  } finally {
+    await nest.close();
+    await legacy.close();
+  }
+});
+
+test('static orderable route includes costed out-of-stock recipes and excludes unresolved costs', async () => {
+  const database = new FakeDb({
+    'select:recipes': [[{ ...recipe, status: 'verified' }, { ...recipe, id: category.id, status: 'verified' }]],
+    'select:recipeIngredients': [[ingredient], [{ ...ingredient, averageUnitCost: null }]],
+  });
+  const nest = await buildNestCatalogApp(database as unknown as Database);
+  try {
+    const response = await request(nest.app.getHttpServer()).get('/api/v1/recipes/orderable').set(headers);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { recipes: [{
+      id: recipe.id, name: recipe.name, imageUrl: null, yieldQuantity: '2.000', yieldUnit: 'portion',
+      costComplete: true, unitCost: 0.1, retailPrice: 0.13,
+    }] });
+    assert.equal((await request(nest.app.getHttpServer()).get('/api/v1/recipes/not-a-uuid').set(headers)).status, 400);
+    assert.equal((await request(nest.app.getHttpServer()).get(`/api/v1/recipes/${recipe.id}`).set(headers)).status, 404);
   } finally {
     await nest.close();
   }

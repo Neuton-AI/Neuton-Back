@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { db } from '../db/client.js';
 import {
@@ -17,11 +17,10 @@ import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, unitCost } from '../lib/money.js';
 import { defaultReceiptsDeps } from './receipts.js';
-import { costRecipe } from '../modules/catalog/costing.js';
 import type { ActorContext } from '../modules/identity/contracts.js';
 import { CatalogService } from '../modules/catalog/catalog.service.js';
 import { CatalogPersistence } from '../modules/catalog/catalog.persistence.js';
-import { inventoryQuerySchema } from '../modules/catalog/contracts.js';
+import { inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from '../modules/catalog/contracts.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
@@ -133,39 +132,8 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     return reply.code(201).send({ category: rows[0] });
   });
 
-  app.get('/recipes', guards, async (request) => {
-    const shop = currentShop(request);
-    const query = z
-      .object({
-        search: z.string().trim().max(120).optional(),
-        includeInactive: z.coerce.boolean().default(false),
-        includeUnverified: z.coerce.boolean().default(false),
-      })
-      .parse(request.query);
-
-    const conditions = [eq(recipes.shopId, shop.id)];
-    if (!query.includeInactive) conditions.push(eq(recipes.isActive, true));
-    if (!query.includeUnverified) conditions.push(eq(recipes.status, 'verified'));
-    if (query.search) {
-      conditions.push(sql`${recipes.name} ilike ${`%${query.search}%`}`);
-    }
-
-    const rows = await db
-      .select()
-      .from(recipes)
-      .where(and(...conditions))
-      .orderBy(asc(recipes.name));
-
-    const costed = await Promise.all(
-      rows.map((recipe) =>
-        costRecipe(shop.id, recipe, shop.targetProfitMargin, shop.hourlyLaborCost),
-      ),
-    );
-
-    return {
-      recipes: rows.map((recipe, index) => ({ ...recipe, costing: costed[index] })),
-    };
-  });
+  app.get('/recipes', guards, async (request) =>
+    catalogService(request).recipes(catalogActor(request), recipeQuerySchema.parse(request.query)));
 
   app.post('/recipes', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
@@ -227,28 +195,8 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     return reply.code(201).send({ recipe: created });
   });
 
-  app.get('/recipes/:id', guards, async (request) => {
-    const shop = currentShop(request);
-    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-
-    const rows = await db
-      .select()
-      .from(recipes)
-      .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
-      .limit(1);
-    const recipe = rows[0];
-    if (!recipe) throw notFound('Recipe not found');
-
-    const costing = await costRecipe(
-      shop.id,
-      recipe,
-      shop.targetProfitMargin,
-      shop.hourlyLaborCost,
-    );
-    const [upload] = await db.select({ sources: mediaUploads.sources }).from(mediaUploads)
-      .where(and(eq(mediaUploads.recipeId, id), eq(mediaUploads.shopId, shop.id))).limit(1);
-    return { recipe: { ...recipe, costing, sources: upload?.sources ?? [] } };
-  });
+  app.get('/recipes/:id', guards, async (request) =>
+    catalogService(request).recipe(catalogActor(request), recipeIdSchema.parse(request.params).id));
 
   app.patch('/recipes/:id', mutationGuards, async (request) => {
     const shop = currentShop(request);
@@ -622,43 +570,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     return { recipe };
   });
 
-  /** Recipes that can currently be produced from stock — powers the order item picker. */
-  app.get('/recipes/orderable', guards, async (request) => {
-    const shop = currentShop(request);
-    const rows = await db
-      .select({
-        id: recipes.id,
-        name: recipes.name,
-        imageUrl: recipes.imageUrl,
-        yieldQuantity: recipes.yieldQuantity,
-        yieldUnit: recipes.yieldUnit,
-      })
-      .from(recipes)
-      .where(and(eq(recipes.shopId, shop.id), eq(recipes.isActive, true), eq(recipes.status, 'verified')))
-      .orderBy(asc(recipes.name));
-
-    const costed = await Promise.all(
-      rows.map(async (row) => {
-        const full = await db
-          .select()
-          .from(recipes)
-          .where(eq(recipes.id, row.id))
-          .limit(1);
-        const recipe = full[0];
-        if (!recipe) return null;
-        const costing = await costRecipe(
-          shop.id,
-          recipe,
-          shop.targetProfitMargin,
-          shop.hourlyLaborCost,
-        );
-        if (!costing.costComplete) return null;
-        return { ...row, costComplete: true, unitCost: costing.unitCost, retailPrice: costing.retailPrice };
-      }),
-    );
-
-    return { recipes: costed.filter((r): r is NonNullable<typeof r> => r !== null) };
-  });
+  /** Fully costed recipes available to the order item picker, including out-of-stock recipes. */
+  app.get('/recipes/orderable', guards, async (request) =>
+    catalogService(request).orderable(catalogActor(request)));
 
   /** Bulk stock adjustment used by the Inventory grid after manual counts. */
   app.post('/inventory/adjust', mutationGuards, async (request) => {

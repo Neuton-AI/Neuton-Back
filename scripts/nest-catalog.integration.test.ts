@@ -10,7 +10,7 @@ import { buildNestCatalogApp, SHOP_ID } from './support/nestCatalogApp.js';
 
 const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 
-test('Nest catalog SQL isolates shops and applies search, active and low-stock filters', {
+test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle filters', {
   skip: !databaseUrl && 'requires migrated disposable API_ALIGNMENT_TEST_DATABASE_URL',
   timeout: 30_000,
 }, async () => {
@@ -22,7 +22,11 @@ test('Nest catalog SQL isolates shops and applies search, active and low-stock f
   try {
     await connection.unsafe(`CREATE SCHEMA ${namespace};
       CREATE TABLE ${namespace}.categories (LIKE public.categories INCLUDING ALL);
-      CREATE TABLE ${namespace}.inventory_items (LIKE public.inventory_items INCLUDING ALL);`);
+      CREATE TABLE ${namespace}.inventory_items (LIKE public.inventory_items INCLUDING ALL);
+      CREATE TABLE ${namespace}.recipes (LIKE public.recipes INCLUDING ALL);
+      CREATE TABLE ${namespace}.recipe_ingredients (LIKE public.recipe_ingredients INCLUDING ALL);
+      CREATE TABLE ${namespace}.general_prices (LIKE public.general_prices INCLUDING ALL);
+      CREATE TABLE ${namespace}.media_uploads (LIKE public.media_uploads INCLUDING ALL);`);
     const foreignShop = randomUUID();
     await connection`INSERT INTO categories(shop_id,name) VALUES
       (${SHOP_ID},'Zulu'),(${foreignShop},'Foreign'),(${SHOP_ID},'Alpha')`;
@@ -49,6 +53,34 @@ test('Nest catalog SQL isolates shops and applies search, active and low-stock f
     assert.deepEqual(names(await get('/inventory?includeInactive=true&lowStockOnly=true')), ['Inactive', 'Threshold']);
     // Query boolean policy is unchanged in this extraction; a later audit slice fixes coercion.
     assert.deepEqual(names(await get('/inventory?includeInactive=false')), ['Inactive', 'No threshold', 'Threshold']);
+
+    const verifiedId = randomUUID();
+    const draftId = randomUUID();
+    const inactiveId = randomUUID();
+    const foreignId = randomUUID();
+    await connection`INSERT INTO recipes(id,shop_id,name,status,is_active) VALUES
+      (${verifiedId},${SHOP_ID},'Verified','verified',true),
+      (${draftId},${SHOP_ID},'Draft','unverified',true),
+      (${inactiveId},${SHOP_ID},'Inactive','verified',false),
+      (${foreignId},${foreignShop},'Foreign','verified',true)`;
+    const [ownedItem] = await connection`SELECT id FROM inventory_items WHERE shop_id=${SHOP_ID} AND name='Threshold'`;
+    for (const recipeId of [verifiedId, draftId, inactiveId]) {
+      await connection`INSERT INTO recipe_ingredients
+        (shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,raw_src_unit,quantity,base_unit,base_unit_amount)
+        VALUES (${SHOP_ID},${recipeId},${ownedItem!.id},'Reviewed flour','flour','g',100,'g',100)`;
+    }
+    const recipeNames = (response: { body: { recipes: { name: string }[] } }) => response.body.recipes.map(row => row.name);
+    assert.deepEqual(recipeNames(await get('/recipes')), ['Verified']);
+    assert.deepEqual(recipeNames(await get('/recipes?includeUnverified=true')), ['Draft', 'Verified']);
+    assert.deepEqual(recipeNames(await get('/recipes?includeInactive=true&includeUnverified=true')), ['Draft', 'Inactive', 'Verified']);
+    assert.deepEqual(recipeNames(await get('/recipes?includeUnverified=true&search=dRaFt')), ['Draft']);
+    assert.deepEqual(recipeNames(await get('/recipes/orderable')), ['Verified']);
+    const draft = await get(`/recipes/${draftId}`);
+    assert.equal(draft.status, 200, 'unverified recipes remain available for review');
+    assert.equal(draft.body.recipe.costing.ingredients[0].rawName, 'Reviewed flour');
+    assert.deepEqual(draft.body.recipe.sources, []);
+    assert.equal((await get(`/recipes/${inactiveId}`)).status, 200);
+    assert.equal((await get(`/recipes/${foreignId}`)).status, 404);
   } finally {
     await app?.close();
     await connection.unsafe(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`);
