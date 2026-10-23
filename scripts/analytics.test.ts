@@ -1,3 +1,4 @@
+import {orderRow} from './support/orderFixture.js';
 /**
  * Analytics aggregation tests for N-21a.
  *
@@ -498,8 +499,8 @@ test('recent-orders: each row carries its own net profit', async () => {
   const h = await harness({
     'select:orders': [
       [
-        { id: 'order-1', totalAmount: '120.00', deliveryFee: '10.00', totalCost: '50.00' },
-        { id: 'order-2', totalAmount: '40.00', deliveryFee: '5.00', totalCost: '60.00' },
+        orderRow({ id: 'order-1', totalAmount: '120.00', deliveryFee: '10.00', totalCost: '50.00' }),
+        orderRow({ id: 'order-2', totalAmount: '40.00', deliveryFee: '5.00', totalCost: '60.00' }),
       ],
     ],
   });

@@ -4,6 +4,7 @@ import { IdentityRepository, SessionVerifier } from './identity.ports.js';
 import { DrizzleIdentityRepository } from './identity.repository.js';
 import { IdentityService } from './identity.service.js';
 import { ShopGuard } from './shop.guard.js';
+import { SessionGuard } from './session.guard.js';
 import { SupabaseSessionVerifier } from './supabase-session-verifier.js';
 
 const defaultProviders: Provider[] = [
@@ -17,7 +18,7 @@ const defaultProviders: Provider[] = [
   },
 ];
 
-@Module({ providers: [...defaultProviders, IdentityService, ShopGuard], exports: [IdentityService, ShopGuard] })
+@Module({ providers: [...defaultProviders, IdentityService, ShopGuard, SessionGuard], exports: [IdentityService, ShopGuard, SessionGuard] })
 export class IdentityModule {
   /** Replace external collaborators without replacing the guard or use case. */
   static register(options: { sessionVerifier: SessionVerifier; repository: IdentityRepository }): DynamicModule {

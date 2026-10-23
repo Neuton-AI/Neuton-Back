@@ -225,3 +225,14 @@ operations and analytics, including the planned camelCase query contract work.
 Phase 4 owns the broader worker/sync service extraction; phase 5 owns mandatory
 stock keys, full runtime composition and Fastify removal. The old pending-slice
 statements above are historical checkpoint evidence, superseded by this record.
+
+Phase 3 checkpoint (2026-10-23): session/profile/password, shop settings/onboarding
+and delivery, plus dashboard/recent orders/inventory value, now use feature
+services/persistence and Nest adapters. Session-only operations do not require
+shop membership. Public profile/shop/order fields are explicitly mapped.
+Queries are camelCase-only; old delivery distance input and unknown catalog
+aliases are rejected. Boolean query values parse false correctly. Frontend
+callers already use camelCase; no caller changes were necessary. Password
+changes verify that the reauthenticated identity matches the acting user and
+return a safe provider-failure message. Focused regressions passed 51/51; test
+typecheck and build passed. Continuing directly into phase 4.

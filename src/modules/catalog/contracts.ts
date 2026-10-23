@@ -6,17 +6,27 @@ export const createCategorySchema = z.object({
 });
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
-export const inventoryQuerySchema = z.object({
-  search: z.string().trim().max(120).optional(),
-  lowStockOnly: z.coerce.boolean().default(false),
-  includeInactive: z.coerce.boolean().default(false),
-});
+const queryBoolean = z
+  .union([
+    z.boolean(),
+    z.enum(['true', 'false']).transform((value) => value === 'true'),
+  ])
+  .default(false);
+export const inventoryQuerySchema = z
+  .object({
+    search: z.string().trim().max(120).optional(),
+    lowStockOnly: queryBoolean,
+    includeInactive: queryBoolean,
+  })
+  .strict();
 export type InventoryQuery = z.infer<typeof inventoryQuerySchema>;
-export const recipeQuerySchema = z.object({
-  search: z.string().trim().max(120).optional(),
-  includeInactive: z.coerce.boolean().default(false),
-  includeUnverified: z.coerce.boolean().default(false),
-});
+export const recipeQuerySchema = z
+  .object({
+    search: z.string().trim().max(120).optional(),
+    includeInactive: queryBoolean,
+    includeUnverified: queryBoolean,
+  })
+  .strict();
 export const recipeIdSchema = z.object({ id: z.string().uuid() });
 export type RecipeQuery = z.infer<typeof recipeQuerySchema>;
 

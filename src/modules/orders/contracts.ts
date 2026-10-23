@@ -29,7 +29,7 @@ export const listOrdersSchema = z.object({
   from: z.coerce.date().optional(), to: z.coerce.date().optional(),
   search: z.string().trim().max(120).optional(), status: z.enum(ORDER_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).default(0),
-});
+}).strict();
 export const quoteOrderSchema = z.object({ deliveryDistanceKm: z.coerce.number().min(0).default(0), items: z.array(orderItemSchema).min(1) });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type QuoteOrderInput = z.infer<typeof quoteOrderSchema>;

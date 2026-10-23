@@ -74,9 +74,12 @@ export async function buildAnalyticsApp(): Promise<AnalyticsHarness> {
   app.decorateRequest('shop', undefined);
   app.decorateRequest('analyticsDeps', undefined);
 
-  app.decorate('authenticate', async () => {});
+  app.decorate('authenticate', async (request) => {
+    request.user = { id: '33333333-3333-3333-3333-333333333333', email: null, fullName: null, avatarUrl: null };
+  });
   app.decorate('resolveShop', async (request) => {
     request.shop = TEST_SHOP;
+    request.shopRole = 'owner';
   });
 
   let deps: AnalyticsDeps | undefined;
