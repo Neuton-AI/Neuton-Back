@@ -11,6 +11,7 @@ import { TEST_SHOP, USER_ID } from './support/catalogApp.js';
 import { CatalogService } from '../src/modules/catalog/catalog.service.js';
 import type { ActorContext } from '../src/modules/identity/contracts.js';
 import { LoggerImpl } from '../src/lib/logger/index.js';
+import { recipeSchema } from '../src/modules/catalog/contracts.js';
 
 const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 
@@ -111,6 +112,32 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     assert.equal(events.length, 0);
     for (const effect of effects) await effect();
     assert.deepEqual(events.map(event => event.event), ['category_created']);
+
+    events.length = 0;
+    effects.length = 0;
+    const recipeInput = recipeSchema.parse({
+      name: 'Rollback recipe', ingredients: [{ rawName: 'User flour', quantity: 1, rawSrcUnit: 'kg' }],
+    });
+    await assert.rejects(database.transaction(async tx => {
+      await service.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, recipeInput);
+      assert.equal(app!.audits.length, 0);
+      assert.equal(events.length, 0);
+      throw new Error('rollback recipe transaction');
+    }), /rollback recipe transaction/);
+    assert.equal((await connection`SELECT count(*)::int AS count FROM recipes WHERE name='Rollback recipe'`)[0]?.count, 0);
+    assert.equal(app.audits.length, 0);
+    assert.equal(events.length, 0);
+    effects.length = 0;
+    await database.transaction(async tx => {
+      await service.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, {
+        ...recipeInput, name: 'Committed recipe',
+      });
+      assert.equal(app!.audits.length, 0);
+    });
+    assert.equal(app.audits.length, 0);
+    for (const effect of effects) await effect();
+    assert.deepEqual(app.audits.map(audit => audit.eventType), ['RECIPE_CREATED']);
+    assert.deepEqual(events.map(event => event.event), ['recipe_created']);
   } finally {
     await app?.close();
     await connection.unsafe(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`);

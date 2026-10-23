@@ -133,8 +133,13 @@ Full regression suite: 394/394 passed with zero skips against disposable
 PostgreSQL; test typecheck and production build passed. Category creation is
 also migrated to the shared service and Nest adapter, with role/input rejection,
 explicit output mapping, and transaction-bound post-commit success logging.
-Focused regressions passed 17/17; PostgreSQL rollback/commit evidence, test
-typecheck, and build passed. Remaining recipe and inventory writes are next.
+Focused category regressions passed 17/17. Recipe creation now shares validated
+contracts and a transaction-bound service, preserves supplied ingredient values,
+and creates only pending recipes. Focused creation regressions passed 19/19,
+including real PostgreSQL outer rollback/commit with no premature audit or
+success log; test typecheck/build passed. Recipe editing/verification and
+inventory mutations remain the next write slices. The latest full-suite result
+above precedes these creation slices; do not report it as a full rerun afterward.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,

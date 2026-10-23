@@ -162,3 +162,12 @@ these intentional behavior changes in distinct tested commits.
   PostgreSQL; test typecheck/build passed. Mutation of the category shop filter
   is detected by the real database test and restored. Catalog writes, receipts,
   uploads, cleanup and later phases remain pending.
+
+- Phase 2 initial write checkpoints: category and recipe creation use shared
+  services and explicit outputs. Recipe creation retains pending status and
+  supplied ingredient data; role/tenant validation precedes writes. Catalog
+  transaction binding defers success diagnostics and recipe audit until outer
+  commit. Latest focused regressions passed 19/19 with zero skips, including
+  disposable PostgreSQL rollback/commit checks; test typecheck/build passed.
+  This focused run follows the 394-test read checkpoint, not a new full-suite
+  result. Recipe editing/verification and inventory mutations remain pending.

@@ -19,43 +19,13 @@ import { defaultReceiptsDeps } from './receipts.js';
 import type { ActorContext } from '../modules/identity/contracts.js';
 import { CatalogService } from '../modules/catalog/catalog.service.js';
 import { CatalogPersistence } from '../modules/catalog/catalog.persistence.js';
-import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from '../modules/catalog/contracts.js';
+import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema, recipeSchema, recipePatchSchema, recipeIngredientSchema } from '../modules/catalog/contracts.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
 import { searchProduct } from '../lib/supermarket/prices.js';
 import { assertCatalogLinks } from '../lib/catalogLinks.js';
 import { adjustInventory, inventoryAdjustmentSchema } from '../lib/inventoryAdjustments.js';
-
-const recipeIngredientSchema = z.object({
-  inventoryItemId: z.string().uuid().nullable().optional(),
-  generalPriceId: z.string().uuid().nullable().optional(),
-  rawName: htmlFree(z.string().trim().min(1).max(160)),
-  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)).optional(),
-  quantity: z.coerce.number().positive(),
-  rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
-  baseUnit: z.enum(['g', 'ml', 'each']).nullable().optional(),
-  baseUnitAmount: z.number().finite().positive().max(999999999999.999).nullable().optional(),
-}).refine((ingredient) => !(ingredient.inventoryItemId && ingredient.generalPriceId), 'Choose one ingredient price source');
-
-const recipeSchema = z.object({
-  name: htmlFree(z.string().trim().min(1).max(160)),
-  description: htmlFree(z.string().trim().max(2_000)).nullable().optional(),
-  imageUrl: z.string().trim().url().max(500).nullable().optional(),
-  categoryId: z.string().uuid().nullable().optional(),
-  prepTimeMinutes: z.coerce.number().int().min(0).max(10_000).default(0),
-  yieldQuantity: z.coerce.number().positive().max(100_000).default(1),
-  yieldUnit: htmlFree(z.string().trim().min(1).max(24)).default('portion'),
-  targetMarginPct: z.coerce.number().min(0).max(999).nullable().optional(),
-  allergens: z.array(htmlFree(z.string().trim().min(1).max(40))).max(20).default([]),
-  steps: z.array(z.object({
-    stepNumber: z.number().int().positive(),
-    instruction: htmlFree(z.string().trim().min(1).max(20_000)),
-  })).max(500).refine((steps) => steps.every((step, index) => step.stepNumber === index + 1), 'Steps must be numbered in order').optional(),
-  ingredients: z.array(recipeIngredientSchema).min(1),
-});
-
-const recipePatchSchema = recipeSchema.partial();
 
 /**
  * The schema refusing to erase a recipe is an FK `23503`, and that refusal is
@@ -128,65 +98,9 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     catalogService(request).recipes(catalogActor(request), recipeQuerySchema.parse(request.query)));
 
   app.post('/recipes', mutationGuards, async (request, reply) => {
-    const shop = currentShop(request);
-    const body = recipeSchema.parse(request.body);
-
-    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
-    const created = await database.transaction(async (tx) => {
-      await assertCatalogLinks(tx, shop.id, body);
-      const inserted = await tx
-        .insert(recipes)
-        .values({
-          shopId: shop.id,
-          name: body.name,
-          description: body.description ?? null,
-          imageUrl: body.imageUrl ?? null,
-          categoryId: body.categoryId ?? null,
-          prepTimeMinutes: body.prepTimeMinutes,
-          yieldQuantity: qty(body.yieldQuantity),
-          yieldUnit: body.yieldUnit,
-          targetMarginPct:
-            body.targetMarginPct === null || body.targetMarginPct === undefined
-              ? null
-              : body.targetMarginPct.toFixed(2),
-          allergens: body.allergens,
-          steps: body.steps ?? [],
-          status: 'pending',
-        })
-        .returning();
-
-      const recipe = inserted[0];
-      if (!recipe) throw new Error('Recipe insert returned no row');
-
-      await tx.insert(recipeIngredients).values(
-        body.ingredients.map((ingredient) => ({
-          shopId: shop.id,
-          recipeId: recipe.id,
-          inventoryItemId: ingredient.inventoryItemId ?? null,
-          generalPriceId: ingredient.generalPriceId ?? null,
-          rawName: ingredient.rawName,
-          rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-          quantity: qty(ingredient.quantity),
-          rawSrcUnit: ingredient.rawSrcUnit,
-          baseUnit: ingredient.baseUnit ?? null,
-          baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
-        })),
-      );
-
-      return recipe;
-    });
-
-    await recordAuditSafe(app, {
-      shopId: shop.id,
-      userId: currentUser(request).id,
-      eventType: 'RECIPE_CREATED',
-      resourceId: created.id,
-      ipAddress: request.ip,
-    });
-
-    return reply.code(201).send({ recipe: created });
+    const result = await catalogService(request).createRecipe(catalogActor(request), recipeSchema.parse(request.body));
+    return reply.code(201).send(result);
   });
-
   app.get('/recipes/:id', guards, async (request) =>
     catalogService(request).recipe(catalogActor(request), recipeIdSchema.parse(request.params).id));
 

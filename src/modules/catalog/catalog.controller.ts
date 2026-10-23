@@ -3,7 +3,7 @@ import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { CatalogService } from './catalog.service.js';
-import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema } from './contracts.js';
+import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema, recipeSchema } from './contracts.js';
 
 @Controller('api/v1')
 @UseGuards(ShopGuard)
@@ -28,6 +28,11 @@ export class CatalogController {
   @Get('recipes')
   recipes(@CurrentActor() actor: ActorContext, @Query() query: unknown) {
     return this.catalog.recipes(actor, recipeQuerySchema.parse(query));
+  }
+
+  @Post('recipes')
+  createRecipe(@CurrentActor() actor: ActorContext, @Body() body: unknown) {
+    return this.catalog.createRecipe(actor, recipeSchema.parse(body));
   }
 
   @Get('recipes/orderable')

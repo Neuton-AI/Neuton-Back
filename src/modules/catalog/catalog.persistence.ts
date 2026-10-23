@@ -5,7 +5,9 @@ import { categories, recipes, mediaUploads, recipeIngredients, inventoryItems, g
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import type { Category, InventoryItem, Recipe } from '../../db/schema/catalog.js';
 import { notFound } from '../../lib/errors.js';
-import type { CategoryDto, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto } from './contracts.js';
+import { assertCatalogLinks } from '../../lib/catalogLinks.js';
+import { quantity } from '../../lib/money.js';
+import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto } from './contracts.js';
 
 export type CatalogReadDatabase = Pick<Database, 'select'>;
 export type CatalogTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -60,6 +62,28 @@ export class CatalogPersistence {
     const [category] = await this.database.insert(categories).values({ shopId, name }).returning();
     if (!category) throw new Error('Category insert returned no row');
     return mapCategory(category);
+  }
+
+  async createRecipe(shopId: string, input: CreateRecipeInput): Promise<RecipeDto> {
+    return this.database.transaction(async tx => {
+      await assertCatalogLinks(tx, shopId, input);
+      const [recipe] = await tx.insert(recipes).values({
+        shopId, name: input.name, description: input.description ?? null,
+        imageUrl: input.imageUrl ?? null, categoryId: input.categoryId ?? null,
+        prepTimeMinutes: input.prepTimeMinutes, yieldQuantity: quantity(input.yieldQuantity),
+        yieldUnit: input.yieldUnit, targetMarginPct: input.targetMarginPct?.toFixed(2) ?? null,
+        allergens: input.allergens, steps: input.steps ?? [], status: 'pending',
+      }).returning();
+      if (!recipe) throw new Error('Recipe insert returned no row');
+      await tx.insert(recipeIngredients).values(input.ingredients.map(ingredient => ({
+        shopId, recipeId: recipe.id, inventoryItemId: ingredient.inventoryItemId ?? null,
+        generalPriceId: ingredient.generalPriceId ?? null, rawName: ingredient.rawName,
+        rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+        quantity: quantity(ingredient.quantity), rawSrcUnit: ingredient.rawSrcUnit,
+        baseUnit: ingredient.baseUnit ?? null, baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
+      })));
+      return mapRecipe(recipe);
+    });
   }
 
   async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {

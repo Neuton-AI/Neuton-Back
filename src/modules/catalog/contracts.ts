@@ -133,3 +133,35 @@ export interface RecipeCostingDto {
   totalCount: number;
   ingredients: RecipeIngredientCostDto[];
 }
+
+export const recipeIngredientSchema = z.object({
+  inventoryItemId: z.string().uuid().nullable().optional(),
+  generalPriceId: z.string().uuid().nullable().optional(),
+  rawName: htmlFree(z.string().trim().min(1).max(160)),
+  rawMaterialName: htmlFree(z.string().trim().min(1).max(160)).optional(),
+  quantity: z.coerce.number().positive(),
+  rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
+  baseUnit: z.enum(['g', 'ml', 'each']).nullable().optional(),
+  baseUnitAmount: z.number().finite().positive().max(999999999999.999).nullable().optional(),
+}).refine((ingredient) => !(ingredient.inventoryItemId && ingredient.generalPriceId), 'Choose one ingredient price source');
+
+export const recipeSchema = z.object({
+  name: htmlFree(z.string().trim().min(1).max(160)),
+  description: htmlFree(z.string().trim().max(2_000)).nullable().optional(),
+  imageUrl: z.string().trim().url().max(500).nullable().optional(),
+  categoryId: z.string().uuid().nullable().optional(),
+  prepTimeMinutes: z.coerce.number().int().min(0).max(10_000).default(0),
+  yieldQuantity: z.coerce.number().positive().max(100_000).default(1),
+  yieldUnit: htmlFree(z.string().trim().min(1).max(24)).default('portion'),
+  targetMarginPct: z.coerce.number().min(0).max(999).nullable().optional(),
+  allergens: z.array(htmlFree(z.string().trim().min(1).max(40))).max(20).default([]),
+  steps: z.array(z.object({
+    stepNumber: z.number().int().positive(),
+    instruction: htmlFree(z.string().trim().min(1).max(20_000)),
+  })).max(500).refine((steps) => steps.every((step, index) => step.stepNumber === index + 1), 'Steps must be numbered in order').optional(),
+  ingredients: z.array(recipeIngredientSchema).min(1),
+});
+
+export const recipePatchSchema = recipeSchema.partial();
+
+export type CreateRecipeInput = z.infer<typeof recipeSchema>;

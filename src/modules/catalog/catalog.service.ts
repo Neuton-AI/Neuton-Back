@@ -4,7 +4,8 @@ import { requireActorRole } from '../identity/authorization.js';
 import { toNumber } from '../../lib/money.js';
 import { CatalogPersistence, type CatalogTransaction } from './catalog.persistence.js';
 import { costRecipe } from './costing.js';
-import type { CategoryDto, CreateCategoryInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+import { CatalogAudit } from './catalog.audit.js';
+import type { CategoryDto, CreateCategoryInput, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
 
 export const CATALOG_COMMIT_EFFECTS = Symbol('CATALOG_COMMIT_EFFECTS');
 export type CatalogAfterCommit = (effect: () => Promise<void>) => void;
@@ -13,22 +14,39 @@ export type CatalogAfterCommit = (effect: () => Promise<void>) => void;
 export class CatalogService {
   constructor(
     @Inject(CatalogPersistence) private readonly persistence: CatalogPersistence,
+    @Inject(CatalogAudit) private readonly audit: CatalogAudit = new CatalogAudit(),
     @Optional() @Inject(CATALOG_COMMIT_EFFECTS) private readonly afterCommit?: CatalogAfterCommit,
   ) {}
 
   inTransaction(transaction: CatalogTransaction, afterCommit: CatalogAfterCommit): CatalogService {
-    return new CatalogService(new CatalogPersistence(transaction), afterCommit);
+    return new CatalogService(new CatalogPersistence(transaction), this.audit, afterCommit);
+  }
+
+  private async committed(effect: () => Promise<void>): Promise<void> {
+    if (this.afterCommit) this.afterCommit(effect);
+    else await effect();
   }
 
   async createCategory(actor: ActorContext, input: CreateCategoryInput): Promise<{ category: CategoryDto }> {
     requireActorRole(actor, ['owner', 'admin']);
     const category = await this.persistence.createCategory(actor.shop.id, input.name);
-    const report = async () => {
+    await this.committed(async () => {
       actor.log.info({ event: 'category_created', categoryId: category.id }, 'category created');
-    };
-    if (this.afterCommit) this.afterCommit(report);
-    else await report();
+    });
     return { category };
+  }
+
+  async createRecipe(actor: ActorContext, input: CreateRecipeInput): Promise<{ recipe: RecipeDto }> {
+    requireActorRole(actor, ['owner', 'admin']);
+    const recipe = await this.persistence.createRecipe(actor.shop.id, input);
+    await this.committed(async () => {
+      await this.audit.record(actor, {
+        shopId: actor.shop.id, userId: actor.user.id, eventType: 'RECIPE_CREATED',
+        resourceId: recipe.id, ipAddress: actor.ipAddress,
+      });
+      actor.log.info({ event: 'recipe_created', recipeId: recipe.id }, 'recipe created');
+    });
+    return { recipe };
   }
 
   async categories(actor: ActorContext): Promise<{ categories: CategoryDto[] }> {

@@ -86,7 +86,7 @@ test('Nest catalog rejects unauthenticated, foreign-shop and invalid queries bef
     assert.equal((await request(nest.app.getHttpServer()).get('/api/v1/inventory').query({
       search: 'x'.repeat(121),
     }).set(headers)).status, 400);
-    assert.deepEqual(database.calls, []);
+    assert.equal(database.calls.length, 0);
   } finally {
     await nest.close();
   }
@@ -164,7 +164,7 @@ test('category creation validates input, enforces roles, and maps the committed 
     const invalid = await request(nest.app.getHttpServer()).post('/api/v1/categories').set(headers)
       .send({ name: '<script>bad</script>' });
     assert.equal(invalid.status, 400);
-    assert.deepEqual(database.calls, []);
+    assert.equal(database.calls.length, 0);
     assert.equal((await request(member.app.getHttpServer()).post('/api/v1/categories')
       .set(headers).send({ name: 'Flour' })).status, 403);
     assert.deepEqual(memberDatabase.calls, []);
@@ -173,6 +173,46 @@ test('category creation validates input, enforces roles, and maps the committed 
     assert.equal(created.status, 201);
     assert.deepEqual(created.body, { category: JSON.parse(JSON.stringify(category)) });
     assert.deepEqual(database.onlyCallTo('insert', 'categories').values, { shopId: SHOP_ID, name: 'Flour' });
+  } finally {
+    await nest.close();
+    await member.close();
+  }
+});
+
+test('recipe creation stays pending, preserves supplied ingredient values, and checks roles and owned links', async () => {
+  const created = { ...recipe, status: 'pending', categoryId: null };
+  const database = new FakeDb({ 'insert:recipes': [[created]], 'insert:recipeIngredients': [[]] });
+  const nest = await buildNestCatalogApp(database as unknown as Database);
+  const memberDb = new FakeDb();
+  const member = await buildNestCatalogApp(memberDb as unknown as Database, 'member');
+  const payload = {
+    name: recipe.name, status: 'verified', steps: recipe.steps,
+    ingredients: [{ rawName: 'User corrected flour', rawMaterialName: 'corrected flour', quantity: 1,
+      rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 1000 }],
+  };
+  try {
+    assert.equal((await request(nest.app.getHttpServer()).post('/api/v1/recipes').set(headers)
+      .send({ ...payload, name: '<script>bad</script>' })).status, 400);
+    assert.equal(database.calls.length, 0);
+    assert.equal((await request(member.app.getHttpServer()).post('/api/v1/recipes').set(headers).send(payload)).status, 403);
+    assert.equal(memberDb.calls.length, 0);
+    assert.equal((await request(nest.app.getHttpServer()).post('/api/v1/recipes').set(headers)
+      .send({ ...payload, categoryId: '55555555-5555-5555-5555-555555555555' })).status, 403);
+    assert.equal(database.calls.filter(call => call.op !== 'select').length, 0);
+    const response = await request(nest.app.getHttpServer()).post('/api/v1/recipes').set(headers).send(payload);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.recipe.status, 'pending');
+    const stored = database.onlyCallTo('insert', 'recipes').values as Record<string, unknown>;
+    assert.equal(stored.status, 'pending');
+    assert.equal(stored.name, recipe.name);
+    assert.equal(stored.shopId, SHOP_ID);
+    const lines = database.onlyCallTo('insert', 'recipeIngredients').values;
+    assert.deepEqual(lines, [{ shopId: SHOP_ID, recipeId: recipe.id, inventoryItemId: null, generalPriceId: null,
+      rawName: 'User corrected flour', rawMaterialName: 'corrected flour', quantity: '1.000', rawSrcUnit: 'kg',
+      baseUnit: 'g', baseUnitAmount: '1000.000' }]);
+    assert.equal(database.transactionCount, 2, 'foreign-link attempt rolls back before successful create');
+    assert.equal(database.calls.filter(call => call.op === 'insert').every(call => call.inTransaction), true);
+    assert.deepEqual(nest.audits.map(audit => audit.eventType), ['RECIPE_CREATED']);
   } finally {
     await nest.close();
     await member.close();
