@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { db } from '../db/client.js';
 import {
   categories,
@@ -10,14 +10,18 @@ import {
   recipes,
   mediaUploads,
 } from '../db/schema/index.js';
-import { currentShop, currentUser } from '../plugins/auth.js';
+import { currentShop, currentUser, currentRole } from '../plugins/auth.js';
 import { recordAuditSafe } from '../lib/audit.js';
 import { notFound, conflict } from '../lib/errors.js';
 import { htmlFree } from '../lib/safeText.js';
 import { deleteObject } from '../lib/storage.js';
-import { quantity as qty, toNumber, unitCost } from '../lib/money.js';
+import { quantity as qty, unitCost } from '../lib/money.js';
 import { defaultReceiptsDeps } from './receipts.js';
 import { costRecipe } from '../modules/catalog/costing.js';
+import type { ActorContext } from '../modules/identity/contracts.js';
+import { CatalogService } from '../modules/catalog/catalog.service.js';
+import { CatalogPersistence } from '../modules/catalog/catalog.persistence.js';
+import { inventoryQuerySchema } from '../modules/catalog/contracts.js';
 import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
@@ -96,21 +100,26 @@ const inventorySchema = z.object({
 
 const inventoryPatchSchema = inventorySchema.partial();
 
+function catalogActor(request: FastifyRequest): ActorContext {
+  return {
+    shop: currentShop(request), user: currentUser(request), role: currentRole(request),
+    requestId: request.id, traceId: request.traceId ?? request.id,
+    ipAddress: request.ip, log: request.log,
+  };
+}
+
+function catalogService(request: FastifyRequest): CatalogService {
+  return new CatalogService(new CatalogPersistence((request.receiptsDeps ?? defaultReceiptsDeps).db));
+}
+
 export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchProduct }> = async (app, options) => {
   const guards = { preHandler: [app.authenticate, app.resolveShop] };
   const mutationGuards = {
     preHandler: [app.authenticate, app.resolveShop, app.requireRole(['owner', 'admin'])],
   };
 
-  app.get('/categories', guards, async (request) => {
-    const shop = currentShop(request);
-    const rows = await db
-      .select()
-      .from(categories)
-      .where(eq(categories.shopId, shop.id))
-      .orderBy(asc(categories.name));
-    return { categories: rows };
-  });
+  app.get('/categories', guards, async (request) =>
+    catalogService(request).categories(catalogActor(request)));
 
   app.post('/categories', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);
@@ -425,42 +434,8 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     return { ok: true, mode };
   });
 
-  app.get('/inventory', guards, async (request) => {
-    const shop = currentShop(request);
-    const query = z
-      .object({
-        search: z.string().trim().max(120).optional(),
-        lowStockOnly: z.coerce.boolean().default(false),
-        includeInactive: z.coerce.boolean().default(false),
-      })
-      .parse(request.query);
-
-    const conditions = [eq(inventoryItems.shopId, shop.id)];
-    if (!query.includeInactive) conditions.push(eq(inventoryItems.isActive, true));
-    if (query.search) {
-      conditions.push(sql`${inventoryItems.name} ilike ${`%${query.search}%`}`);
-    }
-    if (query.lowStockOnly) {
-      conditions.push(
-        sql`${inventoryItems.reorderLevel} is not null and ${inventoryItems.currentQuantity} <= ${inventoryItems.reorderLevel}`,
-      );
-    }
-
-    const rows = await db
-      .select()
-      .from(inventoryItems)
-      .where(and(...conditions))
-      .orderBy(asc(inventoryItems.name));
-
-    return {
-      items: rows.map((item) => ({
-        ...item,
-        isLowStock:
-          item.reorderLevel !== null &&
-          toNumber(item.currentQuantity) <= toNumber(item.reorderLevel),
-      })),
-    };
-  });
+  app.get('/inventory', guards, async (request) =>
+    catalogService(request).inventory(catalogActor(request), inventoryQuerySchema.parse(request.query)));
 
   app.post('/inventory', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);

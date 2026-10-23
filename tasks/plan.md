@@ -122,7 +122,11 @@ Work in the following slices, committing and updating evidence after each:
 Current checkpoint: shared costing extracted from the HTTP route into catalog
 contracts, costing, and persistence. Existing pricing/editor/manual-product and
 real PostgreSQL tenant-link tests passed 30/30, zero skips; test typecheck and
-production build passed. The five catalog read adapters remain the next slice.
+production build passed. Categories and inventory now use shared read services,
+explicit DTOs, and Nest/Fastify adapters. Their focused regressions passed
+14/14, zero skips, including real PostgreSQL shop isolation and filter checks;
+test typecheck/build passed. Removing the category shop filter makes the tenant
+test fail (source restored). Recipe list/detail/orderable reads are next.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,
