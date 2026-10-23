@@ -181,3 +181,47 @@ these intentional behavior changes in distinct tested commits.
   against disposable PostgreSQL; test typecheck/build passed. Review and
   implementation were performed directly without agents. Inventory writes,
   manual/barcode pricing, deletion, receipts, uploads and cleanup remain pending.
+
+## Phase 2 completion — 2026-10-23
+
+Phase 2 is complete. Catalog/inventory pricing and mutations, recipe deletion,
+receipt review/verification/deletion and grouped uploads share application
+services with explicit DTOs and Nest/legacy transport adapters. The worker now
+locks the document before the upload and rejects ungrouped jobs; transaction
+rollback and queue redelivery retain their guarantees. User review and corrected
+values remain authoritative. Production still starts with Fastify until phase 5.
+
+The deletion outbox is durable, leased and retryable. Receipt deletion refuses
+verified documents; recipe FK fallback uses a savepoint and retains sales
+history. Domain deletion and cleanup intent commit together, while R2 I/O runs
+outside the domain transaction. Dispatcher startup/shutdown is wired.
+
+Final backend verification: 406/406 tests passed, zero skips, using disposable
+PostgreSQL for transaction/concurrency checks; test typecheck, production build
+and migration validation passed. Frontend lint, typecheck, 457/457 tests and
+production build passed. Review was performed directly without agents.
+
+Backend checkpoints: `4b05947`, `966fdf4`, `64e910b`, `380b451`, `5733857`.
+Frontend: `refactor/F/n178-grouped-uploads`, `a56a51f` removes the obsolete
+single-file helper, its unused types and old-only tests; grouped tests remain.
+The manual live-upload script now uses authenticated grouped API calls and
+completion replay. It was not executed against live services.
+
+### Rollout for the separate cleanup change
+
+1. Apply `0030_storage_object_deletions.sql` before deploying this backend.
+   Only disposable test databases have been migrated during implementation.
+2. Coordinate frontend/backend rollout for grouped-only uploads. Drain old
+   ungrouped jobs first; the worker now rejects them explicitly.
+3. Observe `storage_cleanup_deleted`, `storage_cleanup_retry` and
+   `storage_cleanup_dispatch_failed`; investigate growing due work and expired
+   leases. Logs correlate shop, request, trace and attempt without file contents.
+4. For rollback, retain the cleanup table and pending rows. A later compatible
+   dispatcher can recover leased work after expiry; do not erase pending intents.
+   Redeploy a compatible frontend/backend pair when rolling back the upload API.
+
+No merge or deployment was performed. Next is phase 3: session/profile/shop
+operations and analytics, including the planned camelCase query contract work.
+Phase 4 owns the broader worker/sync service extraction; phase 5 owns mandatory
+stock keys, full runtime composition and Fastify removal. The old pending-slice
+statements above are historical checkpoint evidence, superseded by this record.

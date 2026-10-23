@@ -30,9 +30,8 @@ does not automatically complete every remaining audit improvement.
   to unrelated fixes to obtain a green checkpoint.
 - At every completed phase or commit checkpoint announce:
   "honi, x was done, now starting with y".
-- Phase 1 is complete. Phase 2 begins with catalog reads and recipe costing.
-  The previously assigned catalog implementation did not produce changes;
-  inspect the working tree before resuming and preserve unrelated user edits.
+- Phases 1 and 2 are complete. The next implementation is phase 3: session,
+  profile, shops, and analytics. Preserve unrelated user edits.
 - Production still starts through Fastify. Move existing routes onto shared
   feature services during the transition; replace production startup only
   after all capabilities have their Nest equivalents. Temporary adapters must
@@ -115,39 +114,53 @@ and the affected HTML suite then passed 6/6. Typechecks, build, migration
 validation, and database integration checks passed. This is not a claim that a
 second full 389-test run was performed after the fixture-only correction.
 
-### Phase 2 — Catalog, inventory, receipts, and uploads (current)
+### Phase 2 — Catalog, inventory, receipts, and uploads (complete)
 
-Work in the following slices, committing and updating evidence after each:
+Completed on 2026-10-23, implemented and reviewed directly without agents.
+Catalog reads and writes, inventory mutations, manual/barcode pricing, recipe
+verification/deletion, receipt review/verification/deletion, and grouped upload
+transport now have shared services and Nest adapters. Production Fastify routes
+are thin delegates to the same operations; the runtime cutover remains phase 5.
+User corrections and the unverified review workflow are preserved.
 
-Current checkpoint: shared costing extracted from the HTTP route into catalog
-contracts, costing, and persistence. Existing pricing/editor/manual-product and
-real PostgreSQL tenant-link tests passed 30/30, zero skips; test typecheck and
-production build passed. Categories and inventory now use shared read services,
-explicit DTOs, and Nest/Fastify adapters. Their focused regressions passed
-14/14, zero skips, including real PostgreSQL shop isolation and filter checks;
-test typecheck/build passed. Removing the category shop filter makes the tenant
-test fail (source restored). Recipe list/detail/orderable reads now share the
-same services and explicit nested DTOs. All five read endpoints are implemented
-in Nest and delegated from Fastify; reviewed values and draft access are retained.
-Full regression suite: 394/394 passed with zero skips against disposable
-PostgreSQL; test typecheck and production build passed. Category creation is
-also migrated to the shared service and Nest adapter, with role/input rejection,
-explicit output mapping, and transaction-bound post-commit success logging.
-Focused category regressions passed 17/17. Recipe creation now shares validated
-contracts and a transaction-bound service, preserves supplied ingredient values,
-and creates only pending recipes. Focused creation regressions passed 19/19,
-including real PostgreSQL outer rollback/commit with no premature audit or
-success log; test typecheck/build passed. Recipe editing is also migrated:
-metadata-only changes retain saved ingredients, reviewed quantities are converted
-with the existing rules, and sync binds the service to the outer transaction.
-Its focused regressions passed 31/31 plus the extended real sync rollback check.
-Verification is now migrated too: reviewed corrections and status update are
-atomic, repeated approval returns 409, and failed sync restores both status and
-ingredients without a success audit. The latest full regression run after all
-these write slices passed 398/398 with zero skips against disposable PostgreSQL;
-test typecheck and production build passed. Remaining catalog work includes
-inventory mutations, manual/barcode pricing, and deletion; receipt, upload, and
-durable-cleanup slices are also still pending.
+Deletion now records deduplicated storage-cleanup intents in the domain
+transaction. A leased dispatcher retries R2 deletion outside database locks,
+recovers expired leases, and acknowledges only its own lease. Startup and
+shutdown are wired. Receipt deletion refuses verified documents. Recipe deletion
+uses a savepoint for the expected FK refusal and preserves sales history by
+deactivating the recipe. Workers and deletion use document → upload lock order.
+
+The old single-file upload HTTP/client path and ungrouped queue/worker execution
+are removed. Grouped uploads preserve document IDs and safely redispatch on
+completion retry. The frontend companion branch is
+`refactor/F/n178-grouped-uploads`, commit `a56a51f`. Manual upload smoke tooling
+now uses the authenticated grouped API; it was updated, not run against live
+credentials.
+
+Completion evidence: **406/406 backend tests passed, zero skips**, including
+real disposable-PostgreSQL tenant boundaries, rollback/replay, worker/deletion
+contention, savepoint fallback, leases, crash recovery and retry tests. Backend
+test typecheck, production build and migration validation passed. Frontend
+`npm run verify` passed: lint, typecheck, **457/457 tests**, and production build.
+Reviewed correctness, authorization, explicit DTO mapping, transaction effects,
+lock ordering, external-I/O placement, and safe correlated diagnostics.
+
+Final implementation checkpoints: `4b05947` (durable cleanup), `966fdf4`
+(inventory/pricing/deletion services), `64e910b` (upload module), `380b451`
+(receipts and transport delegation), and `5733857` (grouped jobs/lock ordering).
+Earlier catalog checkpoints remain in Git history and the migration notes.
+
+**Deployment prerequisite:** apply `0030_storage_object_deletions.sql` before
+running this backend version. It was applied only to the disposable test DB;
+no developer or production database was migrated. Ship the grouped-only client
+and backend together. Drain old ungrouped jobs before rollout; these jobs are
+now rejected. Keep the cleanup table and pending intents if rolling back; do
+not drop durable work. Watch `storage_cleanup_retry`,
+`storage_cleanup_dispatch_failed`, and due/expired-lease backlog. This phase
+has not been merged or deployed. Mandatory stock keys (#174) and camelCase-only
+queries (#176) remain explicitly assigned to later phases.
+
+The following completed slice descriptions retain the acceptance criteria:
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,
