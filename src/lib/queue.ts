@@ -43,7 +43,6 @@ export const DEFAULT_JOB_OPTIONS: JobsOptions = {
 };
 
 let queue: Queue<MediaJobData> | null = null;
-let queueUnavailable = false;
 
 export function getMediaQueue(): Queue<MediaJobData> {
   if (!queue) {
@@ -66,26 +65,22 @@ export async function enqueueMediaJobOn(
   mediaQueue: Pick<Queue<MediaJobData>, 'getJob' | 'add'>,
   data: MediaJobData,
 ): Promise<EnqueueResult> {
-  if (data.uploadId) {
-    const existing = await mediaQueue.getJob(`upload-${data.uploadId}`);
-    if (existing) {
-      if (await existing.getState() === 'failed') await existing.retry();
-      return { queued: true, jobId: String(existing.id) };
-    }
+  if (!data.uploadId) throw new Error('Grouped uploadId is required for media jobs');
+  const existing = await mediaQueue.getJob(`upload-${data.uploadId}`);
+  if (existing) {
+    if (await existing.getState() === 'failed') await existing.retry();
+    return { queued: true, jobId: String(existing.id) };
   }
-  const job = await mediaQueue.add(data.kind, data, data.uploadId ? { jobId: `upload-${data.uploadId}` } : {});
+  const job = await mediaQueue.add(data.kind, data, { jobId: `upload-${data.uploadId}` });
   return { queued: true, jobId: String(job.id) };
 }
 
 export async function enqueueMediaJob(data: MediaJobData): Promise<EnqueueResult> {
-  if (queueUnavailable && !data.uploadId) {
-    return { queued: false, jobId: null, reason: 'queue disabled' };
-  }
+  if (!data.uploadId) throw new Error('Grouped uploadId is required for media jobs');
   try {
     return await enqueueMediaJobOn(getMediaQueue(), data);
   } catch (error) {
     if (env.QUEUE_OPTIONAL) {
-      if (!data.uploadId) queueUnavailable = true;
       return { queued: false, jobId: null, reason: 'queue unavailable' };
     }
     throw error;

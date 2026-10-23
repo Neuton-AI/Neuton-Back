@@ -677,6 +677,8 @@ export async function runJob(
   deps: WorkerDeps = defaultWorkerDeps,
 ): Promise<void> {
   const jobLogger = workerLogger.child(jobLogContext(data, job));
+  if (!data.uploadId) throw new UnrecoverableError('Legacy upload jobs are no longer supported');
+  if (!['receipt','recipe','product','order'].includes(data.kind)) throw new UnrecoverableError(`Unsupported job kind: ${String(data.kind)}`);
   jobLogger.info('job started');
 
   // Check circuit breaker before starting
@@ -716,9 +718,22 @@ export async function runJob(
       // This durable lock also covers a stalled BullMQ job delivered to two workers.
       // Business writes and processedAt commit together, so a crash cannot replay effects.
       await deps.db.transaction(async (tx) => {
+        const [association] = await tx.select().from(mediaUploads)
+          .where(and(eq(mediaUploads.id, data.uploadId!), eq(mediaUploads.shopId, data.shopId))).limit(1);
+        if (!association || association.processedAt) return;
+        const documentTable = association.kind === 'receipt' ? receipts : association.kind === 'order' ? orders : recipes;
+        const documentId = association.receiptId ?? association.recipeId ?? association.orderId;
+        if (!documentId) throw new Error('Upload has no associated document');
+        // Deletion and processing share document -> upload lock order.
+        const [document] = await tx.select({ id: documentTable.id }).from(documentTable)
+          .where(and(eq(documentTable.id, documentId), eq(documentTable.shopId, data.shopId))).limit(1).for('update');
+        if (!document) return;
         const [upload] = await tx.select().from(mediaUploads)
           .where(and(eq(mediaUploads.id, data.uploadId!), eq(mediaUploads.shopId, data.shopId))).limit(1).for('update');
         if (!upload || upload.processedAt) return;
+        if ((upload.receiptId ?? upload.recipeId ?? upload.orderId) !== documentId || upload.kind !== association.kind) {
+          throw new Error('Upload document association changed during processing');
+        }
         if (!upload.queuedAt) throw new Error('Document has not completed uploading');
         validateSourceLimits(upload.sources);
         const first = upload.sources[0]!;
@@ -730,8 +745,6 @@ export async function runJob(
         });
         await tx.update(mediaUploads).set({ processedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
       });
-    } else {
-      await process(deps, data);
     }
     // Record success for circuit breaker
     geminiCircuitBreaker.recordSuccess();

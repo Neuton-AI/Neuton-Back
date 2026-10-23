@@ -177,6 +177,13 @@ export class FakeDb {
     return this;
   }
 
+  /** Seeds a prerequisite read before existing domain-query fixtures. */
+  prepend(op: DbOperation, table: string, rows: unknown): this {
+    const key = `${op}:${table}`;
+    this.queues.set(key, [rows, ...(this.queues.get(key) ?? [])]);
+    return this;
+  }
+
   /** Makes the statement reject, standing in for a database error. */
   failOn(op: DbOperation, table: string, error: Error): this {
     this.failures.set(`${op}:${table}`, error);

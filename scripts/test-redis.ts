@@ -1,4 +1,5 @@
 import { enqueueMediaJob, getMediaQueue, QUEUE_NAME } from '../src/lib/queue.js';
+import { randomUUID } from 'node:crypto';
 
 /** Verifies the Redis/BullMQ link on its own, without touching R2 or Gemini. */
 
@@ -11,6 +12,8 @@ async function main() {
   console.log(`queue "${QUEUE_NAME}" existing counts: ${JSON.stringify(counts)}`);
 
   const queued = await enqueueMediaJob({
+    // An unassociated group is safely ignored by a running worker.
+    uploadId: randomUUID(),
     shopId,
     uploadedBy: null,
     kind: 'receipt',
