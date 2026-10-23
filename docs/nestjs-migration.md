@@ -82,10 +82,12 @@ contract changes before doing so. Keep schema changes independently reversible.
 
 ## Progress
 
-### Delegated execution
+### Execution ownership
 
-The orchestrator plans, integrates, verifies and commits each checkpoint. All
-implementation and side-review agents use GPT-6.1 Sol at medium effort.
+The mission and detailed phase criteria are maintained in
+[tasks/plan.md](../tasks/plan.md). From 2026-10-23 onward, honi requested direct
+implementation without agents. Earlier delegation below records how the
+foundation was delivered; it does not authorize further agent work.
 
 - Identity slice: feature contracts, Supabase authentication, mandatory tenant
   membership resolution, Nest guards and actor decorator. Tests cover rejected
@@ -99,8 +101,8 @@ implementation and side-review agents use GPT-6.1 Sol at medium effort.
   until the sync phase replaces handler wrapping. Review and commit only after
   focused regressions and type/build checks pass.
 
-Agents have disjoint file ownership. Review agents are read-only; the
-orchestrator owns commits and phase-completion announcements.
+The primary assistant now owns implementation, review, verification, commits,
+and phase-completion announcements.
 
 ### Remaining slice dependencies
 
