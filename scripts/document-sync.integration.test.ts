@@ -222,6 +222,16 @@ test(
           await db.execute(sql`alter table document_mutations drop constraint ${sql.identifier(constraintName)}`);
         }
       };
+      const beforeRecipeRollback = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId);
+      const recipeAudits = () => db.execute(sql`select count(*)::int as count from audit_logs
+        where shop_id=${shopId}::uuid and resource_id=${recipeId}::uuid and event_type='RECIPE_UPDATED'`);
+      const auditCountBefore = (await recipeAudits())[0]?.count;
+      const nameBefore = (await db.execute(sql`select name from recipes where id=${recipeId}::uuid`))[0]?.name;
+      await rejectReceipt(() => app.inject({ method: 'PATCH', url: `/api/v1/recipes/${recipeId}`, headers: {
+        ...headers, 'x-sync-id': rejectedMutation, 'x-sync-version': String(beforeRecipeRollback.updatedAt + 100),
+      }, payload: { name: 'Must roll back' } }));
+      assert.equal((await db.execute(sql`select name from recipes where id=${recipeId}::uuid`))[0]?.name, nameBefore);
+      assert.equal((await recipeAudits())[0]?.count, auditCountBefore, 'rolled-back recipe edit emits no audit');
       await rejectReceipt(() => mutateOrder('POST', '', rejectedMutation, orderVersion));
       assert.equal((await db.execute(sql`select count(*)::int as count from orders where shop_id=${shopId}::uuid`))[0]?.count, 0);
       assert.equal((await db.execute(sql`select last_order_number from shops where id=${shopId}::uuid`))[0]?.last_order_number, 0);

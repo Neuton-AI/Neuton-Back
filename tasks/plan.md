@@ -137,9 +137,13 @@ Focused category regressions passed 17/17. Recipe creation now shares validated
 contracts and a transaction-bound service, preserves supplied ingredient values,
 and creates only pending recipes. Focused creation regressions passed 19/19,
 including real PostgreSQL outer rollback/commit with no premature audit or
-success log; test typecheck/build passed. Recipe editing/verification and
-inventory mutations remain the next write slices. The latest full-suite result
-above precedes these creation slices; do not report it as a full rerun afterward.
+success log; test typecheck/build passed. Recipe editing is also migrated:
+metadata-only changes retain saved ingredients, reviewed quantities are converted
+with the existing rules, and sync binds the service to the outer transaction.
+Its focused regressions passed 31/31 plus the extended real sync rollback check;
+test typecheck/build passed. Verification and inventory mutations remain next.
+The latest full-suite result above precedes these write slices; do not report
+it as a full rerun afterward.
 
 1. **Catalog reads and shared costing.** Move categories, recipe list/detail,
    orderable recipes, and inventory reads into feature contracts, persistence,

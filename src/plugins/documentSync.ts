@@ -61,7 +61,7 @@ export function registerDocumentSync(app: FastifyInstance) {
         body: request.body ?? null,
         version,
       });
-      const orderEffects: Array<() => Promise<void>> = [];
+      const mutationEffects: Array<() => Promise<void>> = [];
       const result = await db.transaction(async (tx) => {
         await tx.execute(
           sql`select pg_advisory_xact_lock(hashtextextended(${shop.id}, 161))`,
@@ -112,8 +112,9 @@ export function registerDocumentSync(app: FastifyInstance) {
         request.ordersDeps = {
           ...defaultOrdersDeps,
           db: tx as unknown as typeof db,
-          transaction: { db: tx, afterCommit: (effect) => { orderEffects.push(effect); } },
+          transaction: { db: tx, afterCommit: (effect) => { mutationEffects.push(effect); } },
         };
+        request.catalogTransaction = { db: tx, afterCommit: effect => { mutationEffects.push(effect); } };
         // Delay sending until the business transaction and retry receipt commit together.
         let status = 200;
         let sent: unknown;
@@ -135,9 +136,9 @@ export function registerDocumentSync(app: FastifyInstance) {
           values (${shop.id}::uuid,${id}::uuid,${user.id}::uuid,${signature}::jsonb,${JSON.stringify(body)}::jsonb,${status})`);
         return { status, body };
       });
-      // The retry receipt can still fail after the order handler returns.
-      // Publish order success effects only after that outer transaction commits.
-      for (const effect of orderEffects) await effect();
+      // The retry receipt can still fail after the domain handler returns.
+      // Publish success effects only after that outer transaction commits.
+      for (const effect of mutationEffects) await effect();
       return reply.code(result.status).send(result.body);
     };
   });

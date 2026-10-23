@@ -17,10 +17,9 @@ import { deleteObject } from '../lib/storage.js';
 import { quantity as qty, unitCost } from '../lib/money.js';
 import { defaultReceiptsDeps } from './receipts.js';
 import type { ActorContext } from '../modules/identity/contracts.js';
-import { CatalogService } from '../modules/catalog/catalog.service.js';
-import { CatalogPersistence } from '../modules/catalog/catalog.persistence.js';
+import { CatalogService, type CatalogAfterCommit } from '../modules/catalog/catalog.service.js';
+import { CatalogPersistence, type CatalogTransaction } from '../modules/catalog/catalog.persistence.js';
 import { createCategorySchema, inventoryQuerySchema, recipeQuerySchema, recipeIdSchema, recipeSchema, recipePatchSchema, recipeIngredientSchema } from '../modules/catalog/contracts.js';
-import { convertEditedIngredients } from '../lib/recipeEdits.js';
 import { prepareBarcodePrice } from '../lib/recipeBarcodePrice.js';
 import { manualProductSchema, prepareManualProduct } from '../lib/manualProduct.js';
 import { searchProduct } from '../lib/supermarket/prices.js';
@@ -68,6 +67,12 @@ const inventorySchema = z.object({
 
 const inventoryPatchSchema = inventorySchema.partial();
 
+declare module 'fastify' {
+  interface FastifyRequest {
+    catalogTransaction?: { db: CatalogTransaction; afterCommit: CatalogAfterCommit };
+  }
+}
+
 function catalogActor(request: FastifyRequest): ActorContext {
   return {
     shop: currentShop(request), user: currentUser(request), role: currentRole(request),
@@ -77,7 +82,10 @@ function catalogActor(request: FastifyRequest): ActorContext {
 }
 
 function catalogService(request: FastifyRequest): CatalogService {
-  return new CatalogService(new CatalogPersistence((request.receiptsDeps ?? defaultReceiptsDeps).db));
+  const service = new CatalogService(new CatalogPersistence((request.receiptsDeps ?? defaultReceiptsDeps).db));
+  return request.catalogTransaction
+    ? service.inTransaction(request.catalogTransaction.db, request.catalogTransaction.afterCommit)
+    : service;
 }
 
 export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchProduct }> = async (app, options) => {
@@ -101,78 +109,13 @@ export const catalogRoutes: FastifyPluginAsync<{ searchProduct?: typeof searchPr
     const result = await catalogService(request).createRecipe(catalogActor(request), recipeSchema.parse(request.body));
     return reply.code(201).send(result);
   });
+
   app.get('/recipes/:id', guards, async (request) =>
     catalogService(request).recipe(catalogActor(request), recipeIdSchema.parse(request.params).id));
 
-  app.patch('/recipes/:id', mutationGuards, async (request) => {
-    const shop = currentShop(request);
-    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = recipePatchSchema.parse(request.body);
-    const database = (request.receiptsDeps ?? defaultReceiptsDeps).db;
-    const ingredients = body.ingredients && convertEditedIngredients(body.ingredients);
-
-    const patch: Partial<typeof recipes.$inferInsert> = { updatedAt: new Date() };
-    if (body.name !== undefined) patch.name = body.name;
-    if (body.description !== undefined) patch.description = body.description ?? null;
-    if (body.imageUrl !== undefined) patch.imageUrl = body.imageUrl ?? null;
-    if (body.categoryId !== undefined) patch.categoryId = body.categoryId ?? null;
-    if (body.prepTimeMinutes !== undefined) patch.prepTimeMinutes = body.prepTimeMinutes;
-    if (body.yieldQuantity !== undefined) patch.yieldQuantity = qty(body.yieldQuantity);
-    if (body.yieldUnit !== undefined) patch.yieldUnit = body.yieldUnit;
-    if (body.targetMarginPct !== undefined) {
-      patch.targetMarginPct =
-        body.targetMarginPct === null ? null : body.targetMarginPct.toFixed(2);
-    }
-    if (body.allergens !== undefined) patch.allergens = body.allergens;
-    if (body.steps !== undefined) patch.steps = body.steps ?? [];
-
-    const updated = await database.transaction(async (tx) => {
-      const existing = await tx.select({ id: recipes.id }).from(recipes)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id)))
-        .for('update').limit(1);
-      if (!existing[0]) throw notFound('Recipe not found');
-
-      await assertCatalogLinks(tx, shop.id, { categoryId: body.categoryId, ingredients });
-
-      const rows = await tx.update(recipes).set(patch)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shop.id))).returning();
-      if (!rows[0]) throw notFound('Recipe not found');
-
-      if (ingredients !== undefined) {
-        await tx
-          .delete(recipeIngredients)
-          .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shop.id)));
-        if (ingredients.length) {
-          await tx.insert(recipeIngredients).values(
-            ingredients.map((ingredient) => ({
-              shopId: shop.id,
-              recipeId: id,
-              inventoryItemId: ingredient.inventoryItemId ?? null,
-              generalPriceId: ingredient.generalPriceId ?? null,
-              rawName: ingredient.rawName,
-              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
-              quantity: qty(ingredient.quantity),
-              rawSrcUnit: ingredient.rawSrcUnit,
-              baseUnit: ingredient.baseUnit ?? null,
-              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
-            })),
-          );
-        }
-      }
-      return rows[0];
-    });
-
-    await recordAuditSafe(app, {
-      shopId: shop.id,
-      userId: currentUser(request).id,
-      eventType: 'RECIPE_UPDATED',
-      resourceId: id,
-      ipAddress: request.ip,
-    });
-
-    return { recipe: updated };
-  });
-
+  app.patch('/recipes/:id', mutationGuards, async (request) =>
+    catalogService(request).editRecipe(catalogActor(request), recipeIdSchema.parse(request.params).id,
+      recipePatchSchema.parse(request.body)));
   /** Create shop-owned pricing without recording a purchase or changing the saved recipe. */
   app.post('/recipes/:id/manual-product', mutationGuards, async (request, reply) => {
     const shop = currentShop(request);

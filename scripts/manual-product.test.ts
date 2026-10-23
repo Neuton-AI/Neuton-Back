@@ -1,4 +1,5 @@
 import './support/testEnv.js';
+import { recipeRow } from './support/recipeFixture.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
@@ -78,7 +79,7 @@ test('a saved manual product link retains recipe quantities and produces the cor
     'select:recipes': [[{ id: ID }], [{ id: ID }]],
     'insert:inventoryItems': [[product]],
     'select:inventoryItems': [[{ id: PRODUCT_ID }]],
-    'update:recipes': [[{ id: ID }]],
+    'update:recipes': [[recipeRow({ id: ID })]],
   });
   h.use({ db: db as never, deleteObject: async () => {} });
   try {

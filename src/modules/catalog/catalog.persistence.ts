@@ -7,7 +7,7 @@ import type { Category, InventoryItem, Recipe } from '../../db/schema/catalog.js
 import { notFound } from '../../lib/errors.js';
 import { assertCatalogLinks } from '../../lib/catalogLinks.js';
 import { quantity } from '../../lib/money.js';
-import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto } from './contracts.js';
+import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto, RecipePatchInput, PreparedRecipeIngredient } from './contracts.js';
 
 export type CatalogReadDatabase = Pick<Database, 'select'>;
 export type CatalogTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -84,6 +84,64 @@ export class CatalogPersistence {
       })));
       return mapRecipe(recipe);
     });
+  }
+
+  async editRecipe(
+    shopId: string, id: string, input: Omit<RecipePatchInput, 'ingredients'>,
+    ingredients?: readonly PreparedRecipeIngredient[],
+  ): Promise<RecipeDto> {
+    const patch: Partial<typeof recipes.$inferInsert> = { updatedAt: new Date() };
+    if (input.name !== undefined) patch.name = input.name;
+    if (input.description !== undefined) patch.description = input.description ?? null;
+    if (input.imageUrl !== undefined) patch.imageUrl = input.imageUrl ?? null;
+    if (input.categoryId !== undefined) patch.categoryId = input.categoryId ?? null;
+    if (input.prepTimeMinutes !== undefined) patch.prepTimeMinutes = input.prepTimeMinutes;
+    if (input.yieldQuantity !== undefined) patch.yieldQuantity = quantity(input.yieldQuantity);
+    if (input.yieldUnit !== undefined) patch.yieldUnit = input.yieldUnit;
+    if (input.targetMarginPct !== undefined) {
+      patch.targetMarginPct =
+        input.targetMarginPct === null ? null : input.targetMarginPct.toFixed(2);
+    }
+    if (input.allergens !== undefined) patch.allergens = input.allergens;
+    if (input.steps !== undefined) patch.steps = input.steps ?? [];
+
+    const updated = await this.database.transaction(async (tx) => {
+      const existing = await tx.select({ id: recipes.id }).from(recipes)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+        .for('update').limit(1);
+      if (!existing[0]) throw notFound('Recipe not found');
+
+      await assertCatalogLinks(tx, shopId, { categoryId: input.categoryId, ingredients });
+
+      const rows = await tx.update(recipes).set(patch)
+        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId))).returning();
+      if (!rows[0]) throw notFound('Recipe not found');
+
+      if (ingredients !== undefined) {
+        await tx
+          .delete(recipeIngredients)
+          .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
+        if (ingredients.length) {
+          await tx.insert(recipeIngredients).values(
+            ingredients.map((ingredient) => ({
+              shopId: shopId,
+              recipeId: id,
+              inventoryItemId: ingredient.inventoryItemId ?? null,
+              generalPriceId: ingredient.generalPriceId ?? null,
+              rawName: ingredient.rawName,
+              rawMaterialName: ingredient.rawMaterialName?.trim() || ingredient.rawName,
+              quantity: quantity(ingredient.quantity),
+              rawSrcUnit: ingredient.rawSrcUnit,
+              baseUnit: ingredient.baseUnit ?? null,
+              baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
+            })),
+          );
+        }
+      }
+      return rows[0];
+    });
+
+    return mapRecipe(updated);
   }
 
   async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {

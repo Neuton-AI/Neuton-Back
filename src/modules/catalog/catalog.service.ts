@@ -2,10 +2,11 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { toNumber } from '../../lib/money.js';
+import { convertEditedIngredients } from '../../lib/recipeEdits.js';
 import { CatalogPersistence, type CatalogTransaction } from './catalog.persistence.js';
 import { costRecipe } from './costing.js';
 import { CatalogAudit } from './catalog.audit.js';
-import type { CategoryDto, CreateCategoryInput, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+import type { CategoryDto, CreateCategoryInput, CreateRecipeInput, RecipePatchInput, InventoryDto, InventoryQuery, RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
 
 export const CATALOG_COMMIT_EFFECTS = Symbol('CATALOG_COMMIT_EFFECTS');
 export type CatalogAfterCommit = (effect: () => Promise<void>) => void;
@@ -45,6 +46,21 @@ export class CatalogService {
         resourceId: recipe.id, ipAddress: actor.ipAddress,
       });
       actor.log.info({ event: 'recipe_created', recipeId: recipe.id }, 'recipe created');
+    });
+    return { recipe };
+  }
+
+  async editRecipe(actor: ActorContext, id: string, input: RecipePatchInput): Promise<{ recipe: RecipeDto }> {
+    requireActorRole(actor, ['owner', 'admin']);
+    const { ingredients, ...metadata } = input;
+    const recipe = await this.persistence.editRecipe(actor.shop.id, id, metadata,
+      ingredients && convertEditedIngredients(ingredients));
+    await this.committed(async () => {
+      await this.audit.record(actor, {
+        shopId: actor.shop.id, userId: actor.user.id, eventType: 'RECIPE_UPDATED',
+        resourceId: id, ipAddress: actor.ipAddress,
+      });
+      actor.log.info({ event: 'recipe_updated', recipeId: id }, 'recipe updated');
     });
     return { recipe };
   }

@@ -218,3 +218,31 @@ test('recipe creation stays pending, preserves supplied ingredient values, and c
     await member.close();
   }
 });
+
+test('recipe edits retain ingredients for metadata-only changes and convert reviewed quantities atomically', async () => {
+  const database = new FakeDb({
+    'select:recipes': [[{ id: recipe.id }], [{ id: recipe.id }]],
+    'update:recipes': [[recipe], [recipe]],
+  });
+  const nest = await buildNestCatalogApp(database as unknown as Database);
+  try {
+    const metadata = await request(nest.app.getHttpServer()).patch(`/api/v1/recipes/${recipe.id}`)
+      .set(headers).send({ prepTimeMinutes: 30 });
+    assert.equal(metadata.status, 200);
+    assert.equal(database.callsTo('delete', 'recipeIngredients').length, 0);
+    const edited = await request(nest.app.getHttpServer()).patch(`/api/v1/recipes/${recipe.id}`).set(headers).send({
+      ingredients: [{ rawName: 'User corrected flour', quantity: 1, rawSrcUnit: 'kg', baseUnit: 'ml', baseUnitAmount: 3 }],
+    });
+    assert.equal(edited.status, 200);
+    const lines = database.onlyCallTo('insert', 'recipeIngredients');
+    assert.equal(lines.inTransaction, true);
+    assert.deepEqual(lines.values, [{ shopId: SHOP_ID, recipeId: recipe.id,
+      inventoryItemId: null, generalPriceId: null, rawName: 'User corrected flour', rawMaterialName: 'User corrected flour',
+      quantity: '1.000', rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: '1000.000' }]);
+    assert.deepEqual(nest.audits.map(audit => audit.eventType), ['RECIPE_UPDATED', 'RECIPE_UPDATED']);
+    assert.equal((await request(nest.app.getHttpServer()).patch(`/api/v1/recipes/${recipe.id}`)
+      .set(headers).send({ name: 'Missing' })).status, 404);
+  } finally {
+    await nest.close();
+  }
+});

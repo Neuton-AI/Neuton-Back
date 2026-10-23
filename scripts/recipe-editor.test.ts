@@ -1,4 +1,5 @@
 import './support/testEnv.js';
+import { recipeRow } from './support/recipeFixture.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
@@ -153,7 +154,7 @@ test('barcode pricing checks recipe ownership and mutation role before search or
 
 test('recipe edits atomically persist metadata and original ingredient fields with fresh converted quantities', async () => {
   const h = await harness({
-    'select:recipes': [[{ id: ID }]], 'update:recipes': [[{ id: ID, name: 'Edited recipe' }]],
+    'select:recipes': [[{ id: ID }]], 'update:recipes': [[recipeRow({ id: ID, name: 'Edited recipe' })]],
   });
   try {
     const response = await h.app.inject({
@@ -176,7 +177,7 @@ test('recipe edits atomically persist metadata and original ingredient fields wi
 });
 
 test('recipe edits retain unresolved units rather than trusting stale base values', async () => {
-  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[{ id: ID }]] });
+  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[recipeRow({ id: ID })]] });
   try {
     const response = await h.app.inject({
       method: 'PATCH', url: `/api/v1/recipes/${ID}`,
@@ -204,7 +205,7 @@ test('recipe edits reject another shop inventory before changing metadata or ing
 });
 
 test('metadata-only recipe edits preserve saved ingredients', async () => {
-  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[{ id: ID }]] });
+  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[recipeRow({ id: ID })]] });
   try {
     const response = await h.app.inject({
       method: 'PATCH', url: `/api/v1/recipes/${ID}`, payload: { prepTimeMinutes: 30 },
@@ -217,7 +218,7 @@ test('metadata-only recipe edits preserve saved ingredients', async () => {
 });
 
 test('recipe ingredient save failure stays inside the metadata transaction', async () => {
-  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[{ id: ID }]] });
+  const h = await harness({ 'select:recipes': [[{ id: ID }]], 'update:recipes': [[recipeRow({ id: ID })]] });
   h.db.failOn('insert', 'recipeIngredients', new Error('Ingredient write failed'));
   try {
     const response = await h.app.inject({
@@ -234,7 +235,7 @@ test('scanned package pricing costs only the recipe amount and feeds recipe tota
   const h = await harness({
     'select:recipes': [[{ id: ID }], [{ id: ID }]],
     'insert:generalPrices': [[{ id: PRICE_ID }]],
-    'update:recipes': [[{ id: ID }]],
+    'update:recipes': [[recipeRow({ id: ID })]],
   });
   try {
     const source = { ...ingredient, quantity: 250, rawSrcUnit: 'ml' };
