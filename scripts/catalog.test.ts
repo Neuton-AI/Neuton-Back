@@ -79,11 +79,12 @@ test('DELETE /recipes/:id hard-deletes an unordered recipe, its object, and its 
     assert.equal(body.mode, 'hard');
     assert.deepEqual(
       h.db.callSequence(),
-      ['select:recipes', 'select:mediaUploads', 'delete:recipes'],
+      ['select:recipes', 'select:mediaUploads', 'delete:recipes', 'insert:storageObjectDeletions'],
       'the row is read, then removed — no update kept it alive',
     );
-    assert.deepEqual(h.deleted, [STORAGE_PATH], 'the uploaded document goes with the row');
-    assert.equal(h.db.transactionCount, 1, 'the delete ran as one transaction');
+    assert.deepEqual(h.deleted, [], 'request never performs irreversible storage I/O');
+    assert.equal(h.db.onlyCallTo('insert','storageObjectDeletions').inTransaction,true);
+    assert.equal(h.db.transactionCount, 2, 'the delete ran as one transaction');
     // "Frees the name" only means anything because the name is claimed per shop:
     // once the row is gone the unique index no longer holds it.
     assert.ok(
@@ -111,15 +112,16 @@ test('DELETE /recipes/:id deactivates a recipe order lines still reference', asy
 
     assert.equal(response.statusCode, 200, 'the refusal degrades the delete, it does not fail it');
     assert.equal(body.mode, 'soft');
-    assert.deepEqual(db.callSequence(), ['select:recipes', 'select:mediaUploads', 'delete:recipes', 'update:recipes', 'delete:mediaUploads']);
+    assert.deepEqual(db.callSequence(), ['select:recipes', 'select:mediaUploads', 'delete:recipes', 'update:recipes', 'delete:mediaUploads', 'insert:storageObjectDeletions']);
 
     const update = db.onlyCallTo('update', 'recipes');
     assert.equal(update.set?.isActive, false);
     assert.equal(update.set?.storagePath, null, 'the deactivated recipe points at no object');
     assert.equal(update.set?.imageUrl, null);
     assert.ok(update.set?.updatedAt instanceof Date, 'the change is stamped');
-    assert.deepEqual(deleted, [STORAGE_PATH], 'the document is dropped either way');
-    assert.equal(db.transactionCount, 1, 'the refusal happened inside the delete transaction');
+    assert.deepEqual(deleted, [], 'dispatcher owns storage cleanup');
+    assert.equal(db.onlyCallTo('insert','storageObjectDeletions').inTransaction,true);
+    assert.equal(db.transactionCount, 2, 'the refusal happened inside the delete transaction');
   } finally {
     await app.close();
   }
@@ -161,7 +163,7 @@ test('DELETE /recipes/:id reads a recipe this shop does not own as 404', async (
   }
 });
 
-test('DELETE /recipes/:id keeps the deactivation when the object cleanup fails', async () => {
+test('DELETE /recipes/:id commits deactivation and durable cleanup without calling R2', async () => {
   const db = new FakeDb({
     'select:recipes': [[{ id: RECIPE_ID, storagePath: STORAGE_PATH }]],
     'update:recipes': [[{ id: RECIPE_ID }]],
@@ -180,11 +182,12 @@ test('DELETE /recipes/:id keeps the deactivation when the object cleanup fails',
   try {
     const response = await app.app.inject({ method: 'DELETE', url: `/api/v1/recipes/${RECIPE_ID}` });
 
-    // The recipe is already deactivated: reporting a failure would only invite a
-    // retry that then 404s, while the leaked object stays either way.
+    // Storage availability cannot affect this transaction; the dispatcher retries
+    // the persisted intent independently after the deactivation commits.
     assert.equal(response.statusCode, 200, 'an unreachable bucket must not resurrect the recipe');
     assert.equal((response.json() as any).mode, 'soft');
-    assert.deepEqual(deleted, [STORAGE_PATH], 'the cleanup was attempted');
+    assert.deepEqual(deleted, [], 'dispatcher owns storage cleanup');
+    assert.equal(db.onlyCallTo('insert','storageObjectDeletions').inTransaction,true);
     assert.equal(db.callsTo('update', 'recipes').length, 1);
   } finally {
     await app.close();

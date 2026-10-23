@@ -31,7 +31,7 @@ function mapCategory(category: Category): CategoryDto {
   };
 }
 
-function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
+export function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
   return {
     id: item.id, shopId: item.shopId, categoryId: item.categoryId,
     name: item.name, rawMaterialName: item.rawMaterialName, sku: item.sku,

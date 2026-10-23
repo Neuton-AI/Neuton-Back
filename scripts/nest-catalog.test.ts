@@ -274,3 +274,26 @@ test('recipe verification saves user corrections atomically and rejects repeated
     await nest.close();
   }
 });
+
+test('Nest inventory mutations retain explicit output and deny member writes', async () => {
+  const saved = { ...inventory, categoryId: null, privateColumn: 'hidden' };
+  const db = new FakeDb({ 'insert:inventoryItems': [[saved]], 'select:inventoryItems': [[{ id: inventory.id }]], 'update:inventoryItems': [[saved], []] });
+  const h = await buildNestCatalogApp(db as unknown as Database);
+  const memberDb = new FakeDb();
+  const member = await buildNestCatalogApp(memberDb as unknown as Database, 'member');
+  const body = { name: 'Flour', rawMaterialName: 'flour', unit: 'kg', baseUnit: 'g', baseUnitAmount: 1000, baseUnitCost: 0.002, currentQuantity: 2 };
+  try {
+    const create = await request(h.app.getHttpServer()).post('/api/v1/inventory').set(headers).send(body);
+    assert.equal(create.status, 201);
+    assert.equal(create.body.item.baseUnitCost, '0.002000');
+    assert.equal(create.body.item.createdAt, createdAt.toISOString());
+    assert.equal('privateColumn' in create.body.item, false);
+    const edit = await request(h.app.getHttpServer()).patch(`/api/v1/inventory/${inventory.id}`).set(headers).send({ currentQuantity: 2 });
+    assert.equal(edit.status, 200);
+    assert.equal(edit.body.item.currentQuantity, '2.000');
+    assert.deepEqual((await request(h.app.getHttpServer()).delete(`/api/v1/inventory/${inventory.id}`).set(headers)).body, { ok: true });
+    assert.equal(h.audits.length, 2);
+    assert.equal((await request(member.app.getHttpServer()).post('/api/v1/inventory').set(headers).send(body)).status, 403);
+    assert.equal(memberDb.calls.length, 0);
+  } finally { await h.close(); await member.close(); }
+});
