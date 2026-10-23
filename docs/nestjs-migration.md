@@ -15,6 +15,11 @@ PostgreSQL cases enabled. Production typecheck, test typecheck, build and
 migration validation passed. `npm ls` confirms no Fastify stack is installed.
 Frontend verification for the companion upload commit passed lint, types,
 **457/457 tests** and build. No tests were skipped to make this migration pass.
+The initial GitHub Actions run exposed decorator compilation failures in four
+test files: the npm test command did not explicitly select the test tsconfig.
+`npm test` now uses `--tsconfig tsconfig.test.json`, matching the local full
+run. All 25 tests in those four files passed after the configuration fix.
+CI retains its existing opt-in DB skips; all DB cases were executed locally.
 
 Phase 3 checkpoint: `dcbafc4`. Phase 4 checkpoint: `da35772`. Phase 5 checkpoint:
 `33fc866`, reviewed in [backend PR #179](https://github.com/Neuton-AI/Neuton-Back/pull/179), replaces
