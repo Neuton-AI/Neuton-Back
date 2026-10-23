@@ -82,8 +82,8 @@ export async function createPresignedDownloadUrl(key: string) {
  * S3/R2 answer 204 for a key that does not exist, so deleting twice — or
  * deleting an upload that never landed — is a no-op rather than an error.
  */
-export async function deleteObject(key: string): Promise<void> {
-  await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }));
+export async function deleteObject(key: string, signal?: AbortSignal): Promise<void> {
+  await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET_NAME, Key: key }), { abortSignal: signal });
 }
 
 /** Server-side read used by the vision worker to fetch an uploaded document. */

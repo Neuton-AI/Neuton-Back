@@ -1,12 +1,17 @@
 import { buildApp } from './app.js';
 import { env } from './env.js';
 import { loggerFactory } from './lib/logger/index.js';
+import { db } from './db/client.js';
+import { deleteObject } from './lib/storage.js';
+import { StorageCleanupDispatcher } from './lib/storageCleanup.js';
 
 const app = await buildApp();
+const cleanup = new StorageCleanupDispatcher({ db, deleteObject, log: app.log });
 
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
   app.log.info(`Neuton API listening on :${env.PORT}`);
+  cleanup.start();
 } catch (error) {
   app.log.error(error);
   process.exit(1);
@@ -15,6 +20,7 @@ try {
 const shutdown = async (signal: string) => {
   app.log.info(`${signal} received, shutting down`);
   await app.close();
+  await cleanup.stop();
   // Flushes the Loki worker's last ~5s batch — without this the lines the
   // shutdown itself logs never reach Loki (issue #99 DOD).
   await loggerFactory.shutdown();
