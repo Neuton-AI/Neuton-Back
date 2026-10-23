@@ -114,6 +114,7 @@ export function registerDocumentSync(app: FastifyInstance) {
           db: tx as unknown as typeof db,
           transaction: { db: tx, afterCommit: (effect) => { mutationEffects.push(effect); } },
         };
+        request.receiptTransaction = { db: tx, afterCommit: effect => { mutationEffects.push(effect); } };
         request.catalogTransaction = { db: tx, afterCommit: effect => { mutationEffects.push(effect); } };
         // Delay sending until the business transaction and retry receipt commit together.
         let status = 200;

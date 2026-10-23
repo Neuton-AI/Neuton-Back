@@ -333,12 +333,29 @@ test(
         sql`select count(*)::int as count from receipts where id=${uploadId}::uuid`,
       );
       assert.equal(count[0]?.count, 1);
+      const receiptVersion = (await check()).json().toPull.find((document: {id:string}) => document.id === uploadId).updatedAt;
+      const cleanupCount = () => db.execute(sql`select count(*)::int as count from storage_object_deletions where shop_id=${shopId}::uuid`);
+      const beforeCleanup = (await cleanupCount())[0]?.count;
+      await rejectReceipt(() => app.inject({method:'DELETE',url:`/api/v1/receipts/${uploadId}`,headers:{
+        ...headers,'x-sync-id':rejectedMutation,'x-sync-version':String(receiptVersion+100),
+      }}));
+      assert.equal((await db.execute(sql`select count(*)::int as count from receipts where id=${uploadId}::uuid`))[0]?.count,1);
+      assert.equal((await db.execute(sql`select count(*)::int as count from media_uploads where id=${uploadId}::uuid`))[0]?.count,1);
+      assert.equal((await cleanupCount())[0]?.count,beforeCleanup,'outer rollback leaves no cleanup intent');
+      const deleteId=randomUUID();
+      const removeReceipt=()=>app.inject({method:'DELETE',url:`/api/v1/receipts/${uploadId}`,headers:{
+        ...headers,'x-sync-id':deleteId,'x-sync-version':String(receiptVersion+100),
+      }});
+      assert.equal((await removeReceipt()).statusCode,200);
+      assert.equal((await removeReceipt()).statusCode,200,'deletion replay returns its committed receipt');
+      assert.equal((await cleanupCount())[0]?.count,Number(beforeCleanup)+1);
       // Shop deletion cascades without trying to recreate a tombstone for a removed shop.
       await db.execute(
         sql`insert into receipts(shop_id,storage_path) values (${shopId}::uuid,${`${shopId}/fixture.jpg`})`,
       );
     } finally {
       await app.close();
+      await db.execute(sql`delete from storage_object_deletions where shop_id=${shopId}::uuid`);
       await db.execute(sql`delete from shops where id=${shopId}::uuid`);
       await db.execute(sql`delete from auth.users where id=${userId}::uuid`);
       await connection.end({ timeout: 5 });

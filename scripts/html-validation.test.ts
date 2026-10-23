@@ -208,12 +208,11 @@ test('POST /uploads/presign refuses an HTML originalFilename', async () => {
   try {
     const { status, body } = await post(h, '/api/v1/uploads/presign', {
       kind: 'receipt',
-      contentType: 'image/jpeg',
-      originalFilename: '<img src=x onerror=alert(2)>.jpg',
+      sources: [{ contentType: 'image/jpeg', byteSize: 1, originalFilename: '<img src=x onerror=alert(2)>.jpg' }],
     });
 
     assert.equal(status, 400);
-    assert.deepEqual(flaggedPaths(body), ['originalFilename']);
+    assert.deepEqual(flaggedPaths(body), ['sources']);
     assert.deepEqual(h.db.calls, [], 'nothing reaches the database');
   } finally {
     await h.close();
