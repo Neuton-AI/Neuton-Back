@@ -14,63 +14,11 @@ test(
   },
   async () => {
     process.env.DATABASE_URL = process.env.SYNC_TEST_DATABASE_URL;
-    const [
-      { default: Fastify },
-      { db, sql: connection },
-      { sql },
-      { registerDocumentSync },
-      { catalogRoutes },
-      { receiptRoutes },
-      { orderRoutes },
-      { registerErrorHandler },
-    ] = await Promise.all([
-      import('fastify'),
-      import('../src/db/client.js'),
-      import('drizzle-orm'),
-      import('../src/plugins/documentSync.js'),
-      import('../src/routes/catalog.js'),
-      import('../src/routes/receipts.js'),
-      import('../src/routes/orders.js'),
-      import('../src/lib/errorHandler.js'),
-    ]);
+    const [{db,sql:connection},{sql},{buildSyncApplication}]=await Promise.all([import('../src/db/client.js'),import('drizzle-orm'),import('./support/syncApp.js')]);
     const shopId = randomUUID();
     const userId = randomUUID();
     const recipeId = randomUUID();
-    const app = Fastify({ logger: false });
-    registerErrorHandler(app);
-    app.decorate('authenticate', async (request) => {
-      if (request.headers.authorization !== 'Bearer test-session')
-        throw Object.assign(new Error('Unauthorized'), { statusCode: 401 });
-      request.user = {
-        id: userId,
-        email: 'sync@example.com',
-        fullName: null,
-        avatarUrl: null,
-      };
-    });
-    app.decorate('resolveShop', async (request) => {
-      if (request.headers['x-shop-id'] !== shopId)
-        throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
-      request.shop = {
-        id: shopId,
-        name: 'Sync fixture',
-        slug: shopId,
-        currency: 'USD',
-        timezone: 'UTC',
-        storeAddress: null,
-        targetProfitMargin: '30',
-        hourlyLaborCost: '25',
-        deliveryBaseFee: '5',
-        deliveryRatePerKm: '1',
-      };
-      request.shopRole = 'owner';
-    });
-    app.decorate('requireRole', () => async () => {});
-    registerDocumentSync(app);
-    await app.register(catalogRoutes, { prefix: '/api/v1' });
-    await app.register(receiptRoutes, { prefix: '/api/v1' });
-    await app.register(orderRoutes, { prefix: '/api/v1' });
-    await app.ready();
+    const app=await buildSyncApplication(db,{id:shopId,name:'Sync fixture',slug:shopId,currency:'USD',timezone:'UTC',storeAddress:null,targetProfitMargin:'30',hourlyLaborCost:'25',deliveryBaseFee:'5',deliveryRatePerKm:'1'},userId);
     try {
       await db.execute(
         sql`insert into auth.users(id,email) values (${userId}::uuid,'sync@example.com')`,

@@ -24,6 +24,10 @@ export interface HttpOptions {
 /** Shared production/test setup. Raw bytes are retained for signed webhooks. */
 export async function createHttpApplication(rootModule: Type, options: HttpOptions): Promise<NestExpressApplication> {
   const app = await NestFactory.create<NestExpressApplication>(rootModule, { rawBody: true, logger: false, abortOnError: false });
+  return configureHttpApplication(app,options);
+}
+
+export async function configureHttpApplication(app:NestExpressApplication, options:HttpOptions):Promise<NestExpressApplication>{
   app.disable('x-powered-by');
   app.set('trust proxy', options.trustProxy ?? false);
   app.use((req: HttpRequest, res: Response, next: NextFunction) => {

@@ -1,3 +1,4 @@
+import {SyncModule} from '../../src/modules/sync/sync.module.js';
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import type { Database } from '../../src/db/client.js';
@@ -30,7 +31,7 @@ export async function buildNestOrdersApp(role: ShopRole = 'owner', database: Dat
       return typeof value === 'function' ? value.bind(current) : value;
     } });
   @Module({
-    imports: [IdentityModule.register({
+    imports:[SyncModule,IdentityModule.register({
         sessionVerifier: { verify: async () => ({ id: USER_ID, email: null }) },
         repository: {
           findMembership: async (_userId, shopId) => shopId === SHOP_ID ? { shopId, role } : null,

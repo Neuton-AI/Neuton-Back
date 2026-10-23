@@ -1,4 +1,10 @@
+import type { Response } from 'express';
+import type { HttpRequest } from '../../http/request-context.js';
+import { syncMutation, sendMutation } from '../../http/sync-mutation.js';
+import { SyncService } from '../sync/sync.service.js';
 import {
+  Req,
+  Res,
   Body,
   Controller,
   Delete,
@@ -24,6 +30,7 @@ import {
 export class ReceiptsController {
   constructor(
     @Inject(ReceiptsService) private readonly receipts: ReceiptsService,
+    @Inject(SyncService) private readonly sync: SyncService,
   ) {}
   @Get() list(@CurrentActor() actor: ActorContext, @Query() query: unknown) {
     return this.receipts.list(actor, receiptQuerySchema.parse(query));
@@ -43,21 +50,45 @@ export class ReceiptsController {
   ) {
     return this.receipts.detail(actor, receiptIdSchema.parse(params).id);
   }
-  @Post(':id/verify') @HttpCode(200) verify(
+  @Post(':id/verify') @HttpCode(200) async verify(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
     @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.receipts.verify(
+    const id = receiptIdSchema.parse(params).id;
+    const result = await this.sync.mutate(
       actor,
-      receiptIdSchema.parse(params).id,
-      verifySchema.parse(body),
+      syncMutation(request, 'receipt', id, 200),
+      async (tx, afterCommit) => {
+        const service =
+          tx && afterCommit
+            ? this.receipts.inTransaction(tx, afterCommit)
+            : this.receipts;
+        return service.verify(actor, id, verifySchema.parse(body));
+      },
     );
+    return sendMutation(response, result);
   }
-  @Delete(':id') delete(
+  @Delete(':id') async delete(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.receipts.delete(actor, receiptIdSchema.parse(params).id);
+    const id = receiptIdSchema.parse(params).id;
+    const result = await this.sync.mutate(
+      actor,
+      syncMutation(request, 'receipt', id, 200),
+      async (tx, afterCommit) => {
+        const service =
+          tx && afterCommit
+            ? this.receipts.inTransaction(tx, afterCommit)
+            : this.receipts;
+        return service.delete(actor, id);
+      },
+    );
+    return sendMutation(response, result);
   }
 }

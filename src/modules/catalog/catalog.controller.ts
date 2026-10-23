@@ -1,4 +1,10 @@
+import type { Response } from 'express';
+import type { HttpRequest } from '../../http/request-context.js';
+import { syncMutation, sendMutation } from '../../http/sync-mutation.js';
+import { SyncService } from '../sync/sync.service.js';
 import {
+  Req,
+  Res,
   Body,
   Controller,
   Delete,
@@ -39,11 +45,29 @@ import {
 export class CatalogController {
   constructor(
     @Inject(CatalogService) private readonly catalog: CatalogService,
+    @Inject(SyncService) private readonly sync: SyncService,
   ) {}
 
   @Delete('recipes/:id')
-  deleteRecipe(@CurrentActor() actor: ActorContext, @Param() params: unknown) {
-    return this.catalog.deleteRecipe(actor, recipeIdSchema.parse(params).id);
+  async deleteRecipe(
+    @CurrentActor() actor: ActorContext,
+    @Param() params: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const id = recipeIdSchema.parse(params).id;
+    const result = await this.sync.mutate(
+      actor,
+      syncMutation(request, 'recipe', id, 200),
+      async (tx, afterCommit) => {
+        const service =
+          tx && afterCommit
+            ? this.catalog.inTransaction(tx, afterCommit)
+            : this.catalog;
+        return service.deleteRecipe(actor, id);
+      },
+    );
+    return sendMutation(response, result);
   }
 
   @Post('inventory')
@@ -147,29 +171,49 @@ export class CatalogController {
   }
 
   @Patch('recipes/:id')
-  editRecipe(
+  async editRecipe(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
     @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.catalog.editRecipe(
+    const id = recipeIdSchema.parse(params).id;
+    const result = await this.sync.mutate(
       actor,
-      recipeIdSchema.parse(params).id,
-      recipePatchSchema.parse(body),
+      syncMutation(request, 'recipe', id, 200),
+      async (tx, afterCommit) => {
+        const service =
+          tx && afterCommit
+            ? this.catalog.inTransaction(tx, afterCommit)
+            : this.catalog;
+        return service.editRecipe(actor, id, recipePatchSchema.parse(body));
+      },
     );
+    return sendMutation(response, result);
   }
 
   @Post('recipes/:id/verify')
   @HttpCode(200)
-  verifyRecipe(
+  async verifyRecipe(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
     @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.catalog.verifyRecipe(
+    const id = recipeIdSchema.parse(params).id;
+    const result = await this.sync.mutate(
       actor,
-      recipeIdSchema.parse(params).id,
-      verifyRecipeSchema.parse(body),
+      syncMutation(request, 'recipe', id, 200),
+      async (tx, afterCommit) => {
+        const service =
+          tx && afterCommit
+            ? this.catalog.inTransaction(tx, afterCommit)
+            : this.catalog;
+        return service.verifyRecipe(actor, id, verifyRecipeSchema.parse(body));
+      },
     );
+    return sendMutation(response, result);
   }
 }

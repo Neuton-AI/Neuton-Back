@@ -1,3 +1,4 @@
+import {SyncModule} from '../../src/modules/sync/sync.module.js';
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import type { ShopRole } from '../../src/modules/identity/contracts.js';
@@ -16,7 +17,7 @@ export { SHOP_ID };
 export async function buildNestCatalogApp(database: CatalogDatabase, role: ShopRole = 'owner') {
   const audits: AuditInput[] = [];
   @Module({
-    imports: [IdentityModule.register({
+    imports:[SyncModule,IdentityModule.register({
       sessionVerifier: { verify: async () => ({ id: USER_ID, email: null }) },
       repository: {
         findMembership: async (_userId, shopId) => shopId === SHOP_ID ? { shopId, role } : null,

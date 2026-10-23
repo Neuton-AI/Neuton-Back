@@ -236,3 +236,17 @@ callers already use camelCase; no caller changes were necessary. Password
 changes verify that the reauthenticated identity matches the acting user and
 return a safe provider-failure message. Focused regressions passed 51/51; test
 typecheck and build passed. Continuing directly into phase 4.
+
+Phase 4 checkpoint (2026-10-23): Nest mutations now call explicit SyncService
+orchestration, with transaction-bound domain services, signature/user replay
+checks, document locks/version checks and durable receipts. No Nest handler is
+called as a business API. Processing uses a queue-independent progress port,
+a document-processing application service, and a persistence boundary. The
+worker adapter retains queue lifecycle, retry/deadline and circuit-breaker
+policy. Processing success logs wait for the processed marker's outer commit;
+provider messages and extracted names are excluded from new diagnostics.
+Focused suite: 90 ordinary tests passed; the two DB cases initially failed
+because the disposable PostgreSQL was stopped, then both passed after restart.
+An additional induced processed-marker failure test passed, proving success is
+not emitted on rollback. Test typecheck and production build passed. Phase 5
+will remove the still-present legacy runtime/adapters and migrate old harnesses.
