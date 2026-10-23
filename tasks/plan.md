@@ -31,6 +31,34 @@ PostgreSQL tests; production/test typechecks, build, and migration validation
 passed. Frontend: **457/457 tests**, lint, types, and build passed. Both PRs
 passed CI. Implementation is complete; merge and deployment have not occurred.
 
+## Sanity verification fixes — 2026-10-23
+
+The four genuine findings in the workspace `verification.md` are implemented
+on the existing migration branches. Product decisions D1–D3 remain separate.
+
+- [x] G1 — Offline recipe Save now runs its local-first mutation without
+  TanStack's online gate. Other network-only operations retain their policy.
+- [x] G2 — Inventory tiles display `baseUnitAmount` with `baseUnit`, so package
+  counts are not mislabeled as mass. Existing recorded totals need no backfill;
+  purchase-count and cost fields are unchanged.
+- [x] G3 — A loss from a zero profit baseline reports -100%, preserving the
+  existing bounded percentage convention with the correct direction.
+- [x] G4 — Revenue and expense captions use the active dashboard period label.
+
+Regression tests failed before the fixes and passed afterward. Frontend
+`npm run verify` passed lint, typecheck, **463/463 tests**, and build. Backend
+**25/25 analytics tests**, production/test typechecks, and build passed; the full
+backend database suite was not rerun for this follow-up.
+
+Chrome DevTools MCP confirmed G1 queues a PATCH in IndexedDB while offline,
+returns from the editor, and synchronizes after reconnect; G4 captions follow
+7D/90D selection. G2's package-count/base-total cases and G3's negative baseline
+case were regression-tested, without recreating them in the authenticated app.
+An initial offline navigation hit Vite's unloaded-module limitation; repeating
+with both routes already loaded confirmed the Save flow. Production PWA reload
+was not tested. Networking was restored. A dedicated verification shop and its
+unverified recipe were retained; the shared test shop was not changed.
+
 ## Execution rules and current position
 
 - Work on `refactor/B/n178-nestjs-express`, based on merged #177 (`6e4b390`).
