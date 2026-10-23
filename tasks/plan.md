@@ -36,8 +36,10 @@ does not automatically complete every remaining audit improvement.
 - Final verification passed 414/414 backend tests, zero skips, including all
   disposable PostgreSQL cases. Production/test typechecks, build and migration
   validation passed. Frontend verification passed 457/457 tests, lint, types and
-  build for the unchanged companion upload branch. Review and PR preparation
-  are the final delivery steps; merging/deployment remain separate.
+  build for the unchanged companion upload branch. Self-review and draft PR
+  preparation are complete: [backend #179](https://github.com/Neuton-AI/Neuton-Back/pull/179)
+  and [frontend #171](https://github.com/Neuton-AI/Neuton-Front/pull/171).
+  Merging/deployment remain separate.
 
 ## Decisions that are already settled
 

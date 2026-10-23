@@ -16,7 +16,8 @@ migration validation passed. `npm ls` confirms no Fastify stack is installed.
 Frontend verification for the companion upload commit passed lint, types,
 **457/457 tests** and build. No tests were skipped to make this migration pass.
 
-Phase 3 checkpoint: `dcbafc4`. Phase 4 checkpoint: `da35772`. Phase 5 replaces
+Phase 3 checkpoint: `dcbafc4`. Phase 4 checkpoint: `da35772`. Phase 5 checkpoint:
+`33fc866`, reviewed in [backend PR #179](https://github.com/Neuton-AI/Neuton-Back/pull/179), replaces
 the runtime and carries the final mandatory-stock-key decision. Missing or
 invalid keys fail before DB work, including direct application calls; concurrent
 replays and payload/user mismatches retain the durable transaction guarantees.
