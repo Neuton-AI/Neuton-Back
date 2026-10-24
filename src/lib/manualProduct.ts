@@ -13,13 +13,14 @@ export const manualProductSchema = z.object({
   rawSrcUnit: htmlFree(z.string().trim().min(1).max(24)),
 });
 
-/** Use the same conversion rules as recipe saving; never infer density or pack size. */
+/** quantity/rawSrcUnit are the user's recipe usage, not the old extraction. */
 export function prepareManualProduct(input: z.infer<typeof manualProductSchema>) {
   const [product, ingredient] = convertEditedIngredients([
     { rawName: input.name, quantity: input.packageSize, rawSrcUnit: input.packageUnit },
     { rawName: input.name, quantity: input.quantity, rawSrcUnit: input.rawSrcUnit },
   ]);
   if (!product?.baseUnit || !product.baseUnitAmount || !ingredient?.baseUnitAmount ||
+      Number(product.baseUnitAmount.toFixed(3)) <= 0 || Number(ingredient.baseUnitAmount.toFixed(3)) <= 0 ||
       product.baseUnit !== ingredient.baseUnit) {
     throw badRequest('Package unit must be compatible with the ingredient unit');
   }
@@ -28,15 +29,13 @@ export function prepareManualProduct(input: z.infer<typeof manualProductSchema>)
     throw badRequest('Package price per base unit is outside the supported precision');
   }
   return {
-    name: input.name,
-    rawMaterialName: input.rawMaterialName,
-    unit: input.packageUnit === 'pcs' ? 'unit' as const : input.packageUnit,
+    rawName: input.name,
+    rawMaterialName: input.name,
+    sku: null,
+    rawSrcUnit: input.packageUnit,
+    srcUnit: input.packageUnit === 'pcs' ? 'each' : input.packageUnit,
     baseUnit: product.baseUnit,
     baseUnitAmount: product.baseUnitAmount.toFixed(3),
     baseUnitCost: cost.toFixed(6),
-    baseUnitAverageCost: cost.toFixed(6),
-    lastUnitCost: input.price.toFixed(4),
-    averageUnitCost: input.price.toFixed(4),
-    currentQuantity: '0',
   };
 }
