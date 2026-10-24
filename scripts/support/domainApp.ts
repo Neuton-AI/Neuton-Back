@@ -12,6 +12,7 @@ import { CatalogAudit } from '../../src/modules/catalog/catalog.audit.js';
 import { OrdersAudit } from '../../src/modules/orders/orders.audit.js';
 import { ORDERS_DATABASE } from '../../src/modules/orders/orders.persistence.js';
 import { RECEIPTS_DATABASE } from '../../src/modules/receipts/receipts.persistence.js';
+import { RECEIPTS_AUDIT } from '../../src/modules/receipts/receipts.service.js';
 import {
   SHOPS_DATABASE,
   ShopsPersistence,
@@ -93,6 +94,7 @@ export async function domainHarness(
     [CATALOG_DATABASE, database],
     [ORDERS_DATABASE, database],
     [RECEIPTS_DATABASE, database],
+    [RECEIPTS_AUDIT, async () => {}],
     [SHOPS_DATABASE, database],
     [SYNC_DATABASE, database],
     [CATALOG_SEARCH, search],

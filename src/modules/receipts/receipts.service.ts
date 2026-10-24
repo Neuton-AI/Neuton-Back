@@ -8,11 +8,13 @@ import {
 } from './receipts.persistence.js';
 import type {
   ReceiptQuery,
+  ReceiptPatchInput,
   ReceiptStatusDto,
   VerifyReceiptInput,
 } from './contracts.js';
 
 export const RECEIPTS_COMMIT_EFFECTS = Symbol('RECEIPTS_COMMIT_EFFECTS');
+export const RECEIPTS_AUDIT = Symbol('RECEIPTS_AUDIT');
 export type ReceiptAfterCommit = (effect: () => Promise<void>) => void;
 @Injectable()
 export class ReceiptsService {
@@ -22,9 +24,11 @@ export class ReceiptsService {
     @Optional()
     @Inject(RECEIPTS_COMMIT_EFFECTS)
     private readonly afterCommit?: ReceiptAfterCommit,
+    @Optional() @Inject(RECEIPTS_AUDIT)
+    private readonly record: typeof recordAudit = recordAudit,
   ) {}
   inTransaction(tx: ReceiptTransaction, afterCommit: ReceiptAfterCommit) {
-    return new ReceiptsService(new ReceiptsPersistence(tx), afterCommit);
+    return new ReceiptsService(new ReceiptsPersistence(tx), afterCommit, this.record);
   }
   private async audit(
     actor: ActorContext,
@@ -32,7 +36,7 @@ export class ReceiptsService {
   ) {
     const effect = async () => {
       try {
-        await recordAudit({
+        await this.record({
           ...input,
           shopId: actor.shop.id,
           userId: actor.user.id,
@@ -67,6 +71,12 @@ export class ReceiptsService {
   async pending(actor: ActorContext) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     return { pending: await this.persistence.pending(actor.shop.id) };
+  }
+  async edit(actor: ActorContext, id: string, input: ReceiptPatchInput) {
+    requireActorRole(actor, ['owner', 'admin']);
+    const receipt = await this.persistence.edit(actor.shop.id, id, input);
+    await this.audit(actor, { eventType: 'RECEIPT_UPDATED', resourceId: id });
+    return { receipt };
   }
   async verify(actor: ActorContext, id: string, input: VerifyReceiptInput) {
     requireActorRole(actor, ['owner', 'admin']);
