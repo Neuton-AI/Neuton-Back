@@ -21,3 +21,29 @@ quantities, such as 0.2 or 0.5, use the same multiplication as receipts.
 Mass stays mass, volume stays volume, and count stays count. No density or piece
 weight is inferred. Ingredient quantities are never multiplied by product package
 sizes, and supermarket enrichment is not used to resolve recipe measures.
+
+## Manual recipe products
+
+`POST /recipes/:id/manual-product` receives package pricing separately from recipe
+usage: `packageSize`/`packageUnit` describe the purchase, while `quantity`/`rawSrcUnit`
+are the user's final amount used in the recipe. These usage fields must normalize
+to the package's base unit; they do not need to match the old extracted ingredient.
+Both amounts use the existing recipe converter. Invalid or unrepresentable amounts
+are rejected before inserting a price.
+
+Manual products create independent `general_prices` rows with no SKU; they do not
+create inventory or overwrite an existing shared product price. The manual name
+replaces both ingredient and material names. The response contains `product`
+(including `id`, `name`, package `baseUnitAmount` and `baseUnitCost`) and `usage`
+(the converted recipe ingredient, including its `baseUnit` and `baseUnitAmount`).
+The editor uses `product.id` as `generalPriceId`, clears `inventoryItemId`, and shows
+the normalized usage. Recipe Save persists that replacement and recalculates costs.
+After a recipe edit is acknowledged, local sync queues a durable detail refresh to
+retrieve those calculated costs, even when the local and server revisions match.
+The existing pull revision guard protects edits made while that refresh is pending.
+
+The manual form always shows a required recipe usage field, with units restricted
+to the package's weight, volume, or count type. Existing API-normalized quantities
+prefill it. Compatible unit changes preserve physical quantity; switching measurement
+types clears the amount. UI unit choices/ratios mirror `supermarket/conversion.ts`
+for display; submission validation, normalization and pricing remain server-owned.

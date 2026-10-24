@@ -4,7 +4,7 @@ import {
   recipes,
   generalPrices,
 } from '../../db/schema/index.js';
-import { notFound, conflict } from '../../lib/errors.js';
+import { notFound } from '../../lib/errors.js';
 import { assertCatalogLinks } from '../../lib/catalogLinks.js';
 import { quantity as qty, unitCost } from '../../lib/money.js';
 import { adjustInventory } from '../../lib/inventoryAdjustments.js';
@@ -127,21 +127,14 @@ export class InventoryPersistence {
     if (!recipe) throw notFound('Recipe not found');
   }
   async manualProduct(
-    shopId: string,
     product: ReturnType<typeof prepareManualProduct>,
   ) {
     const [saved] = await this.database
-      .insert(inventoryItems)
-      .values({ ...product, shopId })
-      .onConflictDoNothing({
-        target: [inventoryItems.shopId, inventoryItems.name],
-      })
-      .returning();
-    if (!saved)
-      throw conflict(
-        'A product with this name already exists in this shop. Use a different name.',
-      );
-    return mapInventory(saved);
+      .insert(generalPrices)
+      .values(product)
+      .returning({ id: generalPrices.id });
+    if (!saved) throw new Error('Manual general price insert returned no row');
+    return { ...product, id: saved.id, name: product.rawName };
   }
   async barcodePrice(
     price: Awaited<ReturnType<typeof prepareBarcodePrice>>['price'],

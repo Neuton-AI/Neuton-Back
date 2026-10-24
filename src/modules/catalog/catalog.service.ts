@@ -161,9 +161,11 @@ export class CatalogService {
     await this.inventoryPersistence.assertRecipe(actor.shop.id, id);
     return {
       product: await this.inventoryPersistence.manualProduct(
-        actor.shop.id,
         prepareManualProduct(input),
       ),
+      usage: convertEditedIngredients([
+        { rawName: input.name, quantity: input.quantity, rawSrcUnit: input.rawSrcUnit },
+      ])[0]!,
     };
   }
   async barcodePrice(
