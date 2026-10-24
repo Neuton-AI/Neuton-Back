@@ -31,6 +31,10 @@ export const verifySchema = z.object({
 });
 
 export const receiptIdSchema = z.object({ id: z.string().uuid() });
+export const receiptPatchSchema = z.object({
+  merchantName: htmlFree(z.string().trim().min(1).max(200)),
+}).strict();
+export type ReceiptPatchInput = z.infer<typeof receiptPatchSchema>;
 export const receiptQuerySchema = z.object({
   status: z.enum(RECEIPT_STATUSES).optional(),
   search: z.string().trim().max(120).optional(),

@@ -10,6 +10,7 @@ import type {
   ReceiptDto,
   ReceiptItemDto,
   ReceiptQuery,
+  ReceiptPatchInput,
   ReceiptDetailDto,
   ReceiptStatusDto,
   VerifyReceiptInput,
@@ -166,6 +167,20 @@ export class ReceiptsPersistence {
         ),
       );
     return row?.count ?? 0;
+  }
+  edit(shopId: string, id: string, input: ReceiptPatchInput): Promise<ReceiptDto> {
+    return this.database.transaction(async (tx) => {
+      const [existing] = await tx.select({ status: receipts.status })
+        .from(receipts).where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)))
+        .limit(1).for('update');
+      if (!existing) throw notFound('Receipt not found');
+      if (existing.status !== 'unverified' && existing.status !== 'verified')
+        throw conflict('Receipt must finish extraction before editing');
+      const [row] = await tx.update(receipts)
+        .set({ merchantName: input.merchantName, updatedAt: new Date() })
+        .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId))).returning();
+      return mapReceipt(row!);
+    });
   }
   verify(
     shopId: string,

@@ -12,6 +12,7 @@ import {
   HttpCode,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -23,6 +24,7 @@ import { ReceiptsService } from './receipts.service.js';
 import {
   receiptIdSchema,
   receiptQuerySchema,
+  receiptPatchSchema,
   verifySchema,
 } from './contracts.js';
 @Controller('api/v1/receipts')
@@ -49,6 +51,25 @@ export class ReceiptsController {
     @Param() params: unknown,
   ) {
     return this.receipts.detail(actor, receiptIdSchema.parse(params).id);
+  }
+  @Patch(':id') async edit(
+    @CurrentActor() actor: ActorContext,
+    @Param() params: unknown,
+    @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const id = receiptIdSchema.parse(params).id;
+    const input = receiptPatchSchema.parse(body);
+    const result = await this.sync.mutate(
+      actor, syncMutation(request, 'receipt', id, 200),
+      async (tx, afterCommit) => {
+        const service = tx && afterCommit
+          ? this.receipts.inTransaction(tx, afterCommit) : this.receipts;
+        return service.edit(actor, id, input);
+      },
+    );
+    return sendMutation(response, result);
   }
   @Post(':id/verify') @HttpCode(200) async verify(
     @CurrentActor() actor: ActorContext,
