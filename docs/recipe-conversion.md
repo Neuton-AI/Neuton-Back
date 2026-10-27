@@ -43,7 +43,8 @@ retrieve those calculated costs, even when the local and server revisions match.
 The existing pull revision guard protects edits made while that refresh is pending.
 
 The manual form always shows a required recipe usage field, with units restricted
-to the package's weight, volume, or count type. Existing API-normalized quantities
-prefill it. Compatible unit changes preserve physical quantity; switching measurement
+to the package's weight, volume, or count type. All manual amount fields start empty;
+neither quantities nor selected units are inferred from the extracted ingredient.
+Compatible unit changes convert only amounts the user entered; switching measurement
 types clears the amount. UI unit choices/ratios mirror `supermarket/conversion.ts`
 for display; submission validation, normalization and pricing remain server-owned.
