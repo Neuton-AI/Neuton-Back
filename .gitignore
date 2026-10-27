@@ -13,3 +13,6 @@ coverage/
 .local/db-backups/
 Temp/*
 /prices/
+docs/*
+Docs/*
+tasks/*
