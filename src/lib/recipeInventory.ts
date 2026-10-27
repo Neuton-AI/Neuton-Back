@@ -31,12 +31,12 @@ export async function resolveRecipeInventoryLinks(
   const materials = new Map<string, string>();
   const names = new Map<string, string>();
   for (const candidate of candidates) {
-    for (const [index, value] of [
+    for (const [lookupIdx, value] of [
       [materials, candidate.rawMaterialName], [names, candidate.name],
     ] as const) {
       const key = normalizeName(value);
-      const previous = index.get(key);
-      if (key && (!previous || candidate.id < previous)) index.set(key, candidate.id);
+      const previous = lookupIdx.get(key);
+      if (key && (!previous || candidate.id < previous)) lookupIdx.set(key, candidate.id);
     }
   }
   return ingredients.map((ingredient) =>
