@@ -1,3 +1,4 @@
+import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 
@@ -86,6 +87,7 @@ export interface RecipeDto extends RecipeCostingInput {
 }
 
 export interface RecipeSourceDto {
+  preview?: SourcePreview;
   sourceId: string;
   storagePath: string;
   contentType: string;

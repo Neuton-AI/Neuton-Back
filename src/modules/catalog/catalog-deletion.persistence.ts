@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { recipes, mediaUploads } from "../../db/schema/index.js";
 import { notFound } from "../../lib/errors.js";
 import { scheduleObjectDeletions } from "../../lib/storageCleanup.js";
+import { sourceStoragePaths } from "../../lib/documentPreviews.js";
 import type { CatalogDatabase } from "./catalog.persistence.js";
 
 function isForeignKeyViolation(error: unknown): boolean {
@@ -67,7 +68,7 @@ export class CatalogDeletionPersistence {
         paths: [
           recipe.storagePath,
           ...uploads.flatMap((upload) =>
-            upload.sources.map((source) => source.storagePath),
+            upload.sources.flatMap(sourceStoragePaths),
           ),
         ],
       });

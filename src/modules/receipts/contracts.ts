@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SourcePreview } from '../../db/schema/uploads.js';
 import { htmlFree } from '../../lib/safeText.js';
 import { RECEIPT_STATUSES } from '../../db/schema/enums.js';
 export const verifyItemSchema = z.object({
@@ -92,6 +93,7 @@ export interface ReceiptItemDto {
 }
 
 export interface ReceiptSourceDto {
+  preview?: SourcePreview;
   sourceId: string;
   storagePath: string;
   contentType: string;

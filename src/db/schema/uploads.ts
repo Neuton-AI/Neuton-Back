@@ -5,12 +5,20 @@ import { receipts } from './receipts.js';
 import { recipes } from './catalog.js';
 import { orders } from './orders.js';
 
+export interface SourcePreview {
+  storagePath: string;
+  contentType: 'image/webp';
+  width: number;
+  height: number;
+}
+
 export interface UploadSource {
   sourceId: string;
   storagePath: string;
   contentType: string;
   originalFilename: string | null;
   byteSize: number;
+  preview?: SourcePreview;
 }
 
 /** Immutable source order and stable business identity survive browser/queue retries. */

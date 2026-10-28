@@ -1,6 +1,7 @@
 import type { ProcessingJob } from './contracts.js';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
+import { prepareSourcePreviews } from '../../lib/documentPreviews.js';
 import {
   inventoryItems,
   generalPrices,
@@ -757,8 +758,18 @@ export async function processGroup(
       throw new Error('Document has not completed uploading');
     validateSourceLimits(upload.sources);
     const first = upload.sources[0]!;
+    const sourceBytes = new Map<string, Uint8Array>();
     await operation(
-      { ...deps, db: tx as unknown as Database, afterCommit: deps.afterCommit },
+      {
+        ...deps,
+        db: tx as unknown as Database,
+        afterCommit: deps.afterCommit,
+        getObjectBytes: async (path) => {
+          const bytes = await deps.getObjectBytes(path);
+          sourceBytes.set(path, bytes);
+          return bytes;
+        },
+      },
       {
         ...data,
         kind: upload.kind,
@@ -769,9 +780,26 @@ export async function processGroup(
         orderId: upload.orderId ?? undefined,
       },
     );
+    const createPreview = deps.createSourcePreview;
+    const sources = createPreview
+      ? await prepareSourcePreviews(
+          upload.sources,
+          async (source) => {
+            const bytes = sourceBytes.get(source.storagePath);
+            if (!bytes) throw new Error('Source bytes unavailable');
+            return createPreview(source, bytes);
+          },
+          (source) => {
+            workerLogger.warn({
+              event: 'document_preview_failed', shopId: data.shopId, uploadId: upload.id,
+              sourceId: source.sourceId, contentType: source.contentType,
+            }, 'preview unavailable; original retained');
+          },
+        )
+      : upload.sources;
     await tx
       .update(mediaUploads)
-      .set({ processedAt: new Date() })
+      .set({ processedAt: new Date(), sources })
       .where(eq(mediaUploads.id, upload.id));
   });
 }

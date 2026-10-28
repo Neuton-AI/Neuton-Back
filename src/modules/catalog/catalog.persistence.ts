@@ -209,6 +209,7 @@ export class CatalogPersistence {
     return (upload?.sources ?? []).map(source => ({
       sourceId: source.sourceId, storagePath: source.storagePath, contentType: source.contentType,
       originalFilename: source.originalFilename, byteSize: source.byteSize,
+      ...(source.preview ? { preview: source.preview } : {}),
     }));
   }
 }
