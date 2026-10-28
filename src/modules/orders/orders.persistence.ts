@@ -111,6 +111,7 @@ export class OrdersPersistence {
         contentType: source.contentType,
         originalFilename: source.originalFilename,
         byteSize: source.byteSize,
+        ...(source.preview ? { preview: source.preview } : {}),
       }))),
     };
   }

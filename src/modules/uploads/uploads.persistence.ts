@@ -44,7 +44,8 @@ export class UploadsPersistence {
         .where(
           and(
             eq(mediaUploads.shopId, shopId),
-            sql`${mediaUploads.sources} @> ${JSON.stringify([{ storagePath: path }])}::jsonb`,
+            sql`(${mediaUploads.sources} @> ${JSON.stringify([{ storagePath: path }])}::jsonb
+              OR ${mediaUploads.sources} @> ${JSON.stringify([{ preview: { storagePath: path } }])}::jsonb)`,
           ),
         )
         .limit(1);

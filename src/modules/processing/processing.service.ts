@@ -1,6 +1,8 @@
 import { db, type Database } from '../../db/client.js';
 import type { MediaJobData } from '../../lib/queue.js';
-import { getObjectBytes } from '../../lib/storage.js';
+import { getObjectBytes, putPreviewBytes } from '../../lib/storage.js';
+import { createDocumentPreview, previewStoragePath } from '../../lib/documentPreviews.js';
+import type { SourcePreview, UploadSource } from '../../db/schema/uploads.js';
 import {
   extractReceipt,
   extractRecipe,
@@ -54,6 +56,7 @@ export interface WorkerDeps {
   extractRecipe: typeof extractRecipe;
   extractOrder: typeof extractOrder;
   searchProduct: typeof searchProduct;
+  createSourcePreview?: (source: UploadSource, bytes: Uint8Array) => Promise<SourcePreview>;
 }
 
 export const defaultWorkerDeps: WorkerDeps = {
@@ -63,6 +66,12 @@ export const defaultWorkerDeps: WorkerDeps = {
   extractRecipe,
   extractOrder,
   searchProduct,
+  createSourcePreview: async (source, bytes) => {
+    const preview = await createDocumentPreview(bytes, source.contentType);
+    const storagePath = previewStoragePath(source.storagePath);
+    await putPreviewBytes(storagePath, preview.bytes);
+    return { storagePath, contentType: 'image/webp', width: preview.width, height: preview.height };
+  },
 };
 
 function toBase64(bytes: Uint8Array): string {

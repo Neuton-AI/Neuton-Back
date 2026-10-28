@@ -1,3 +1,4 @@
+import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
@@ -94,6 +95,7 @@ export interface ListOrdersOutput {
   total: number;
 }
 export interface OrderSourceDto {
+  preview?: SourcePreview;
   sourceId: string;
   storagePath: string;
   contentType: string;

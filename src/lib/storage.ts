@@ -76,6 +76,17 @@ export async function createPresignedDownloadUrl(key: string) {
   });
 }
 
+/** Server-generated derivatives are never writable through client presign URLs. */
+export async function putPreviewBytes(key: string, bytes: Uint8Array): Promise<void> {
+  await r2.send(new PutObjectCommand({
+    Bucket: env.R2_BUCKET_NAME,
+    Key: key,
+    Body: bytes,
+    ContentType: 'image/webp',
+    CacheControl: 'private, max-age=3600',
+  }), { abortSignal: AbortSignal.timeout(15_000) });
+}
+
 /**
  * Removes an uploaded object when its row goes away.
  *

@@ -5,6 +5,7 @@ import { receipts, receiptItems, mediaUploads } from '../../db/schema/index.js';
 import type { Receipt, ReceiptItem } from '../../db/schema/receipts.js';
 import { conflict, notFound } from '../../lib/errors.js';
 import { scheduleObjectDeletions } from '../../lib/storageCleanup.js';
+import { sourceStoragePaths } from '../../lib/documentPreviews.js';
 import { verifyReceipt } from '../../lib/verifyReceipt.js';
 import type {
   ReceiptDto,
@@ -153,6 +154,7 @@ export class ReceiptsPersistence {
         contentType: source.contentType,
         originalFilename: source.originalFilename,
         byteSize: source.byteSize,
+        ...(source.preview ? { preview: source.preview } : {}),
       })),
     };
   }
@@ -221,7 +223,7 @@ export class ReceiptsPersistence {
         paths: [
           receipt.storagePath,
           ...uploads.flatMap((upload) =>
-            upload.sources.map((source) => source.storagePath),
+            upload.sources.flatMap(sourceStoragePaths),
           ),
         ],
       });
