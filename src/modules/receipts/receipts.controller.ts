@@ -49,8 +49,11 @@ export class ReceiptsController {
   @Get(':id') detail(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
+    @Req() request: HttpRequest,
   ) {
-    return this.receipts.detail(actor, receiptIdSchema.parse(params).id);
+    const id = receiptIdSchema.parse(params).id;
+    const read = () => this.receipts.detail(actor, id);
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'receipt', id, read) : read();
   }
   @Patch(':id') async edit(
     @CurrentActor() actor: ActorContext,

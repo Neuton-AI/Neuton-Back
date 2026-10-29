@@ -3,6 +3,7 @@ export type DocumentMeta = {
   id: string;
   updatedAt: number;
   deleted?: boolean;
+  baseUpdatedAt?: number;
 };
 
 const key = (document: DocumentMeta) => `${document.kind}:${document.id}`;
@@ -23,6 +24,7 @@ export function compareDocuments(
     if (
       !own ||
       (remote.deleted && !own.deleted) ||
+      (own.baseUpdatedAt !== undefined && remote.updatedAt !== own.baseUpdatedAt) ||
       remote.updatedAt > own.updatedAt
     )
       toPull.push(remote);

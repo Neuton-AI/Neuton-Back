@@ -10,6 +10,7 @@ export function syncMutation(
   return {
     mutationId: request.headers['x-sync-id'],
     version: request.headers['x-sync-version'],
+    baseVersion: request.headers['x-sync-base-version'],
     kind,
     documentId,
     status,

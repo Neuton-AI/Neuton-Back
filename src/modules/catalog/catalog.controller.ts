@@ -166,8 +166,10 @@ export class CatalogController {
   }
 
   @Get('recipes/:id')
-  recipe(@CurrentActor() actor: ActorContext, @Param() params: unknown) {
-    return this.catalog.recipe(actor, recipeIdSchema.parse(params).id);
+  recipe(@CurrentActor() actor: ActorContext, @Param() params: unknown, @Req() request: HttpRequest) {
+    const id = recipeIdSchema.parse(params).id;
+    const read = () => this.catalog.recipe(actor, id);
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'recipe', id, read) : read();
   }
 
   @Patch('recipes/:id')

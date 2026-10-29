@@ -42,6 +42,7 @@ const envSchema = z.object({
     .default('development'),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  DATABASE_LISTEN_URL: emptyToUndefined(z.string().min(1)),
   SUPABASE_URL: z.string().url().min(1, 'SUPABASE_URL is required'),
   SUPABASE_SERVICE_ROLE_KEY: z
     .string()

@@ -40,8 +40,10 @@ export class OrdersController {
   }
 
   @Get(':id')
-  detail(@CurrentActor() actor: ActorContext, @Param() params: unknown) {
-    return this.orders.detail(actor, orderIdSchema.parse(params).id);
+  detail(@CurrentActor() actor: ActorContext, @Param() params: unknown, @Req() request: HttpRequest) {
+    const id = orderIdSchema.parse(params).id;
+    const read = () => this.orders.detail(actor, id);
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'order', id, read) : read();
   }
 
   @Post('quote')
