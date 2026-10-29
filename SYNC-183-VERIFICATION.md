@@ -63,4 +63,13 @@ This verifies local functional behavior, not production throughput or a measured
 p95 commit-to-visible latency. The roughly 1–2 second target still needs a staging
 measurement with the deployed proxy, direct/session-pooled listener URL, auth service
 and representative shop sizes. Review README streaming/rollback setup before rollout.
-No production migration or deployment was performed.
+The local verification above did not modify the hosted database.
+
+## Authorized migration application
+
+After the user configured DATABASE_LISTEN_URL and requested migration application,
+0031 was applied to the configured hosted database and recorded atomically in
+__neuton_migrations (checksum 220c89d1beada1b1). The enabled trigger definition
+was verified. A committed notification on a temporary channel was received through
+the configured listener connection without changing any document data.
+Backend/frontend deployment and production latency measurement remain separate steps.
