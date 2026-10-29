@@ -11,6 +11,10 @@ export type SyncTransaction = Parameters<
 @Injectable()
 export class SyncPersistence {
   constructor(@Inject(SYNC_DATABASE) readonly database: Database = db) {}
+  async version(shopId: string, kind: DocumentMeta['kind'], id: string): Promise<number | undefined> {
+    const rows = await this.database.execute(sql`select updated_at from document_versions where shop_id=${shopId}::uuid and kind=${kind} and id=${id}::uuid`);
+    return rows[0] ? Number(rows[0].updated_at) : undefined;
+  }
   async documents(shopId: string): Promise<DocumentMeta[]> {
     const rows = await this.database.execute(
       sql`select kind,id,updated_at,deleted from document_versions where shop_id=${shopId}::uuid`,
@@ -32,6 +36,7 @@ export class SyncPersistence {
       method: input.method,
       body: input.body ?? null,
       version: input.parsedVersion,
+      ...(input.baseVersion === undefined ? {} : { baseVersion: input.baseVersion }),
     });
     return this.database.transaction(async (tx) => {
       await tx.execute(
@@ -63,6 +68,7 @@ export class SyncPersistence {
         if (
           !versions[0] ||
           versions[0].deleted ||
+          (input.baseVersion !== undefined && Number(versions[0].updated_at) !== input.baseVersion) ||
           Number(versions[0].updated_at) >= input.parsedVersion
         )
           return { status: 200, body: { syncConflict: true } };

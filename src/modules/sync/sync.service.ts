@@ -5,6 +5,7 @@ import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { SyncPersistence, type SyncTransaction } from './sync.persistence.js';
 import { syncVersionSchema, type SyncMutation } from './contracts.js';
+import { AppError } from '../../lib/errors.js';
 export type CommitEffect = (effect: () => Promise<void>) => void;
 @Injectable()
 export class SyncService {
@@ -18,6 +19,16 @@ export class SyncService {
       await this.persistence.documents(actor.shop.id),
     );
   }
+  async snapshot<T extends object>(actor: ActorContext, kind: DocumentMeta['kind'], id: string, read: () => Promise<T>) {
+    requireActorRole(actor, ['owner', 'admin', 'member']);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = await this.persistence.version(actor.shop.id, kind, id);
+      const document = await read();
+      const after = await this.persistence.version(actor.shop.id, kind, id);
+      if (before !== undefined && before === after) return { ...document, syncVersion: after };
+    }
+    throw new AppError(503, 'SYNC_SNAPSHOT_RETRY', 'Document changed during download; retry sync');
+  }
   async mutate<T>(
     actor: ActorContext,
     input: SyncMutation,
@@ -28,10 +39,11 @@ export class SyncService {
       return { status: input.status, body: await operation() };
     const id = z.string().uuid().parse(input.mutationId),
       parsedVersion = syncVersionSchema.parse(input.version);
+    const baseVersion = input.baseVersion === undefined ? undefined : syncVersionSchema.parse(input.baseVersion);
     const effects: Array<() => Promise<void>> = [];
     const result = await this.persistence.mutate(
       { shopId: actor.shop.id, userId: actor.user.id },
-      { ...input, id, parsedVersion },
+      { ...input, baseVersion, id, parsedVersion },
       (tx) =>
         operation(tx, (effect) => {
           effects.push(effect);

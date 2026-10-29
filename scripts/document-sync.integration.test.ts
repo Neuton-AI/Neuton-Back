@@ -284,6 +284,7 @@ test(
       const receiptVersion = (await check()).json().toPull.find((document: {id:string}) => document.id === uploadId).updatedAt;
       const cleanupCount = () => db.execute(sql`select count(*)::int as count from storage_object_deletions where shop_id=${shopId}::uuid`);
       const beforeCleanup = (await cleanupCount())[0]?.count;
+      const beforePaths = await db.execute(sql`select storage_path from storage_object_deletions where shop_id=${shopId}::uuid`);
       await rejectReceipt(() => app.inject({method:'DELETE',url:`/api/v1/receipts/${uploadId}`,headers:{
         ...headers,'x-sync-id':rejectedMutation,'x-sync-version':String(receiptVersion+100),
       }}));
@@ -296,7 +297,12 @@ test(
       }});
       assert.equal((await removeReceipt()).statusCode,200);
       assert.equal((await removeReceipt()).statusCode,200,'deletion replay returns its committed receipt');
-      assert.equal((await cleanupCount())[0]?.count,Number(beforeCleanup)+1);
+      // Source deletion also schedules its deterministic preview key, even if rendering never completed.
+      const sourcePath = upload.sources[0]!.storagePath;
+      const afterPaths = await db.execute(sql`select storage_path from storage_object_deletions where shop_id=${shopId}::uuid`);
+      assert.deepEqual(afterPaths.map(row => row.storage_path).sort(),
+        [...beforePaths.map(row => row.storage_path), sourcePath, `${sourcePath}.preview-v1.webp`].sort());
+      assert.equal((await cleanupCount())[0]?.count,Number(beforeCleanup)+2);
       // Shop deletion cascades without trying to recreate a tombstone for a removed shop.
       await db.execute(
         sql`insert into receipts(shop_id,storage_path) values (${shopId}::uuid,${`${shopId}/fixture.jpg`})`,

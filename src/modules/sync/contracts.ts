@@ -4,6 +4,7 @@ export const metaSchema = z.object({
   id: z.string().uuid(),
   updatedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   deleted: z.boolean().optional(),
+  baseUpdatedAt: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 });
 export const checkSchema = z.object({
   documents: z.array(metaSchema).max(20000),
@@ -17,6 +18,7 @@ export interface SyncMutation {
   allowedRoles?: readonly import('../identity/contracts.js').ShopRole[];
   mutationId: unknown;
   version: unknown;
+  baseVersion?: unknown;
   kind: 'receipt' | 'recipe' | 'order';
   documentId: string | null;
   method: string;

@@ -88,3 +88,53 @@ hosts. Cache directories are dedicated to generated files, not user documents.
 
 Verification: `npx tsx --test scripts/supermarket-cache.test.ts` covers deterministic
 clock/network fixtures and separate Node worker processes sharing a directory.
+# Live document synchronization (#183)
+
+Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
+`GET /api/v1/sync/events` SSE endpoint. It does not use Supabase Realtime.
+The database hosting provider can change without changing the sync protocol.
+
+Apply `0031_native_document_events.sql` with the normal migration runner before
+enabling the updated frontend. Set `DATABASE_LISTEN_URL` to a direct or
+session-pooled PostgreSQL connection. It defaults to `DATABASE_URL` for direct
+database deployments; **transaction-pooled URLs cannot be used for LISTEN**.
+The listener needs permission to connect and LISTEN; migrations require the
+normal owner privileges. No replication slot, publication or provider extension
+is required. Keep database credentials on the backend.
+
+Proxies must allow streaming responses, disable SSE buffering and permit an idle
+connection for longer than the 15-second heartbeat interval. Browser fetch uses
+the existing Authorization and x-shop-id headers. Authorize origins through the
+existing CORS configuration. Session/membership is checked before each forwarded
+hint and on heartbeat; a denied session is closed. Source loss closes streams.
+Each backend instance listens independently and serves its own browser sessions.
+
+Events are wake-up hints, not a replay log. Startup, focus/resume, browser-stream
+reconnect and database-listener reconnect run full version comparison; only
+changed complete documents are downloaded. Comparisons chunk requests at 20,000
+local metadata records and deduplicate discoveries. This trades metadata scans
+for avoiding edit-history storage and commit-order cursors. Keep existing
+deletion tombstones; no pruning policy is introduced. Failed work retries with
+existing error backoff. There is no periodic successful-state server polling.
+
+Local storage retains pending work, server base snapshots and explicit conflicts.
+The optional x-sync-base-version header rejects writes against a changed server
+base even when the client timestamp is larger. Replay retains the original
+mutation identity. Sync detail reads request x-sync-snapshot: true; the backend
+checks the revision before/after reading and returns a matching syncVersion.
+Busy documents retry safely rather than persisting a mismatched payload/version.
+Deploy the backend before the frontend; older clients remain
+compatible but retain their previous conflict semantics. Ingredient/step arrays
+without stable identity remain conservative conflict units. Conflicts require an
+explicit local/server choice; accepting a remote deletion discards its pending
+queue, so export a retained draft first if a copy is needed.
+
+Verification: `npm run verify` and `npm run db:validate`. On a disposable migrated
+database, set `SYNC_TEST_DATABASE_URL` for base-version/integration checks and
+`NATIVE_SYNC_TEST_DATABASE_URL` for native commit/rollback/fan-out/reconnect tests.
+Never point these fixture variables at production. See
+[SPEC-183-live-document-sync.md](./SPEC-183-live-document-sync.md) for acceptance
+criteria. Roll back frontend/backend together to restore the old comparison
+triggers; the additive notification trigger may remain, or remove it and
+`notify_document_change()` after stopping all listeners. Retain version tables
+and offline queues during rollback.
