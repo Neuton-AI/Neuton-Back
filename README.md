@@ -58,36 +58,66 @@ Apply `0023_receipt_item_raw_material_name.sql` before deploying this version.
 It backfills existing receipt lines from `raw_name` before making the new
 material name required.
 
-## Supermarket catalog cache
+## Supermarket search (Scrapy-API)
 
-Product searches keep decoded XML in `<backend-root>/prices/shufersal/<unix-ms>.xml`
-and `prices/carrefour/<unix-ms>.xml`. The path is relative to the module installation,
-not the launch directory, for both `tsx src/worker.ts` and `node dist/worker.js`.
-The timestamp is download completion time. Files expire at exactly six hours;
-expired or corrupt catalogs are removed before refresh. A failed chain is logged
-with its cache path and does not suppress results from the other chain.
+The API and worker use Scrapy-API for receipt enrichment, recipe fallback prices,
+and barcode lookup. Configure both processes:
 
-Provision writable, persistent storage at `<backend-root>/prices` (for example a
-container volume). Deployments must include the backend directory layout above;
-ephemeral disks work but lose the cache on restart. No new environment variable
-is required. Generated files are ignored by Git. Each process holds one parsed
-catalog per chain in memory while its file is unchanged and fresh.
+```dotenv
+SCRAPY_API_BASE_URL=http://localhost:3000
+SCRAPY_API_TIMEOUT_MS=5000
+```
 
-BullMQ receipt concurrency and concurrent item enrichment share one in-process
-promise per chain. Separate processes sharing the same volume coordinate through
-`proper-lockfile` directory locks; all workers must use this implementation and
-the same lock settings. The filesystem must support atomic mkdir/rename and
-reliable modification times. Independent volumes cache independently. Downloads
-are validated before publication and renamed atomically from a temporary file.
-Locks heartbeat every 10 seconds and become stale after 120 seconds (crashed-worker
-recovery); contenders retry for up to five minutes. Do not delete a live lock or
-mix implementations with different lease settings. Suspend/stall durations above
-the lease can compromise a lock; the worker fails that search rather than knowingly
-publishing after losing ownership. Keep clocks synchronized across shared-volume
-hosts. Cache directories are dedicated to generated files, not user documents.
+These are the defaults. Use the reachable Scrapy-API origin in deployments
+(`localhost` refers to the running process's host/container); use HTTPS for a
+remote service. The timeout covers response headers and the JSON body and may
+be configured from 1 to 60000 ms. Check the provider's `/health/ready` endpoint
+before deploying. Search needs no HTTP credentials. No database migration is
+required for Neuton.
 
-Verification: `npx tsx --test scripts/supermarket-cache.test.ts` covers deterministic
-clock/network fixtures and separate Node worker processes sharing a directory.
+`GET /v1/search` always sends `limitPerChain=10` and an explicit `queryType`:
+`sku` for exact barcodes, `name` for names. SKU strings retain leading zeros;
+barcode pricing also tries the EAN-13 equivalent of a zero-padded GTIN-14 when
+there is no exact original match. Searches cover every chain returned by the
+API rather than a local two-chain list.
+
+Results use the raw camelCase contract: `chainId`, `itemCode`, `itemName`,
+`manufactureName`, `itemPrice`, `quantity`, `unitQty`, and `score`. Text money
+and quantity values stay strings; nullable columns stay null. Additional
+columns are preserved. The client validates required fields and rejects a
+malformed response. It does not expect `name`, `price`, or normalized package
+fields from the older `ENDPOINTS.md` example. The provider's
+`SPEC-raw-row-search.md` and contract tests describe the current contract.
+
+Receipt enrichment tries exact SKU, then exact receipt name, then searches
+both the receipt name and raw material name. Those two lists are merged,
+sorted by the API's scores, and truncated to five; duplicates remain eligible,
+as before. Neuton calculates no product-match scores or thresholds. Recipe
+fallback keeps its deterministic selection and package validation, then uses
+the shared unit conversion and costing pipeline. Receipt unit voting remains
+application logic, independent of product-match scoring.
+
+A successful empty response is `[]`. HTTP errors (including 400, 429, and 503),
+network failures, malformed responses, and timeouts raise a typed
+`SUPERMARKET_UNAVAILABLE` error; HTTP status, Retry-After seconds, and upstream
+request ID are retained for diagnostics. Requests are not automatically retried.
+The default search logs failure diagnostics without product queries or response
+bodies. Receipt enrichment remains optional, recipe fallback leaves unresolved
+lines unlinked, and interactive barcode lookup returns 503 on provider failure
+rather than claiming the barcode was not found. A genuine absent barcode is
+404; an unusable product measurement or price is 400.
+
+Neuton keeps no XML catalog, catalog volume, catalog download, or local search
+fallback. Scrapy-API owns catalog refresh and product matching. Requests use the
+single-search endpoint; if batching is added, the provider accepts at most ten
+queries per batch. Revert the migration commits together to restore the old
+catalog implementation; its persistent `prices/` volume would then be needed.
+
+Verification: `npm run verify` runs source/test type checks, the full suite, and
+build. `scripts/scrapy-api.test.ts` covers the HTTP contract and failures;
+`scripts/product-search.test.ts` covers receipt orchestration, and the recipe
+conversion, fallback, editor, and worker suites cover pricing and persistence.
+
 # Live document synchronization (#183)
 
 Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
