@@ -1,5 +1,5 @@
 import type { ExtractedLineItem } from "../gemini.js"
-import { type PriceResult } from "./prices.js"
+import { type PriceResult } from "./product-search.js"
 
 export type BaseUnits = keyof typeof CONVERSION
 
@@ -107,8 +107,8 @@ const getScoredUnits = (itemEnrichment: PriceResult[], item: ExtractedLineItem) 
         recordScore(getBaseAndCurrentUnit(item.baseUnit))
     }
     for (const enrichmentItem of itemEnrichment) {
-        if (enrichmentItem.UnitQty) {
-            recordScore(getBaseAndCurrentUnit(enrichmentItem.UnitQty))
+        if (enrichmentItem.unitQty) {
+            recordScore(getBaseAndCurrentUnit(enrichmentItem.unitQty))
         }
     }
 
@@ -127,9 +127,8 @@ export const setSrcUnitAmount = (enrichedList: {
     itemEnrichment: PriceResult[] | null;
 }[]) => {
     return enrichedList.map(({ item, itemEnrichment }) => {
-        item.srcUnitAmount = (itemEnrichment && itemEnrichment[0]?.Quantity)
-            ? +itemEnrichment[0].Quantity
-            : null
+        const amount = Number(itemEnrichment?.[0]?.quantity)
+        item.srcUnitAmount = Number.isFinite(amount) && amount > 0 ? amount : null
         return { item, itemEnrichment }
     })
 }
@@ -141,7 +140,7 @@ export const setUnitsData = (enrichedList: {
     enrichedList.map(({ item, itemEnrichment }) => {
         let foundUnits;
         if (itemEnrichment && itemEnrichment?.[0]) {
-            foundUnits = item.isSkuEnriched ? getBaseAndCurrentUnit(itemEnrichment[0].UnitQty) : getScoredUnits(itemEnrichment, item)
+            foundUnits = item.isSkuEnriched ? getBaseAndCurrentUnit(itemEnrichment[0].unitQty ?? '') : getScoredUnits(itemEnrichment, item)
         } else {
             foundUnits = item.srcUnit ? getBaseAndCurrentUnit(item.srcUnit) : null
         }

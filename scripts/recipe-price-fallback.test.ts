@@ -10,11 +10,11 @@ import { recipeIngredients, type recipes } from '../src/db/schema/index.js';
 import { priceResult } from './support/priceResult.js';
 import { FakeDb } from './support/fakeDb.js';
 
-const product = priceResult({ UnitQty: 'l', Quantity: '1', bIsWeighted: '0' });
+const product = priceResult({ unitQty: 'l', quantity: '1', bIsWeighted: '0' });
 const line = { id: 'line-1', rawName: ' Milk ', rawMaterialName: ' Milk ', inventoryItemId: null, generalPriceId: null };
 const asDatabase = (db: FakeDb) => db as unknown as Database;
 
-async function linkRecipeFallbackPrices(db: Database, shopId: string, recipeId: string, search: typeof import('../src/lib/supermarket/prices.js').searchProduct) {
+async function linkRecipeFallbackPrices(db: Database, shopId: string, recipeId: string, search: typeof import('../src/lib/supermarket/product-search.js').searchProduct) {
   // Read fixtures before preparing searches, then exercise the atomic persistence API.
   const fake = db as unknown as FakeDb;
   const ingredients = await db.select().from(recipeIngredients);
@@ -31,7 +31,7 @@ test('fallback selects the highest score without name or price ranking filters',
   const queries: string[] = [];
   await linkRecipeFallbackPrices(asDatabase(db), 'shop-1', 'recipe-1', async (query) => {
     queries.push(query);
-    return [{ ...product, ItemPrice: '7' }, product, { ...product, ItemName: 'Chocolate milk', score: 9000, ItemPrice: '2' }];
+    return [{ ...product, itemPrice: '7' }, product, { ...product, itemName: 'Chocolate milk', score: 9000, itemPrice: '2' }];
   });
   assert.deepEqual(queries, ['milk']);
   const saved = db.onlyCallTo('insert', 'generalPrices').values as Record<string, unknown>;
@@ -59,8 +59,8 @@ test('fallback skips both existing link types and empty names on a retry', async
 test('missing, invalid and failed catalog searches leave lines unlinked', async () => {
   for (const search of [
     async () => [],
-    async () => [{ ...product, ItemPrice: 'NaN' }],
-    async () => [{ ...product, ItemPrice: '-1' }],
+    async () => [{ ...product, itemPrice: 'NaN' }],
+    async () => [{ ...product, itemPrice: '-1' }],
     async () => { throw new Error('catalog unavailable'); },
   ]) {
     const db = new FakeDb({ 'select:recipeIngredients': [[line]] });
@@ -108,8 +108,8 @@ test('preserved links with unresolved base conversion cannot count as valid zero
 });
 
 test('ties are stable across result order and low scores remain eligible', async () => {
-  const a = { ...product, ItemCode: '001', score: 1 };
-  const b = { ...product, ItemCode: '002', score: 1 };
+  const a = { ...product, itemCode: '001', score: 1 };
+  const b = { ...product, itemCode: '002', score: 1 };
   for (const results of [[b, a], [a, b]]) {
     assert.equal(selectFallbackProduct(results), a);
     const prepared = await prepareRecipeFallbackPrices([line], async () => results);
@@ -118,7 +118,7 @@ test('ties are stable across result order and low scores remain eligible', async
 });
 
 test('invalid highest-ranked product remains unresolved instead of picking the runner-up', async () => {
-  for (const invalid of [{ Quantity: '' }, { ItemPrice: '' }, { UnitQty: 'bag' }, { ItemCode: '' }]) {
+  for (const invalid of [{ quantity: '' }, { itemPrice: '' }, { unitQty: 'bag' }, { itemCode: '' }]) {
     const prepared = await prepareRecipeFallbackPrices([line], async () => [product, { ...product, ...invalid, score: 9999 }]);
     assert.equal(prepared.get('milk'), null);
   }
@@ -143,11 +143,11 @@ test('repeated material names share one search, upsert and saved ID in a short t
 });
 
 test('catalog search keeps invalid-price winners available for explicit unresolved handling', async () => {
-  const { createProductSearch } = await import('../src/lib/supermarket/prices.js');
-  const search = createProductSearch(async () => [
-    { ...product, ItemName: 'Milk', ItemPrice: '' },
-    { ...product, ItemCode: '456', ItemName: 'Milk fresh' },
-  ]);
+  const { createScrapySearch } = await import('../src/lib/supermarket/scrapy-api.js');
+  const search = createScrapySearch({ baseUrl: 'http://localhost:3000', fetch: async () => Response.json([
+    { ...product, itemName: 'Milk', itemPrice: '', score: 9500 },
+    { ...product, itemCode: '456', itemName: 'Milk fresh', score: 5000 },
+  ]) });
   const matches = await prepareRecipeFallbackPrices([line], search);
   assert.equal(matches.get('milk'), null);
 });

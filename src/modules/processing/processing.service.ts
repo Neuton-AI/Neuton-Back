@@ -14,7 +14,7 @@ import { workerLogger } from '../../lib/logger/index.js';
 import {
   enrichReciptItems,
   searchProduct,
-} from '../../lib/supermarket/prices.js';
+} from '../../lib/supermarket/product-search.js';
 import { convertRecipeToBaseUnits } from '../../lib/recipeConversion.js';
 import { prepareRecipeFallbackPrices } from '../../lib/recipePriceFallback.js';
 import { setUnitsData } from '../../lib/supermarket/conversion.js';

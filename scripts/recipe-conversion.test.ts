@@ -69,7 +69,7 @@ test('receipt package conversion still uses package amount, recipe uses its own 
     quantity: 3, rawSrcUnit: 'kg', srcUnit: 'kg', srcUnitAmount: null,
     baseUnit: null, baseUnitAmount: null, unitPrice: null, totalPrice: null, confidence: 1,
   };
-  setUnitsData([{ item: receipt, itemEnrichment: [priceResult({ UnitQty: 'קילוגרם', Quantity: '2' })] }]);
+  setUnitsData([{ item: receipt, itemEnrichment: [priceResult({ unitQty: 'קילוגרם', quantity: '2' })] }]);
   assert.equal(receipt.baseUnit, 'g');
   assert.equal(receipt.baseUnitAmount, 2000);
   assert.equal(convertRecipeToBaseUnits(recipe(0.2, 'kg')).ingredients[0]!.baseUnitAmount, 200);

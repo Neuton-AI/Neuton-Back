@@ -1,7 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { generalPrices, recipeIngredients } from '../db/schema/index.js';
-import { searchProduct, type PriceResult } from './supermarket/prices.js';
+import { searchProduct, type PriceResult } from './supermarket/product-search.js';
 import { normalizeProductPrice } from './supermarket/productConversion.js';
 
 export function normalizePriceName(name: string): string {
@@ -11,8 +11,8 @@ export function normalizePriceName(name: string): string {
 // Code-point ordering is independent of host locale and input order. Include
 // every conversion field so conflicting copies of a SKU also have a stable tie.
 function tieKey(product: PriceResult): string {
-  return JSON.stringify([product.ItemCode, product.chain, product.ItemName,
-    product.UnitQty, product.Quantity, product.ItemPrice]);
+  return JSON.stringify([product.itemCode, product.chainId, product.itemName,
+    product.unitQty, product.quantity, product.itemPrice]);
 }
 
 export function selectFallbackProduct(results: PriceResult[]): PriceResult | null {

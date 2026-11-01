@@ -1,2 +1,2 @@
-export * from './client.js';
-export * from './prices.js';
+export * from './scrapy-api.js';
+export * from './product-search.js';

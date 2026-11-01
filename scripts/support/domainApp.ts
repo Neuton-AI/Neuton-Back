@@ -28,7 +28,7 @@ import type {
   ShopContext,
   ShopRole,
 } from '../../src/modules/identity/contracts.js';
-import { searchProduct } from '../../src/lib/supermarket/prices.js';
+import { searchProduct } from '../../src/lib/supermarket/product-search.js';
 import { testApplication, httpClient } from './httpClient.js';
 export const SHOP_ID = '22222222-2222-2222-2222-222222222222',
   USER_ID = '33333333-3333-3333-3333-333333333333';

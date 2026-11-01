@@ -5,18 +5,19 @@ import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
 import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
 import { priceResult } from './support/priceResult.js';
-import type { searchProduct } from '../src/lib/supermarket/prices.js';
+import type { searchProduct } from '../src/lib/supermarket/product-search.js';
 import { costRecipe } from '../src/modules/catalog/costing.js';
 import type { Database } from '../src/db/client.js';
 import type { recipes } from '../src/db/schema/index.js';
 import { prepareBarcodePrice } from '../src/lib/recipeBarcodePrice.js';
+import { ScrapyApiError } from '../src/lib/supermarket/scrapy-api.js';
 
 const ID = '66666666-6666-6666-6666-666666666666';
 const PRICE_ID = '77777777-7777-7777-7777-777777777777';
 const INVENTORY_ID = '88888888-8888-8888-8888-888888888888';
 const BARCODE = '7290000000001';
 const ingredient = { rawName: 'Original recipe milk', rawMaterialName: 'Milk', quantity: 0.25, rawSrcUnit: 'l' };
-const product = priceResult({ ItemCode: BARCODE, ItemName: 'Original supermarket milk', UnitQty: 'l', Quantity: '1', ItemPrice: '6' });
+const product = priceResult({ itemCode: BARCODE, itemName: 'Original supermarket milk', unitQty: 'l', quantity: '1', itemPrice: '6' });
 
 test('zero-padded GTIN-14 resolves its exact EAN-13 catalog equivalent', async () => {
   const scanned = '07290000453897';
@@ -25,8 +26,8 @@ test('zero-padded GTIN-14 resolves its exact EAN-13 catalog equivalent', async (
   const result = await prepareBarcodePrice({ ...ingredient, barcode: scanned }, async (query) => {
     queries.push(query);
     return query === scanned ? [] : [
-      { ...product, ItemCode: `${canonical}9`, score: 99999 },
-      { ...product, ItemCode: canonical },
+      { ...product, itemCode: `${canonical}9`, score: 99999 },
+      { ...product, itemCode: canonical },
     ];
   });
   assert.deepEqual(queries, [scanned, canonical]);
@@ -39,7 +40,7 @@ test('an original exact GTIN-14 match wins without canonical fallback', async ()
   const queries: string[] = [];
   const result = await prepareBarcodePrice({ ...ingredient, barcode: scanned }, async (query) => {
     queries.push(query);
-    return [{ ...product, ItemCode: scanned }, { ...product, ItemCode: scanned.slice(1), score: 99999 }];
+    return [{ ...product, itemCode: scanned }, { ...product, itemCode: scanned.slice(1), score: 99999 }];
   });
   assert.deepEqual(queries, [scanned]);
   assert.equal(result.price.sku, scanned);
@@ -54,7 +55,7 @@ test('GTIN fallback rejects substring matches and different digits without strip
     const queries: string[] = [];
     await assert.rejects(prepareBarcodePrice({ ...ingredient, barcode }, async (query) => {
       queries.push(query);
-      return [{ ...product, ItemCode: foundCode }];
+      return [{ ...product, itemCode: foundCode }];
     }), { statusCode: 404 });
     assert.deepEqual(queries, expectedQueries);
   }
@@ -73,7 +74,7 @@ test('barcode pricing stores product identity and normalized price without chang
     'insert:generalPrices': [[{ id: PRICE_ID }]],
   }, async (query) => {
     assert.equal(query, BARCODE);
-    return [{ ...product, ItemCode: `${BARCODE}9`, score: 99999 }, product];
+    return [{ ...product, itemCode: `${BARCODE}9`, score: 99999 }, product];
   });
   try {
     const response = await h.app.inject({
@@ -82,7 +83,7 @@ test('barcode pricing stores product identity and normalized price without chang
     });
     assert.equal(response.statusCode, 200, response.body);
     assert.deepEqual(response.json().price, {
-      id: PRICE_ID, rawName: product.ItemName, sku: BARCODE, rawMaterialName: 'original supermarket milk',
+      id: PRICE_ID, rawName: product.itemName, sku: BARCODE, rawMaterialName: 'original supermarket milk',
       rawSrcUnit: 'l', srcUnit: 'l', quantity: 1,
       baseUnit: 'ml', baseUnitAmount: '1000.000', baseUnitCost: '0.006000',
     });
@@ -93,9 +94,9 @@ test('barcode pricing stores product identity and normalized price without chang
 
 test('barcode pricing rejects missing exact matches and invalid products without writes', async () => {
   const cases = [
-    { products: [{ ...product, ItemCode: `${BARCODE}9` }], unit: 'l', status: 404 },
-    { products: [{ ...product, Quantity: '' }], unit: 'l', status: 400 },
-    { products: [{ ...product, ItemPrice: '-1' }], unit: 'l', status: 400 },
+    { products: [{ ...product, itemCode: `${BARCODE}9` }], unit: 'l', status: 404 },
+    { products: [{ ...product, quantity: '' }], unit: 'l', status: 400 },
+    { products: [{ ...product, itemPrice: '-1' }], unit: 'l', status: 400 },
   ];
   for (const entry of cases) {
     const h = await harness({ 'select:recipes': [[{ id: ID }]] }, async () => entry.products);
@@ -108,6 +109,19 @@ test('barcode pricing rejects missing exact matches and invalid products without
       assert.equal(h.db.callsTo('insert', 'generalPrices').length, 0);
     } finally { await h.close(); }
   }
+});
+
+test('barcode API unavailability returns 503 rather than product-not-found and performs no writes', async () => {
+  const h = await harness({ 'select:recipes': [[{ id: ID }]] }, async () => {
+    throw new ScrapyApiError('http', 429, 7);
+  });
+  try {
+    const response = await h.app.inject({ method: 'POST', url: `/api/v1/recipes/${ID}/barcode-price`,
+      payload: { barcode: BARCODE, ...ingredient } });
+    assert.equal(response.statusCode, 503, response.body);
+    assert.equal(response.json().error.code, 'SUPERMARKET_UNAVAILABLE');
+    assert.equal(h.db.callsTo('insert', 'generalPrices').length, 0);
+  } finally { await h.close(); }
 });
 
 test('scanned product normalization ignores the previous ingredient identity and incompatible or unresolved units', async () => {
@@ -123,7 +137,7 @@ test('scanned product normalization ignores the previous ingredient identity and
       });
       assert.equal(response.statusCode, 200, response.body);
       const price = response.json().price;
-      assert.equal(price.rawName, product.ItemName);
+      assert.equal(price.rawName, product.itemName);
       assert.equal(price.rawMaterialName, 'original supermarket milk');
       assert.equal(price.baseUnit, 'ml');
       assert.equal(price.baseUnitAmount, '1000.000');
@@ -257,7 +271,7 @@ test('scanned package pricing costs only the recipe amount and feeds recipe tota
     const recipe = { id: ID, prepTimeMinutes: 0, yieldQuantity: '1', targetMarginPct: null } as typeof recipes.$inferSelect;
     const costing = await costRecipe(SHOP_ID, recipe, '30', '0', h.db as unknown as Database);
     assert.equal(costing.costComplete, true);
-    assert.equal(costing.ingredients[0]?.rawName, product.ItemName);
+    assert.equal(costing.ingredients[0]?.rawName, product.itemName);
     assert.equal(saved?.rawMaterialName, price.rawMaterialName);
     assert.equal(costing.ingredients[0]?.quantity, 250);
     assert.equal(costing.ingredients[0]?.rawSrcUnit, 'ml');
