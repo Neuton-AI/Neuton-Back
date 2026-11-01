@@ -16,7 +16,7 @@ import {
   type manualProductSchema,
 } from '../../lib/manualProduct.js';
 import { prepareBarcodePrice } from '../../lib/recipeBarcodePrice.js';
-import { searchProduct } from '../../lib/supermarket/prices.js';
+import { searchProduct } from '../../lib/supermarket/product-search.js';
 import type { inventoryAdjustmentSchema } from '../../lib/inventoryAdjustments.js';
 import type { z } from 'zod';
 import type {

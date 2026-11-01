@@ -41,6 +41,12 @@ const envSchema = z.object({
     .enum(['development', 'production', 'test'])
     .default('development'),
 
+  SCRAPY_API_BASE_URL: z.string().url().refine(value => {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
+  }, 'Expected an HTTP(S) URL without credentials').default('http://localhost:3000'),
+  SCRAPY_API_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5000),
+
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   DATABASE_LISTEN_URL: emptyToUndefined(z.string().min(1)),
   SUPABASE_URL: z.string().url().min(1, 'SUPABASE_URL is required'),

@@ -1,6 +1,6 @@
 import { badRequest, notFound } from './errors.js';
 import { normalizePriceName, selectFallbackProduct } from './recipePriceFallback.js';
-import { getValidSkuEnrichment, searchProduct } from './supermarket/prices.js';
+import { getValidSkuEnrichment, searchProduct } from './supermarket/product-search.js';
 import { normalizeProductPrice } from './supermarket/productConversion.js';
 
 type BarcodePriceInput = {
@@ -18,8 +18,8 @@ export async function prepareBarcodePrice(input: BarcodePriceInput, search = sea
   }
   const product = selectFallbackProduct(matches);
   if (!product) throw notFound('No supermarket product found for this barcode');
-  const price = normalizeProductPrice(product, normalizePriceName(product.ItemName));
+  const price = normalizeProductPrice(product, normalizePriceName(product.itemName ?? ''));
   if (!price) throw badRequest('This product has no usable package measurement or price');
 
-  return { price, quantity: Number(product.Quantity) };
+  return { price, quantity: Number(product.quantity) };
 }

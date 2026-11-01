@@ -554,7 +554,7 @@ test('recipe: both extraction paths apply external fallback before committing th
     deps.searchProduct = async (query) => {
       queries.push(query);
       assert.equal(db.transactionCount, 0, 'external searches precede the save transaction');
-      return [priceResult({ ItemName: 'Flour', ItemPrice: '5', score: 9500, UnitQty: 'kg', Quantity: '1' })];
+      return [priceResult({ itemName: 'Flour', itemPrice: '5', score: 9500, unitQty: 'kg', quantity: '1' })];
     };
     await processRecipe(deps, jobData, job);
     assert.deepEqual(queries, ['flour']);

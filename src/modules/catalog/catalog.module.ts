@@ -4,7 +4,7 @@ import { db } from '../../db/client.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { CATALOG_DATABASE, CatalogPersistence } from './catalog.persistence.js';
 import { CatalogService, CATALOG_SEARCH } from './catalog.service.js';
-import { searchProduct } from '../../lib/supermarket/prices.js';
+import { searchProduct } from '../../lib/supermarket/product-search.js';
 import { CatalogController } from './catalog.controller.js';
 import { CatalogAudit } from './catalog.audit.js';
 
