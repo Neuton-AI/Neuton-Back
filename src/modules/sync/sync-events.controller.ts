@@ -39,6 +39,7 @@ export class SyncEventsController {
     const send = async () => {
       if (closed || sending) return;
       sending = true;
+      pending = false; // Hints arriving during authorization need a trailing send.
       try {
         // Recheck membership/session before forwarding any hint, including recovery.
         await this.identity.resolve({
@@ -46,11 +47,7 @@ export class SyncEventsController {
           shopId: actor.shop.id,
         });
         if (closed) return;
-        const frame = pending
-          ? 'event: reconcile\ndata: {}\n\n'
-          : ': heartbeat\n\n';
-        pending = false;
-        if (!response.write(frame)) stop(); // Bound slow-client buffering; reconnect will compare.
+        if (!response.write('event: reconcile\ndata: {}\n\n')) stop(); // Bound slow-client buffering; reconnect will compare.
       } catch {
         stop();
       } finally {
@@ -63,7 +60,7 @@ export class SyncEventsController {
       timer = setTimeout(() => {
         timer = undefined;
         void send();
-      }, 100);
+      }, 250 + Math.random() * 4000);
     };
     try {
       await this.source.ready();
@@ -86,7 +83,13 @@ export class SyncEventsController {
       await send(); // Initial reconciliation starts only after LISTEN and subscription are active.
       if (!closed)
         heartbeat = setInterval(() => {
-          void send();
+          // Keepalive bytes do not require identity/database work or consume hints.
+          if (closed) return;
+          try {
+            if (!response.write(': heartbeat\n\n')) stop();
+          } catch {
+            stop();
+          }
         }, 15000);
     } catch {
       actor.log.error(

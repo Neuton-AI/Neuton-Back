@@ -180,3 +180,16 @@ The user selected native PostgreSQL notifications plus version comparison, with 
 independent of Supabase. #186 tracks this architecture decision. Before rollout verify
 session-capable database connectivity, proxy SSE buffering/timeouts, membership revocation
 and large-shop comparison behavior. Deploy the backend and migration before the frontend.
+
+
+### Traffic timing update (#192)
+
+Change hints now use a 250 ms base batching delay plus independent 0-4 second
+jitter per connection/batch (250-4250 ms total); repeated hints do not restart
+the timer. This supersedes the earlier roughly 1-2 second visibility target for
+change-triggered updates. Initial reconciliation remains immediate. Heartbeats
+remain every 15 seconds and do no identity/database work; each reconciliation
+hint still revalidates session and membership, and actual APIs retain their guards.
+A revoked session may receive empty heartbeats until a hint check closes it.
+Frontend reconnect adds 0-2 seconds to exponential backoff with a 30-second
+overall cap. Queue capacity and cross-tab leadership are deferred to #193.
