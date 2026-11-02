@@ -217,7 +217,8 @@ test('tenant/role and password identity checks reject writes before persistence'
 });
 
 test('camelCase catalog queries reject aliases and parse false as false',async()=>{
- const {inventoryQuerySchema,recipeQuerySchema}=await import('../src/modules/catalog/contracts.js');
+ const {inventoryQuerySchema}=await import('../src/modules/inventory/contracts.js');
+ const {recipeQuerySchema}=await import('../src/modules/recipes/contracts.js');
  assert.equal(inventoryQuerySchema.parse({includeInactive:'false'}).includeInactive,false);
  assert.equal(recipeQuerySchema.parse({includeUnverified:'true'}).includeUnverified,true);
  assert.throws(()=>inventoryQuerySchema.parse({include_inactive:'true'}));

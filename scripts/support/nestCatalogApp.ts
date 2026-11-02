@@ -2,37 +2,37 @@ import {SyncModule} from '../../src/modules/sync/sync.module.js';
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
 import type { ShopRole } from '../../src/modules/identity/contracts.js';
-import type { CatalogDatabase } from '../../src/modules/catalog/catalog.persistence.js';
-import { CATALOG_DATABASE, CatalogPersistence } from '../../src/modules/catalog/catalog.persistence.js';
-import { CatalogController } from '../../src/modules/catalog/catalog.controller.js';
-import { CatalogService } from '../../src/modules/catalog/catalog.service.js';
-import { CatalogAudit } from '../../src/modules/catalog/catalog.audit.js';
+import type { TransactionalDatabase } from '../../src/db/types.js';
+import { INVENTORY_DATABASE } from '../../src/modules/inventory/inventory.persistence.js';
+import { RECIPE_DATABASE } from '../../src/modules/recipes/recipe.persistence.js';
+import { CATEGORIES_DATABASE } from '../../src/modules/categories/categories.persistence.js';
+import { InventoryModule } from '../../src/modules/inventory/inventory.module.js';
+import { RecipeModule } from '../../src/modules/recipes/recipe.module.js';
+import { CategoriesModule } from '../../src/modules/categories/categories.module.js';
+import { DomainAudit } from '../../src/lib/domainAudit.js';
 import type { AuditInput } from '../../src/lib/audit.js';
-import { IdentityModule } from '../../src/modules/identity/identity.module.js';
-import { createHttpApplication } from '../../src/http/application.js';
+import { IdentityRepository, SessionVerifier } from '../../src/modules/identity/identity.ports.js';
+import { testApplication } from './httpClient.js';
 import { SHOP_ID, USER_ID, TEST_SHOP } from './catalogApp.js';
 
 export { SHOP_ID };
 
-export async function buildNestCatalogApp(database: CatalogDatabase, role: ShopRole = 'owner') {
+export async function buildNestCatalogApp(database: TransactionalDatabase, role: ShopRole = 'owner') {
   const audits: AuditInput[] = [];
   @Module({
-    imports:[SyncModule,IdentityModule.register({
-      sessionVerifier: { verify: async () => ({ id: USER_ID, email: null }) },
-      repository: {
-        findMembership: async (_userId, shopId) => shopId === SHOP_ID ? { shopId, role } : null,
+    imports: [InventoryModule, RecipeModule, CategoriesModule, SyncModule],
+  })
+  class TestFeatureModules {}
+  const app = await testApplication(TestFeatureModules, [
+    [SessionVerifier, { verify: async () => ({ id: USER_ID, email: null }) }],
+    [IdentityRepository, {
+        findMembership: async (_userId: string, shopId: string) => shopId === SHOP_ID ? { shopId, role } : null,
         findShop: async () => TEST_SHOP,
         findProfile: async () => null,
-      },
-    })],
-    controllers: [CatalogController],
-    providers: [
-      { provide: CATALOG_DATABASE, useValue: database }, CatalogPersistence, CatalogService,
-      { provide: CatalogAudit, useValue: { record: async (_actor: unknown, input: AuditInput) => { audits.push(input); } } },
-    ],
-  })
-  class TestCatalogModule {}
-  const app = await createHttpApplication(TestCatalogModule, {
+    }],
+    [INVENTORY_DATABASE, database], [RECIPE_DATABASE, database], [CATEGORIES_DATABASE, database],
+    [DomainAudit, { record: async (_actor: unknown, input: AuditInput) => { audits.push(input); } }],
+  ], {
     origins: [], bodyLimit: 100000, rateLimit: { max: 1000, windowMs: 60000 },
   });
   return { app, audits, close: () => app.close() };

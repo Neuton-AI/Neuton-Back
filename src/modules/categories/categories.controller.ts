@@ -9,7 +9,6 @@ import { CategoriesService } from './categories.service.js';
 export class CategoriesController {
   constructor(@Inject(CategoriesService) private readonly categoriesService: CategoriesService) {}
 
-
   @Get('categories')
   categories(@CurrentActor() actor: ActorContext) {
     return this.categoriesService.categories(actor);

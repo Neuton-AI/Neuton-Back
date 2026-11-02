@@ -11,7 +11,6 @@ import { adjustInventory } from '../../lib/inventoryAdjustments.js';
 import type { InventoryInput, InventoryPatchInput, InventoryQuery, InventoryDto } from './contracts.js';
 export const INVENTORY_DATABASE = Symbol('INVENTORY_DATABASE');
 
-
 export function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
   return {
     id: item.id, shopId: item.shopId, categoryId: item.categoryId,
@@ -132,7 +131,6 @@ export class InventoryPersistence {
   adjust(input: Parameters<typeof adjustInventory>[1]) {
     return adjustInventory(this.database as Database, input);
   }
-
 
   async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {
     const conditions = [eq(inventoryItems.shopId, shopId)];

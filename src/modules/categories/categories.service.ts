@@ -16,7 +16,6 @@ export class CategoriesService {
     return new CategoriesService(new CategoriesPersistence(transaction), afterCommit);
   }
 
-
   private async committed(effect: () => Promise<void>): Promise<void> {
     if (this.afterCommit) this.afterCommit(effect);
     else await effect();

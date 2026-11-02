@@ -11,7 +11,6 @@ import { InventoryService } from './inventory.service.js';
 export class InventoryController {
   constructor(@Inject(InventoryService) private readonly inventoryService: InventoryService) {}
 
-
   @Post('inventory')
   createInventory(@CurrentActor() actor: ActorContext, @Body() body: unknown) {
     return this.inventoryService.createInventory(actor, inventorySchema.parse(body));

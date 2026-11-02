@@ -3,7 +3,9 @@ import { createHttpApplication, type HttpOptions } from './http/application.js';
 import { env, corsOrigins } from './env.js';
 import { LoggerImpl } from './lib/logger/index.js';
 import { IdentityModule } from './modules/identity/identity.module.js';
-import { CatalogModule } from './modules/catalog/catalog.module.js';
+import { InventoryModule } from './modules/inventory/inventory.module.js';
+import { RecipeModule } from './modules/recipes/recipe.module.js';
+import { CategoriesModule } from './modules/categories/categories.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
 import { ReceiptsModule } from './modules/receipts/receipts.module.js';
 import { UploadsModule } from './modules/uploads/uploads.module.js';
@@ -19,7 +21,9 @@ class HealthController {
 @Module({
   imports: [
     IdentityModule,
-    CatalogModule,
+    InventoryModule,
+    RecipeModule,
+    CategoriesModule,
     OrdersModule,
     ReceiptsModule,
     UploadsModule,

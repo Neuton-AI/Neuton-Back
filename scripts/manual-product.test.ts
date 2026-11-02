@@ -6,7 +6,7 @@ import { FakeDb } from './support/fakeDb.js';
 import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
 import { manualProductSchema, prepareManualProduct } from '../src/lib/manualProduct.js';
 import { ingredientLineCost } from '../src/lib/pricing.js';
-import { costRecipe } from '../src/modules/catalog/costing.js';
+import { costRecipe } from '../src/modules/recipes/recipe.costing.js';
 import type { Database } from '../src/db/client.js';
 import type { recipes } from '../src/db/schema/index.js';
 

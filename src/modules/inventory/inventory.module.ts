@@ -11,7 +11,7 @@ import { InventoryController } from './inventory.controller.js';
   controllers: [InventoryController],
   providers: [
     { provide: INVENTORY_DATABASE, useValue: db },
-    
+
     InventoryPersistence, InventoryService, DomainAudit,
   ],
   exports: [InventoryService],

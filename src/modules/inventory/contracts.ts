@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 
-
 const queryBoolean = z
   .union([
     z.boolean(),

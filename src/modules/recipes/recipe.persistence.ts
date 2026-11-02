@@ -13,7 +13,6 @@ import type { prepareManualProduct } from '../../lib/manualProduct.js';
 import type { prepareBarcodePrice } from '../../lib/recipeBarcodePrice.js';
 export const RECIPE_DATABASE = Symbol('RECIPE_DATABASE');
 
-
 function ingredientValues(shopId: string, recipeId: string, ingredients: readonly PreparedRecipeIngredient[]) {
   return ingredients.map(ingredient => ({
     shopId, recipeId, inventoryItemId: ingredient.inventoryItemId ?? null,
@@ -40,7 +39,6 @@ function mapRecipe(recipe: Recipe): RecipeDto {
 @Injectable()
 export class RecipePersistence {
   constructor(@Inject(RECIPE_DATABASE) readonly database: TransactionalDatabase = db) {}
-
 
   async createRecipe(shopId: string, input: CreateRecipeInput): Promise<RecipeDto> {
     return this.database.transaction(async tx => {
@@ -202,7 +200,6 @@ export class RecipePersistence {
     return saved.id;
   }
 }
-
 
 export async function readRecipeCostIngredients(
   shopId: string,

@@ -17,7 +17,6 @@ export class RecipeController {
     @Inject(SyncService) private readonly sync: SyncService,
   ) {}
 
-
   @Delete('recipes/:id')
   async deleteRecipe(
     @CurrentActor() actor: ActorContext,

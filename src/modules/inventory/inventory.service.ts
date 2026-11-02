@@ -14,7 +14,6 @@ export class InventoryService {
     @Inject(DomainAudit) private readonly audit: DomainAudit = new DomainAudit(),
   ) {}
 
-
   async createInventory(actor: ActorContext, input: InventoryInput) {
     requireActorRole(actor, ['owner', 'admin']);
     const item = await this.persistence.create(actor.shop.id, input);

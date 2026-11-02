@@ -3,11 +3,21 @@
 ## Runtime and module boundaries
 
 The API runs on NestJS with Express. `src/app.ts` composes identity, shops,
-catalog, orders, receipts, uploads, analytics and synchronization. Controllers
+inventory, recipes, categories, orders, receipts, uploads, analytics and synchronization. Controllers
 validate contracts and pass authenticated context into application services;
 persistence owns tenant-scoped database access and explicit public mapping.
 Sync calls transaction-bound services directly. The BullMQ adapter calls the
 document-processing service through a queue-independent progress interface.
+
+`InventoryModule` owns stock CRUD, filtering, and idempotent adjustments.
+`RecipeModule` owns recipe CRUD, verification, costing, manual products,
+barcode prices, and deletion. `CategoriesModule` owns the category endpoints
+used by both domains. Each module has its own contracts and persistence;
+inventory and recipes do not import each other's application code. They share
+database types and audit infrastructure. Recipe costing still reads linked
+inventory data through the existing tenant-scoped queries.
+
+See [the module separation decision](docs/decisions/0001-separate-inventory-recipes.md).
 
 Run `npm run build`, then `npm start` and `npm run start:worker` as separate
 processes. Apply all pending migrations, including

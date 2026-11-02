@@ -7,7 +7,6 @@ import type { Category } from '../../db/schema/catalog.js';
 import type { CategoryDto } from './contracts.js';
 export const CATEGORIES_DATABASE = Symbol('CATEGORIES_DATABASE');
 
-
 function mapCategory(category: Category): CategoryDto {
   return {
     id: category.id, shopId: category.shopId, name: category.name,
@@ -17,7 +16,6 @@ function mapCategory(category: Category): CategoryDto {
 @Injectable()
 export class CategoriesPersistence {
   constructor(@Inject(CATEGORIES_DATABASE) readonly database: TransactionalDatabase = db) {}
-
 
   async listCategories(shopId: string): Promise<CategoryDto[]> {
     const rows = await this.database.select().from(categories)

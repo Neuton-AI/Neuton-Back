@@ -2,7 +2,6 @@ import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 
-
 const queryBoolean = z
   .union([
     z.boolean(),
