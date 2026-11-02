@@ -8,10 +8,11 @@ import request from 'supertest';
 import * as schema from '../src/db/schema/index.js';
 import { buildNestCatalogApp, SHOP_ID } from './support/nestCatalogApp.js';
 import { TEST_SHOP, USER_ID } from './support/catalogApp.js';
-import { CatalogService } from '../src/modules/catalog/catalog.service.js';
+import { CategoriesService } from '../src/modules/categories/categories.service.js';
+import { RecipeService } from '../src/modules/recipes/recipe.service.js';
 import type { ActorContext } from '../src/modules/identity/contracts.js';
 import { LoggerImpl } from '../src/lib/logger/index.js';
-import { recipeSchema } from '../src/modules/catalog/contracts.js';
+import { recipeSchema } from '../src/modules/recipes/contracts.js';
 
 const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 
@@ -94,7 +95,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
       role: 'owner', requestId: 'category-test', traceId: 'category-test',
       log: new LoggerImpl({ write: (_level, _message, meta) => { events.push(meta); } }, {}, 'debug'),
     };
-    const service = app.app.get(CatalogService);
+    const service = app.app.get(CategoriesService);
     const effects: (() => Promise<void>)[] = [];
     await assert.rejects(database.transaction(async tx => {
       await service.inTransaction(tx, effect => effects.push(effect)).createCategory(actor, { name: 'Rollback category' });
@@ -118,8 +119,9 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     const recipeInput = recipeSchema.parse({
       name: 'Rollback recipe', ingredients: [{ rawName: 'User flour', quantity: 1, rawSrcUnit: 'kg' }],
     });
+    const recipeService = app.app.get(RecipeService);
     await assert.rejects(database.transaction(async tx => {
-      await service.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, recipeInput);
+      await recipeService.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, recipeInput);
       assert.equal(app!.audits.length, 0);
       assert.equal(events.length, 0);
       throw new Error('rollback recipe transaction');
@@ -129,7 +131,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     assert.equal(events.length, 0);
     effects.length = 0;
     await database.transaction(async tx => {
-      await service.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, {
+      await recipeService.inTransaction(tx, effect => effects.push(effect)).createRecipe(actor, {
         ...recipeInput, name: 'Committed recipe',
       });
       assert.equal(app!.audits.length, 0);

@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { recordAudit, type AuditInput } from '../../lib/audit.js';
-import type { ActorContext } from '../identity/contracts.js';
+import { recordAudit, type AuditInput } from './audit.js';
+import type { ActorContext } from '../modules/identity/contracts.js';
 
 /** Best-effort audit writes run after the owning business transaction commits. */
 @Injectable()
-export class CatalogAudit {
+export class DomainAudit {
   async record(actor: ActorContext, input: AuditInput): Promise<void> {
     try {
       await recordAudit(input);

@@ -3,7 +3,7 @@ import { recipes, mediaUploads } from "../../db/schema/index.js";
 import { notFound } from "../../lib/errors.js";
 import { scheduleObjectDeletions } from "../../lib/storageCleanup.js";
 import { sourceStoragePaths } from "../../lib/documentPreviews.js";
-import type { CatalogDatabase } from "./catalog.persistence.js";
+import type { TransactionalDatabase } from "../../db/types.js";
 
 function isForeignKeyViolation(error: unknown): boolean {
   let candidate = error;
@@ -15,8 +15,8 @@ function isForeignKeyViolation(error: unknown): boolean {
   return false;
 }
 
-export class CatalogDeletionPersistence {
-  constructor(private readonly database: CatalogDatabase) {}
+export class RecipeDeletionPersistence {
+  constructor(private readonly database: TransactionalDatabase) {}
   delete(
     shopId: string,
     id: string,

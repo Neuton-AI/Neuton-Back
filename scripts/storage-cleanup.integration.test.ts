@@ -9,7 +9,7 @@ import {
   scheduleObjectDeletions,
   StorageCleanupDispatcher,
 } from "../src/lib/storageCleanup.js";
-import { CatalogDeletionPersistence } from "../src/modules/catalog/catalog-deletion.persistence.js";
+import { RecipeDeletionPersistence } from "../src/modules/recipes/recipe-deletion.persistence.js";
 import { LoggerImpl } from "../src/lib/logger/index.js";
 
 const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
@@ -84,10 +84,10 @@ test(
       const recipeId = randomUUID();
       await connection`insert into recipes(id,shop_id,name,storage_path) values (${recipeId},${shopId},'Referenced',${path})`;
       await connection`insert into recipe_refs values (${recipeId})`;
-      const deletion = new CatalogDeletionPersistence(db);
+      const deletion = new RecipeDeletionPersistence(db);
       await assert.rejects(
         db.transaction(async (tx) => {
-          await new CatalogDeletionPersistence(tx).delete(
+          await new RecipeDeletionPersistence(tx).delete(
             shopId,
             recipeId,
             "rollback-delete",

@@ -1,22 +1,32 @@
-import { and, eq } from 'drizzle-orm';
-import {
-  inventoryItems,
-  recipes,
-  generalPrices,
-} from '../../db/schema/index.js';
+import { and, asc, eq, sql } from 'drizzle-orm';
+import { Inject, Injectable } from '@nestjs/common';
+import { db, type Database } from '../../db/client.js';
+import type { TransactionalDatabase } from '../../db/types.js';
+import { inventoryItems } from '../../db/schema/index.js';
+import type { InventoryItem } from '../../db/schema/catalog.js';
 import { notFound } from '../../lib/errors.js';
 import { assertCatalogLinks } from '../../lib/catalogLinks.js';
 import { quantity as qty, unitCost } from '../../lib/money.js';
 import { adjustInventory } from '../../lib/inventoryAdjustments.js';
-import type { Database } from '../../db/client.js';
-import type { CatalogDatabase } from './catalog.persistence.js';
-import { mapInventory } from './catalog.persistence.js';
-import type { InventoryInput, InventoryPatchInput } from './contracts.js';
-import type { prepareManualProduct } from '../../lib/manualProduct.js';
-import type { prepareBarcodePrice } from '../../lib/recipeBarcodePrice.js';
+import type { InventoryInput, InventoryPatchInput, InventoryQuery, InventoryDto } from './contracts.js';
+export const INVENTORY_DATABASE = Symbol('INVENTORY_DATABASE');
 
+export function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
+  return {
+    id: item.id, shopId: item.shopId, categoryId: item.categoryId,
+    name: item.name, rawMaterialName: item.rawMaterialName, sku: item.sku,
+    imageUrl: item.imageUrl, unit: item.unit, baseUnit: item.baseUnit,
+    baseUnitAmount: item.baseUnitAmount, baseUnitCost: item.baseUnitCost,
+    baseUnitAverageCost: item.baseUnitAverageCost, currentQuantity: item.currentQuantity,
+    reorderLevel: item.reorderLevel, lastUnitCost: item.lastUnitCost,
+    averageUnitCost: item.averageUnitCost, isActive: item.isActive,
+    createdAt: item.createdAt.toISOString(), updatedAt: item.updatedAt.toISOString(),
+  };
+}
+@Injectable()
 export class InventoryPersistence {
-  constructor(readonly database: CatalogDatabase) {}
+  constructor(@Inject(INVENTORY_DATABASE) readonly database: TransactionalDatabase = db) {}
+
   async create(shopId: string, input: InventoryInput) {
     const rows = await this.database.transaction(async (tx) => {
       await assertCatalogLinks(tx, shopId, input);
@@ -118,39 +128,19 @@ export class InventoryPersistence {
       .set({ isActive: false, updatedAt: new Date() })
       .where(and(eq(inventoryItems.id, id), eq(inventoryItems.shopId, shopId)));
   }
-  async assertRecipe(shopId: string, id: string) {
-    const [recipe] = await this.database
-      .select({ id: recipes.id })
-      .from(recipes)
-      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
-      .limit(1);
-    if (!recipe) throw notFound('Recipe not found');
-  }
-  async manualProduct(
-    product: ReturnType<typeof prepareManualProduct>,
-  ) {
-    const [saved] = await this.database
-      .insert(generalPrices)
-      .values(product)
-      .returning({ id: generalPrices.id });
-    if (!saved) throw new Error('Manual general price insert returned no row');
-    return { ...product, id: saved.id, name: product.rawName };
-  }
-  async barcodePrice(
-    price: Awaited<ReturnType<typeof prepareBarcodePrice>>['price'],
-  ) {
-    const [saved] = await this.database
-      .insert(generalPrices)
-      .values(price)
-      .onConflictDoUpdate({
-        target: [generalPrices.rawMaterialName, generalPrices.sku],
-        set: price,
-      })
-      .returning({ id: generalPrices.id });
-    if (!saved) throw new Error('general price upsert returned no row');
-    return saved.id;
-  }
   adjust(input: Parameters<typeof adjustInventory>[1]) {
     return adjustInventory(this.database as Database, input);
+  }
+
+  async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {
+    const conditions = [eq(inventoryItems.shopId, shopId)];
+    if (!query.includeInactive) conditions.push(eq(inventoryItems.isActive, true));
+    if (query.search) conditions.push(sql`${inventoryItems.name} ilike ${`%${query.search}%`}`);
+    if (query.lowStockOnly) conditions.push(
+      sql`${inventoryItems.reorderLevel} is not null and ${inventoryItems.currentQuantity} <= ${inventoryItems.reorderLevel}`,
+    );
+    const rows = await this.database.select().from(inventoryItems)
+      .where(and(...conditions)).orderBy(asc(inventoryItems.name));
+    return rows.map(mapInventory);
   }
 }

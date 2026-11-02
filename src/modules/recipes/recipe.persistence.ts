@@ -1,18 +1,17 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
-import { db, type Database } from '../../db/client.js';
-import { categories, recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
+import { db } from '../../db/client.js';
+import type { TransactionalDatabase, ReadDatabase } from '../../db/types.js';
+import { recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
-import type { Category, InventoryItem, Recipe } from '../../db/schema/catalog.js';
+import type { Recipe } from '../../db/schema/catalog.js';
 import { notFound, conflict } from '../../lib/errors.js';
 import { assertCatalogLinks } from '../../lib/catalogLinks.js';
 import { quantity } from '../../lib/money.js';
-import type { CategoryDto, CreateRecipeInput, InventoryDto, InventoryQuery, RecipeDto, RecipeQuery, RecipeSourceDto, RecipePatchInput, PreparedRecipeIngredient, VerifyRecipeInput } from './contracts.js';
-
-export type CatalogReadDatabase = Pick<Database, 'select'>;
-export type CatalogTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
-export type CatalogDatabase = Database | CatalogTransaction;
-export const CATALOG_DATABASE = Symbol('CATALOG_DATABASE');
+import type { CreateRecipeInput, RecipeDto, RecipeQuery, RecipeSourceDto, RecipePatchInput, PreparedRecipeIngredient, VerifyRecipeInput } from './contracts.js';
+import type { prepareManualProduct } from '../../lib/manualProduct.js';
+import type { prepareBarcodePrice } from '../../lib/recipeBarcodePrice.js';
+export const RECIPE_DATABASE = Symbol('RECIPE_DATABASE');
 
 function ingredientValues(shopId: string, recipeId: string, ingredients: readonly PreparedRecipeIngredient[]) {
   return ingredients.map(ingredient => ({
@@ -22,26 +21,6 @@ function ingredientValues(shopId: string, recipeId: string, ingredients: readonl
     quantity: quantity(ingredient.quantity), rawSrcUnit: ingredient.rawSrcUnit,
     baseUnit: ingredient.baseUnit ?? null, baseUnitAmount: ingredient.baseUnitAmount?.toFixed(3) ?? null,
   }));
-}
-
-function mapCategory(category: Category): CategoryDto {
-  return {
-    id: category.id, shopId: category.shopId, name: category.name,
-    createdAt: category.createdAt.toISOString(),
-  };
-}
-
-export function mapInventory(item: InventoryItem): Omit<InventoryDto, 'isLowStock'> {
-  return {
-    id: item.id, shopId: item.shopId, categoryId: item.categoryId,
-    name: item.name, rawMaterialName: item.rawMaterialName, sku: item.sku,
-    imageUrl: item.imageUrl, unit: item.unit, baseUnit: item.baseUnit,
-    baseUnitAmount: item.baseUnitAmount, baseUnitCost: item.baseUnitCost,
-    baseUnitAverageCost: item.baseUnitAverageCost, currentQuantity: item.currentQuantity,
-    reorderLevel: item.reorderLevel, lastUnitCost: item.lastUnitCost,
-    averageUnitCost: item.averageUnitCost, isActive: item.isActive,
-    createdAt: item.createdAt.toISOString(), updatedAt: item.updatedAt.toISOString(),
-  };
 }
 
 function mapRecipe(recipe: Recipe): RecipeDto {
@@ -57,22 +36,9 @@ function mapRecipe(recipe: Recipe): RecipeDto {
     createdAt: recipe.createdAt.toISOString(), updatedAt: recipe.updatedAt.toISOString(),
   };
 }
-
 @Injectable()
-export class CatalogPersistence {
-  constructor(@Inject(CATALOG_DATABASE) readonly database: CatalogDatabase = db) {}
-
-  async listCategories(shopId: string): Promise<CategoryDto[]> {
-    const rows = await this.database.select().from(categories)
-      .where(eq(categories.shopId, shopId)).orderBy(asc(categories.name));
-    return rows.map(mapCategory);
-  }
-
-  async createCategory(shopId: string, name: string): Promise<CategoryDto> {
-    const [category] = await this.database.insert(categories).values({ shopId, name }).returning();
-    if (!category) throw new Error('Category insert returned no row');
-    return mapCategory(category);
-  }
+export class RecipePersistence {
+  constructor(@Inject(RECIPE_DATABASE) readonly database: TransactionalDatabase = db) {}
 
   async createRecipe(shopId: string, input: CreateRecipeInput): Promise<RecipeDto> {
     return this.database.transaction(async tx => {
@@ -174,18 +140,6 @@ export class CatalogPersistence {
     return mapRecipe(recipe);
   }
 
-  async listInventory(shopId: string, query: InventoryQuery): Promise<Omit<InventoryDto, 'isLowStock'>[]> {
-    const conditions = [eq(inventoryItems.shopId, shopId)];
-    if (!query.includeInactive) conditions.push(eq(inventoryItems.isActive, true));
-    if (query.search) conditions.push(sql`${inventoryItems.name} ilike ${`%${query.search}%`}`);
-    if (query.lowStockOnly) conditions.push(
-      sql`${inventoryItems.reorderLevel} is not null and ${inventoryItems.currentQuantity} <= ${inventoryItems.reorderLevel}`,
-    );
-    const rows = await this.database.select().from(inventoryItems)
-      .where(and(...conditions)).orderBy(asc(inventoryItems.name));
-    return rows.map(mapInventory);
-  }
-
   async listRecipes(shopId: string, query: RecipeQuery): Promise<RecipeDto[]> {
     const conditions = [eq(recipes.shopId, shopId)];
     if (!query.includeInactive) conditions.push(eq(recipes.isActive, true));
@@ -212,12 +166,45 @@ export class CatalogPersistence {
       ...(source.preview ? { preview: source.preview } : {}),
     }));
   }
+
+  async assertRecipe(shopId: string, id: string) {
+    const [recipe] = await this.database
+      .select({ id: recipes.id })
+      .from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+      .limit(1);
+    if (!recipe) throw notFound('Recipe not found');
+  }
+  async manualProduct(
+    product: ReturnType<typeof prepareManualProduct>,
+  ) {
+    const [saved] = await this.database
+      .insert(generalPrices)
+      .values(product)
+      .returning({ id: generalPrices.id });
+    if (!saved) throw new Error('Manual general price insert returned no row');
+    return { ...product, id: saved.id, name: product.rawName };
+  }
+  async barcodePrice(
+    price: Awaited<ReturnType<typeof prepareBarcodePrice>>['price'],
+  ) {
+    const [saved] = await this.database
+      .insert(generalPrices)
+      .values(price)
+      .onConflictDoUpdate({
+        target: [generalPrices.rawMaterialName, generalPrices.sku],
+        set: price,
+      })
+      .returning({ id: generalPrices.id });
+    if (!saved) throw new Error('general price upsert returned no row');
+    return saved.id;
+  }
 }
 
 export async function readRecipeCostIngredients(
   shopId: string,
   recipeId: string,
-  database: CatalogReadDatabase = db,
+  database: ReadDatabase = db,
 ) {
   return database
     .select({

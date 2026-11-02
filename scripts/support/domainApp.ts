@@ -6,9 +6,11 @@ import {
   UPLOAD_SERVICES,
 } from '../../src/modules/uploads/uploads.persistence.js';
 import { AppModule } from '../../src/app.js';
-import { CATALOG_DATABASE } from '../../src/modules/catalog/catalog.persistence.js';
-import { CATALOG_SEARCH } from '../../src/modules/catalog/catalog.service.js';
-import { CatalogAudit } from '../../src/modules/catalog/catalog.audit.js';
+import { INVENTORY_DATABASE } from '../../src/modules/inventory/inventory.persistence.js';
+import { RECIPE_DATABASE } from '../../src/modules/recipes/recipe.persistence.js';
+import { CATEGORIES_DATABASE } from '../../src/modules/categories/categories.persistence.js';
+import { RECIPE_SEARCH } from '../../src/modules/recipes/recipe.service.js';
+import { DomainAudit } from '../../src/lib/domainAudit.js';
 import { OrdersAudit } from '../../src/modules/orders/orders.audit.js';
 import { ORDERS_DATABASE } from '../../src/modules/orders/orders.persistence.js';
 import { RECEIPTS_DATABASE } from '../../src/modules/receipts/receipts.persistence.js';
@@ -91,13 +93,15 @@ export async function domainHarness(
     ),
   };
   const app = await testApplication(AppModule, [
-    [CATALOG_DATABASE, database],
+    [INVENTORY_DATABASE, database],
+    [RECIPE_DATABASE, database],
+    [CATEGORIES_DATABASE, database],
     [ORDERS_DATABASE, database],
     [RECEIPTS_DATABASE, database],
     [RECEIPTS_AUDIT, async () => {}],
     [SHOPS_DATABASE, database],
     [SYNC_DATABASE, database],
-    [CATALOG_SEARCH, search],
+    [RECIPE_SEARCH, search],
     [UPLOAD_SERVICES, uploads],
     [
       ANALYTICS_DEPS,
@@ -106,7 +110,7 @@ export async function domainHarness(
         now: () => current?.now?.() ?? new Date('2026-06-15T12:34:56Z'),
       },
     ],
-    [CatalogAudit, { record: async () => {} }],
+    [DomainAudit, { record: async () => {} }],
     [OrdersAudit, { record: async () => {} }],
     [SHOPS_AUDIT, async () => {}],
     [

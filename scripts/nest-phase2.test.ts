@@ -11,7 +11,9 @@ import {
   SHOP_ID,
   USER_ID,
 } from './support/nestPhase2App.js';
-import { CatalogModule } from '../src/modules/catalog/catalog.module.js';
+import { InventoryModule } from '../src/modules/inventory/inventory.module.js';
+import { RecipeModule } from '../src/modules/recipes/recipe.module.js';
+import { CategoriesModule } from '../src/modules/categories/categories.module.js';
 import { ReceiptsModule } from '../src/modules/receipts/receipts.module.js';
 import { UploadsModule } from '../src/modules/uploads/uploads.module.js';
 import { createHttpApplication } from '../src/http/application.js';
@@ -74,7 +76,7 @@ const source = {
 const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
 
 test('production feature modules compose with explicit Nest injection', async () => {
-  @Module({ imports: [CatalogModule, ReceiptsModule, UploadsModule] })
+  @Module({ imports: [InventoryModule, RecipeModule, CategoriesModule, ReceiptsModule, UploadsModule] })
   class Root {}
   const app = await createHttpApplication(Root, {
     origins: [],

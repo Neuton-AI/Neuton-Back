@@ -1,15 +1,16 @@
 import { toNumber } from '../../lib/money.js';
 import { calculateRetailPrice, calculateUnitCost, ingredientLineCost, checkBatchStock } from '../../lib/pricing.js';
-import { readRecipeCostIngredients, type CatalogReadDatabase } from './catalog.persistence.js';
+import { readRecipeCostIngredients } from './recipe.persistence.js';
+import type { ReadDatabase } from '../../db/types.js';
 import type { RecipeCostingInput, RecipeCostingDto } from './contracts.js';
 
-/** One costing implementation shared by catalog transports and application use cases. */
+/** One costing implementation shared by recipe transports and application use cases. */
 export async function costRecipe(
   shopId: string,
   recipe: RecipeCostingInput,
   shopMargin: string,
   hourlyLaborCost: string,
-  database?: CatalogReadDatabase,
+  database?: ReadDatabase,
 ): Promise<RecipeCostingDto> {
   const ingredientRows = await readRecipeCostIngredients(shopId, recipe.id, database);
   const lineCosts = ingredientRows.map((i) => ingredientLineCost({
