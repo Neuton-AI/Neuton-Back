@@ -18,6 +18,7 @@
     "verify": "npm run typecheck && npm run typecheck:test && npm test && npm run build",
     "test": "tsx --tsconfig tsconfig.test.json --test scripts/*.test.ts",
     "db:generate": "drizzle-kit generate",
+    "db:provision": "tsx scripts/provision-neon-roles.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:validate": "tsx scripts/validate-migrations.ts",
     "db:verify-rls": "tsx scripts/verify-rls.ts",
