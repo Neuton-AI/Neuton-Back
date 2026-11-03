@@ -8,3 +8,4 @@ export * from './sync.js';
 export * from './adjustments.js';
 export * from './storage-cleanup.js';
 export { jobAuthorizations } from './jobs.js';
+export { productMeasurements, ingredientConversions } from './measurements.js';
