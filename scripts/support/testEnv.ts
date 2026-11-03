@@ -14,7 +14,7 @@ loadDotenv();
 process.env.NODE_ENV = 'test';
 
 const PLACEHOLDERS: Record<string, string> = {
-  DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/neuton_test',
+  DATABASE_URL: 'postgresql://neuton_app:synthetic@localhost:5432/neuton_test?sslmode=require',
   SUPABASE_URL: 'https://placeholder.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'placeholder-service-role-key',
   UPSTASH_REDIS_URL: 'redis://localhost:6379',
