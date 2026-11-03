@@ -4,7 +4,7 @@ import { readAuthConfig } from './src/config/auth.js';
 const { databaseUrl: url } = readAuthConfig('migration');
 
 export default defineConfig({
-  schema: './src/db/schema/index.ts',
+  schema: ['./src/db/schema/index.ts', './src/db/schema/auth-index.ts'],
   out: './drizzle-neon',
   dialect: 'postgresql',
   dbCredentials: { url },

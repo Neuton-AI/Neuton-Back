@@ -28,7 +28,7 @@ type SessionDto = {
     id: string;
     idleExpiresAt: string;
     absoluteExpiresAt: string;
-    recentAuthenticationExpiresAt: string;
+    recentAuthenticationExpiresAt: string | null;
     renewAfter: string;
   };
   memberships: ShopMembershipDto[];

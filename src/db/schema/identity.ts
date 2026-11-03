@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   char,
+  check,
   index,
   integer,
   jsonb,
@@ -13,6 +14,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { SHOP_ROLES } from './enums.js';
+import { authUsers } from './auth.js';
 
 export const shops = pgTable('shops', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -49,9 +51,7 @@ export const shops = pgTable('shops', {
 }));
 
 export const profiles = pgTable('profiles', {
-  // FK to auth.users(id) is added in the hand-written auth/RLS migration so the
-  // generated schema never tries to create Supabase's native auth table.
-  id: uuid('id').primaryKey(),
+  id: uuid('id').primaryKey().references(() => authUsers.id, { onDelete: 'restrict' }),
   fullName: text('full_name'),
   avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -71,6 +71,7 @@ export const shopMembers = pgTable('shop_members', {
 }, (t) => ({
   shopUserUnique: uniqueIndex('shop_members_shop_id_user_id_unique').on(t.shopId, t.userId),
   userIdx: index('shop_members_user_id_idx').on(t.userId),
+  roleCheck: check('shop_members_role_check', sql`${t.role} in ('owner','admin','member')`),
 }));
 
 export const auditLogs = pgTable('audit_logs', {
