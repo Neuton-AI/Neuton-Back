@@ -63,7 +63,8 @@ CREATE FUNCTION app_private.lock_shop_context() RETURNS text
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path=pg_catalog AS $$
 DECLARE target uuid:=app_private.context_uuid('neuton.shop_id');
 BEGIN
- IF NOT app_private.lock_user_context() OR target IS NULL THEN RETURN NULL; END IF;
+ IF NOT app_private.lock_user_context() THEN RAISE EXCEPTION 'Invalid active session' USING ERRCODE='28000'; END IF;
+ IF target IS NULL THEN RETURN NULL; END IF;
  PERFORM pg_advisory_xact_lock_shared(hashtextextended('neuton:shop:'||target::text,0));
  RETURN app_private.member_role(target);
 END $$;

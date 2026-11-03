@@ -33,3 +33,4 @@ export interface ActorContext {
 }
 
 export type { ShopRole };
+export type { VerifiedSessionReference } from './verified-session.js';
