@@ -25,6 +25,7 @@ export function readProvisioningRoles(source: EnvironmentSource): ProvisioningRo
     roles.push({ name, login: true, password });
   }
   roles.push({ name: 'neuton_policy_reader', login: false }, { name: 'neuton_bootstrap', login: false });
+  roles.push({ name: 'neuton_maintenance', login: false });
   return roles;
 }
 
@@ -47,7 +48,7 @@ export async function provisionNeonRoles(source: EnvironmentSource): Promise<voi
     ssl: { rejectUnauthorized: true }, connect_timeout: 15, onnotice: () => {} });
   try {
     await connection.begin(async tx => {
-      await tx`select pg_advisory_xact_lock(hashtextextended('neuton:role-provisioning', 0))`;
+      await tx`select pg_advisory_xact_lock(hashtextextended('neuton:migrations', 0))`;
       const [relations] = await tx<{ count: number }[]>`
         select count(*)::integer as count from pg_catalog.pg_class c
         join pg_catalog.pg_namespace n on n.oid=c.relnamespace

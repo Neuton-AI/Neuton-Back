@@ -30,7 +30,7 @@ export function databaseUrl(source: EnvironmentSource, field: string, role?: str
     invalidConfig(field);
   }
   if (role && username !== role) invalidConfig(field);
-  const runtimeRoles = ['neuton_app', 'neuton_auth', 'neuton_worker', 'neuton_cleanup', 'neuton_policy_reader', 'neuton_bootstrap'];
+  const runtimeRoles = ['neuton_app', 'neuton_auth', 'neuton_worker', 'neuton_cleanup', 'neuton_policy_reader', 'neuton_bootstrap', 'neuton_maintenance'];
   if (!role && runtimeRoles.includes(username)) invalidConfig(field);
   // postgres-js forwards unknown URL parameters as startup settings; those
   // must not override the validated user, database, role or connection policy.

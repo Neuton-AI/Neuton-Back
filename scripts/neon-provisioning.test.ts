@@ -11,7 +11,7 @@ const source = {
 
 test('provisioning takes passwords from role-specific URLs and never invents owner access', () => {
   const roles = readProvisioningRoles(source);
-  assert.equal(roles.length, 6);
+  assert.equal(roles.length, 7);
   assert.equal(roles.find(role => role.name === 'neuton_auth')?.password, 'auth-password');
   assert.equal(roles.find(role => role.name === 'neuton_policy_reader')?.login, false);
   assert.equal(roles.find(role => role.name === 'neuton_bootstrap')?.password, undefined);
