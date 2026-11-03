@@ -11,6 +11,8 @@
 
 Database URLs must use PostgreSQL, include credentials and a database name, and must not request insecure SSL modes. Connection factories enforce certificate validation. Runtime usernames must be exactly neuton_app, neuton_auth, neuton_worker or neuton_cleanup for their respective settings. The migration owner must be separate. DATABASE_LISTEN_URL uses neuton_app with a direct/session endpoint; a Neon pooler endpoint is rejected.
 
+Only sslmode and sslrootcert=system URL options are accepted. postgres-js 3.4.9 forwards unknown URL parameters as PostgreSQL startup settings, so user/database/options overrides are rejected. It does not implement SCRAM channel binding: URLs used by this driver must omit channel_binding rather than pretending to enforce channel_binding=require. TLS certificate validation remains mandatory. This applies to copied Neon console connection strings as well; no actual environment value was inspected.
+
 APP_ORIGIN is an exact origin without path/trailing slash/credentials. HTTPS is required except explicit development/test localhost HTTP. CORS/CSRF origins derive from that single origin. The environment identifier and Redis auth namespace derive deterministically from NODE_ENV plus APP_ORIGIN. Expose only the environment identifier in the public session response for browser partitions; never expose private configuration.
 
 Google uses GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI. The redirect must equal APP_ORIGIN followed by `/api/v1/auth/google/callback`.

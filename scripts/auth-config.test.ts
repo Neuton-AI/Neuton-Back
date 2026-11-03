@@ -21,6 +21,7 @@ const source = () => ({
 test('migration configuration requires only its owner connection', () => {
   const config = readAuthConfig('migration', { MIGRATION_DATABASE_URL: url('neondb_owner') });
   assert.deepEqual(config, { process: 'migration', databaseUrl: url('neondb_owner') });
+  assert.equal(readAuthConfig('migration', { MIGRATION_DATABASE_URL: url('neuton_migrator') }).databaseUrl, url('neuton_migrator'));
 });
 
 test('worker and cleanup do not require Google, mail or encryption secrets', () => {
@@ -46,8 +47,12 @@ test('API fails closed for unsafe origins, callbacks, roles and SMTP modes', () 
     { APP_ORIGIN: 'http://dev.example.com' }, { APP_ORIGIN: 'https://dev.example.com/path' },
     { NODE_ENV: 'production' }, { GOOGLE_REDIRECT_URI: 'https://attacker.example/callback' },
     { DATABASE_URL: url('neondb_owner') }, { DATABASE_URL: url('neuton_app').replace('require', 'disable') },
+    { DATABASE_URL: url('neuton_app') + '&user=neondb_owner' },
+    { DATABASE_URL: url('neuton_app') + '&options=-crole%3Dneuton_auth' },
+    { DATABASE_URL: url('neuton_app') + '&channel_binding=require' },
     { SMTP_SECURE: 'truthy' }, { SMTP_PORT: '465', SMTP_SECURE: 'false' },
     { SMTP_PORT: '587', SMTP_SECURE: 'true' }, { MAIL_FROM: 'Neuton\r\nBcc: attacker@example.com' },
+    { MAIL_FROM: 'noreply@example.com>' }, { MAIL_FROM: 'Neuton <noreply@example.com' },
   ]) {
     assert.throws(() => readAuthConfig('api', { ...source(), ...patch }));
   }

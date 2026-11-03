@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { z } from 'zod';
 import { databaseUrl, invalidConfig, readProcessDatabase, requiredSetting } from './database.js';
 import type { DatabaseProcess, EnvironmentSource } from './database.js';
 export { AUTH_POLICY } from './auth-policy.js';
@@ -61,7 +62,14 @@ function smtp(source: EnvironmentSource) {
   const secure = secureSetting === 'true';
   if ((port === 465 && !secure) || (secure && port !== 465)) invalidConfig('SMTP_SECURE');
   const from = requiredSetting(source, 'MAIL_FROM');
-  if (/[\r\n]/.test(from) || !/^(?:[^<>\r\n]+ <)?[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>?$/.test(from)) {
+  if (/[\r\n]/.test(from) || from.length > 500) invalidConfig('MAIL_FROM');
+  let address = from;
+  if (from.includes('<') || from.includes('>')) {
+    const match = /^[^<>]+ <([^<>]+)>$/.exec(from);
+    if (!match?.[1]) invalidConfig('MAIL_FROM');
+    address = match[1];
+  }
+  if (!z.string().email().safeParse(address).success) {
     invalidConfig('MAIL_FROM');
   }
   return { host, port, secure, requireTLS: !secure, from,
