@@ -15,6 +15,7 @@ Use one `SessionDto` and one `ShopMembershipDto`. UUIDs below are internal ident
 ```ts
 type ShopRole = 'owner' | 'admin' | 'member';
 type SessionDto = {
+  environment: string;
   user: {
     id: string;
     email: string;

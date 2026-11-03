@@ -1,6 +1,10 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
+// New process-specific configuration is loaded explicitly at each migration
+// entry point; importing it alone never requires another process's credentials.
+export { readAuthConfig, AUTH_POLICY } from './config/auth.js';
+
 loadDotenv();
 
 const boolish = z
