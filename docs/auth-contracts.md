@@ -105,4 +105,6 @@ No lock or transaction spans Google, SMTP, R2 or model calls. Read authorized in
 
 ## Browser identity and offline state
 
+OAuth completion records reference an existing target user or reserve a server-generated candidate UUID for a new account, exclusively. The latter has no user FK until the completion POST creates the account; callback GET does not have to create an account to satisfy a premature FK. Store only the validated identity claim allowlist, never Google tokens. Completion rechecks email collisions, initiating session and security version under locks before applying the mapping.
+
 One provider exposes loading, anonymous, pending-email, authenticated and unavailable. Unavailable is not confirmed logout or fresh authority. Cold offline startup remains locked. Partitions are environment + verified user UUID + shop UUID and survive ordinary session replacement. Legacy partitions are quarantined; never infer new ownership from email. Stop requests/subscriptions and clear transient caches before showing a different account. Preserve unsent edits in their original partition; never replay them under another user.

@@ -9,3 +9,6 @@ export function createAuthDatabase(source: EnvironmentSource = process.env) {
   const database = drizzle(connection, { schema });
   return { database, connection, close: () => connection.end({ timeout: 5 }) };
 }
+
+export type AuthDatabase = ReturnType<typeof createAuthDatabase>['database'];
+export type AuthDatabaseTransaction = Parameters<Parameters<AuthDatabase['transaction']>[0]>[0];

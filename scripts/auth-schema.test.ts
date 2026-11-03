@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { getTableConfig } from 'drizzle-orm/pg-core';
+import { PgTable } from 'drizzle-orm/pg-core';
+import { is } from 'drizzle-orm';
+import * as authSchema from '../src/db/schema/auth-index.js';
 import { authUsers, passwordCredentials, googleIdentities, authSessions } from '../src/db/schema/auth.js';
 import * as businessSchema from '../src/db/schema/index.js';
 import { profiles } from '../src/db/schema/identity.js';
 
 test('private auth relations are separate from business exports and profiles reference local users', () => {
-  for (const table of [authUsers, passwordCredentials, googleIdentities, authSessions]) {
+  for (const table of Object.values(authSchema)) {
+    if (!is(table, PgTable)) continue;
     assert.equal(getTableConfig(table).schema, 'auth_private');
     assert.ok(!Object.values(businessSchema).includes(table as never));
   }

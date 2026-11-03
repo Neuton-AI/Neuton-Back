@@ -1,4 +1,4 @@
-import type { DatabaseTransaction } from '../../db/types.js';
+import type { AuthDatabaseTransaction } from '../../db/auth-client.js';
 
 export abstract class PasswordHasher {
   abstract hash(password: string): Promise<string>;
@@ -38,5 +38,5 @@ export abstract class AuthMailer {
 
 /** Only the private auth connection implements this port. No default app pool. */
 export abstract class AuthPersistence {
-  abstract transaction<T>(work: (transaction: DatabaseTransaction) => Promise<T>): Promise<T>;
+  abstract transaction<T>(work: (transaction: AuthDatabaseTransaction) => Promise<T>): Promise<T>;
 }
