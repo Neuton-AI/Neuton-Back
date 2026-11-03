@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -24,6 +25,7 @@ export const categories = pgTable('categories', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopNameUnique: uniqueIndex('categories_shop_id_name_unique').on(t.shopId, t.name),
+  tenantId: uniqueIndex('categories_shop_id_id_unique').on(t.shopId, t.id),
 }));
 
 export const inventoryItems = pgTable('inventory_items', {
@@ -31,7 +33,7 @@ export const inventoryItems = pgTable('inventory_items', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
+  categoryId: uuid('category_id'),
   name: text('name').notNull(),
   rawMaterialName: text('raw_material_name').notNull(),
   sku: text('sku'),
@@ -50,6 +52,9 @@ export const inventoryItems = pgTable('inventory_items', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopNameUnique: uniqueIndex('inventory_items_shop_id_name_unique').on(t.shopId, t.name),
+  tenantId: uniqueIndex('inventory_items_shop_id_id_unique').on(t.shopId, t.id),
+  categoryTenant: foreignKey({ name: 'inventory_category_shop_fk', columns: [t.shopId, t.categoryId],
+    foreignColumns: [categories.shopId, categories.id] }).onDelete('set null'),
   skuIdx: index('inventory_items_shop_id_sku_idx')
     .on(t.shopId, t.sku)
     .where(sql`${t.sku} IS NOT NULL`),
@@ -60,7 +65,7 @@ export const recipes = pgTable('recipes', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
+  categoryId: uuid('category_id'),
   name: text('name').notNull(),
   description: text('description'),
   imageUrl: text('image_url'),
@@ -78,6 +83,9 @@ export const recipes = pgTable('recipes', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopNameUnique: uniqueIndex('recipes_shop_id_name_unique').on(t.shopId, t.name),
+  tenantId: uniqueIndex('recipes_shop_id_id_unique').on(t.shopId, t.id),
+  categoryTenant: foreignKey({ name: 'recipes_category_shop_fk', columns: [t.shopId, t.categoryId],
+    foreignColumns: [categories.shopId, categories.id] }).onDelete('set null'),
   shopIdx: index('recipes_shop_id_idx').on(t.shopId),
   shopStatusIdx: index('recipes_shop_id_status_idx').on(t.shopId, t.status),
   shopStoragePathUnique: uniqueIndex('recipes_shop_id_storage_path_unique')
@@ -107,12 +115,8 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  recipeId: uuid('recipe_id')
-    .notNull()
-    .references(() => recipes.id, { onDelete: 'cascade' }),
-  inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
-    onDelete: 'restrict',
-  }),
+  recipeId: uuid('recipe_id').notNull(),
+  inventoryItemId: uuid('inventory_item_id'),
   generalPriceId: uuid('general_price_id').references(() => generalPrices.id, {
     onDelete: 'set null',
   }),
@@ -127,6 +131,10 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
   // A recipe can use the same material in several steps or different units.
   // Preserve each line and quantity instead of merging incompatible units (#97).
   recipeIdx: index('recipe_ingredients_recipe_id_idx').on(t.recipeId),
+  recipeTenant: foreignKey({ name: 'ingredients_recipe_shop_fk', columns: [t.shopId, t.recipeId],
+    foreignColumns: [recipes.shopId, recipes.id] }).onDelete('cascade'),
+  inventoryTenant: foreignKey({ name: 'ingredients_inventory_shop_fk', columns: [t.shopId, t.inventoryItemId],
+    foreignColumns: [inventoryItems.shopId, inventoryItems.id] }).onDelete('restrict'),
   shopIdx: index('recipe_ingredients_shop_id_idx').on(t.shopId),
   priceLinkCheck: check(
     'recipe_ingredients_price_link_check',
