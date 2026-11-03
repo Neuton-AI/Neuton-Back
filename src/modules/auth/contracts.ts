@@ -19,7 +19,7 @@ const passwordSchema = z.string().max(256).superRefine((value, context) => {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Password must contain 15–128 valid Unicode code points' });
   }
 });
-const fullNameSchema = htmlFree(z.string().max(160).trim().min(1))
+const fullNameSchema = htmlFree(z.string().max(120).trim().min(1))
   .refine(value => isValidUnicode(value) && !/[\p{Cc}\p{Cf}]/u.test(value), 'Enter a valid name');
 
 export const registrationInput = z.object({

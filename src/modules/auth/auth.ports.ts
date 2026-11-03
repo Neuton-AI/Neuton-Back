@@ -3,6 +3,8 @@ import type { AuthDatabaseTransaction } from '../../db/auth-client.js';
 export abstract class PasswordHasher {
   abstract hash(password: string): Promise<string>;
   abstract verify(encodedHash: string, password: string): Promise<boolean>;
+  abstract verifyDummy(password: string): Promise<void>;
+  abstract needsRehash(encodedHash: string): boolean;
 }
 
 export type GooglePurpose = 'login' | 'link' | 'reauthenticate';

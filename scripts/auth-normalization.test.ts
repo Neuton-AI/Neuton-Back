@@ -40,6 +40,7 @@ test('auth inputs reject unknown authority fields and never transform a password
     assert.equal(registrationInput.safeParse({ ...input, ...extra }).success, false);
   }
   assert.equal(registrationInput.safeParse({ ...input, fullName: '<script>' }).success, false);
+  assert.equal(registrationInput.safeParse({ ...input, fullName: 'a'.repeat(121) }).success, false);
   assert.equal(loginInput.safeParse({ email: input.email, password: input.password }).success, true);
   assert.equal(loginInput.safeParse(input).success, false);
   assert.equal(emailInput.safeParse({ email: '\ud800@example.com' }).success, false);

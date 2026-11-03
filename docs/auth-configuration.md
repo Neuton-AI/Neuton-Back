@@ -31,4 +31,16 @@ Node 22+ is required. The lockfile pins argon2 0.45.2, openid-client 6.8.9, node
 
 The ports in `src/modules/auth/auth.ports.ts` expose password operations, validated Google identity claims, SMTP message delivery and private auth transactions. Accounts and session lifecycle remain Neuton-owned. The public session/membership interfaces live in `src/modules/auth/contracts.ts`.
 
+## Cryptographic and input boundaries
+
+`crypto.ts` generates canonical 32-byte base64url secrets. Persist only purpose-bound SHA-256 digests for bearer credentials. Rate dimensions use a separate HMAC key and include the environment and dimension in their input. Reversible encryption is limited to pending mail payloads and OAuth PKCE verifiers: AES-256-GCM with a fresh 12-byte nonce, 16-byte tag, and associated data containing the envelope version, key ID, purpose and record ID. Tampered or unavailable payloads fail with a bounded 503 error without returning partial plaintext.
+
+To rotate encryption keys, retain the old entry in AUTH_ENCRYPTION_KEYS and select a new active ID. New records use the new key; existing records decrypt only through their explicit saved key ID. Remove old entries only after all pending records using them have expired or been discarded and cleared. The longest confirmation/email-change lifetime is one day; OAuth records last ten minutes. Record expiry is enforced by their lifecycle repositories and dispatcher, not inferred from the key label. Reusing another key ID never recovers an envelope bound to the original ID.
+
+Email input retains its trimmed display form and normalizes its domain through IDNA and the whole account address to lowercase. Dots and plus suffixes remain significant. Unquoted local parts, including valid Unicode, are supported within SMTP address length bounds; control characters, malformed Unicode, IP literals and malformed domains are rejected. Passwords preserve exact input, including spaces and combining characters; 15–128 Unicode code points are required. Strict auth request schemas reject unrecognized fields.
+
+`ArgonPasswordHasher` uses library-generated salts with Argon2id (64 MiB, three iterations, parallelism one). A shared process counter caps concurrent hash/verification work at four without a waiting queue. Overload or native failures return a bounded 503. Unknown-account comparisons use a fixed synthetic dummy hash whose result is always discarded. Hashing and comparison happen outside database transactions.
+
+Primary cryptographic APIs: [Node 24 crypto](https://nodejs.org/docs/latest-v24.x/api/crypto.html), including createCipheriv/createDecipheriv, setAAD, authentication tags, randomBytes and timingSafeEqual. Password primitives use the pinned node-argon2 adapter above.
+
 Primary references consulted: [pinned Argon2 documentation](https://github.com/ranisalt/node-argon2/blob/v0.45.2/README.md), [openid-client](https://github.com/panva/openid-client), and the installed packages' manifests and declarations. The cookie 2 API uses parseCookie/stringifySetCookie; SMTP 10 includes its own TypeScript declarations.
