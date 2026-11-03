@@ -1,4 +1,7 @@
-import type { AuthDatabaseTransaction } from '../../db/auth-client.js';
+import type { SQL } from 'drizzle-orm';
+
+/** Auth persistence needs parameterized SQL, without coupling lifecycle code to a driver. */
+export interface AuthTransaction { execute(query: SQL): PromiseLike<unknown> }
 
 export abstract class PasswordHasher {
   abstract hash(password: string): Promise<string>;
@@ -40,5 +43,5 @@ export abstract class AuthMailer {
 
 /** Only the private auth connection implements this port. No default app pool. */
 export abstract class AuthPersistence {
-  abstract transaction<T>(work: (transaction: AuthDatabaseTransaction) => Promise<T>): Promise<T>;
+  abstract transaction<T>(work: (transaction: AuthTransaction) => Promise<T>): Promise<T>;
 }

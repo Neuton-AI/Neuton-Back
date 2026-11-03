@@ -87,6 +87,16 @@ All routes use `/api/v1`. `AuthController` owns `/session` and `/auth/*`; remove
 
 Errors retain `{error:{code,message,traceId}}`. Use 400 malformed input, 401 invalid authentication, 403 forbidden/CSRF, 409 authenticated disclosable conflicts, 429 limited, 503 dependency failure. Registration/recovery/resend do not disclose account existence/status.
 
+## Private account transitions
+
+`AuthRepository` accepts only an explicitly supplied private persistence boundary. Each transaction locks one canonical user UUID: take the exclusive `neuton:user:<uuid>` advisory guard before the user row and any credential/action/OAuth rows. This matches the shared guard held by tenant transactions. Locked handles expire with the transaction and cannot be reconstructed from public DTOs.
+
+`AccountRepository.createPending` inserts a fresh account and invokes the narrow profile routine inside the caller's auth transaction. A normalized-email conflict returns no account and changes no existing profile or credential. The caller can enqueue an action and outbox row before committing. Public projections explicitly omit security versions and credentials. Password proofs are read for comparison outside SQL, then rechecked under lock; conditional rehash preserves the password-change timestamp.
+
+`ActionTokenRepository.find` selects an internal user to lock and grants no capability. Consumption rechecks purpose, digest, destination, current status/security version, expiry and unused state in one conditional update. Expiry uses the database wall clock after lock acquisition. Issuance invalidates earlier outstanding actions of the same purpose. Confirmation binds the current normalized address, email change binds the proposed normalized address, and password reset uses no separate destination field.
+
+Security-version changes, session revocation, action invalidation and initiated OAuth/ticket invalidation share the locked account transaction. These primitives perform no network operations. Account flows own their permitted transitions, security events and mail enqueueing before commit.
+
 ## Browser transport and redirects
 
 Every browser mutation requires the exact configured `APP_ORIGIN`, supported content type, and `x-csrf-token`. Reject missing/null origins. Callback GET is the narrow state-bound exception. CSRF bootstrap also enforces browser metadata; a public CSRF token never authorizes an account. Reissue CSRF after session replacement; retain it in memory only.
