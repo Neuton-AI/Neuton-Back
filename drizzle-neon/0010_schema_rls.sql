@@ -1,0 +1,20 @@
+ALTER TABLE "ingredient_conversions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "app_private"."job_authorizations" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "product_measurements" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "audit_logs" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "profiles" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "shop_members" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "shops" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "categories" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "inventory_items" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "recipe_ingredients" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "recipes" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "receipt_items" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "receipts" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "order_items" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "orders" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "media_uploads" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "document_mutations" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "document_versions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "inventory_adjustment_batches" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "storage_object_deletions" ENABLE ROW LEVEL SECURITY;

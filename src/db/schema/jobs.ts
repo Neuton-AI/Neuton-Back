@@ -46,4 +46,4 @@ export const jobAuthorizations = appPrivate.table('job_authorizations', {
   state: check('job_authorizations_state_check', sql`${table.state} in ('accepted','queued','processing','completed','failed','cancelled')`),
   cancellation: check('job_authorizations_cancellation_check', sql`${table.state} <> 'cancelled' or ${table.cancelledAt} is not null`),
   lifetime: check('job_authorizations_lifetime_check', sql`${table.createdAt} < ${table.expiresAt}`),
-}));
+})).enableRLS();

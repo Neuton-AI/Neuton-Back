@@ -25,7 +25,7 @@ export const documentVersions = pgTable(
   (table) => ({
     primary: primaryKey({ columns: [table.shopId, table.kind, table.id] }),
   }),
-);
+).enableRLS();
 
 export const documentMutations = pgTable(
   'document_mutations',
@@ -40,4 +40,4 @@ export const documentMutations = pgTable(
     status: integer('status').notNull().default(200),
   },
   (table) => ({ primary: primaryKey({ columns: [table.shopId, table.id] }) }),
-);
+).enableRLS();

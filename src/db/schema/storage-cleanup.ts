@@ -50,4 +50,4 @@ export const storageObjectDeletions = pgTable(
       sql`left(${t.storagePath}, 37) = ${t.shopId}::text || '/'`,
     ),
   }),
-);
+).enableRLS();

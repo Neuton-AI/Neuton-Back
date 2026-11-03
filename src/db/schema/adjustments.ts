@@ -14,4 +14,4 @@ export const inventoryAdjustmentBatches = pgTable('inventory_adjustment_batches'
   userId: uuid('user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
   requestHash: text('request_hash').notNull(),
   response: jsonb('response').$type<InventoryAdjustmentResult>(),
-}, table => ({ primary: primaryKey({ columns: [table.shopId, table.id] }) }));
+}, table => ({ primary: primaryKey({ columns: [table.shopId, table.id] }) })).enableRLS();

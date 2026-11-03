@@ -53,6 +53,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
     "@nestjs/testing": "^12.2.0",
     "@types/express": "^5.0.6",
     "@types/node": "^22.10.5",

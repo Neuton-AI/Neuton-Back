@@ -48,7 +48,7 @@ export const shops = pgTable('shops', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   slugUnique: uniqueIndex('shops_slug_unique').on(t.slug),
-}));
+})).enableRLS();
 
 export const profiles = pgTable('profiles', {
   id: uuid('id').primaryKey().references(() => authUsers.id, { onDelete: 'restrict' }),
@@ -56,7 +56,7 @@ export const profiles = pgTable('profiles', {
   avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}).enableRLS();
 
 export const shopMembers = pgTable('shop_members', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -72,7 +72,7 @@ export const shopMembers = pgTable('shop_members', {
   shopUserUnique: uniqueIndex('shop_members_shop_id_user_id_unique').on(t.shopId, t.userId),
   userIdx: index('shop_members_user_id_idx').on(t.userId),
   roleCheck: check('shop_members_role_check', sql`${t.role} in ('owner','admin','member')`),
-}));
+})).enableRLS();
 
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -87,7 +87,7 @@ export const auditLogs = pgTable('audit_logs', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopCreatedIdx: index('audit_logs_shop_id_created_at_idx').on(t.shopId, t.createdAt),
-}));
+})).enableRLS();
 
 export type Shop = typeof shops.$inferSelect;
 export type NewShop = typeof shops.$inferInsert;

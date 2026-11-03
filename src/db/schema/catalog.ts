@@ -26,7 +26,7 @@ export const categories = pgTable('categories', {
 }, (t) => ({
   shopNameUnique: uniqueIndex('categories_shop_id_name_unique').on(t.shopId, t.name),
   tenantId: uniqueIndex('categories_shop_id_id_unique').on(t.shopId, t.id),
-}));
+})).enableRLS();
 
 export const inventoryItems = pgTable('inventory_items', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -58,7 +58,7 @@ export const inventoryItems = pgTable('inventory_items', {
   skuIdx: index('inventory_items_shop_id_sku_idx')
     .on(t.shopId, t.sku)
     .where(sql`${t.sku} IS NOT NULL`),
-}));
+})).enableRLS();
 
 export const recipes = pgTable('recipes', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -91,7 +91,7 @@ export const recipes = pgTable('recipes', {
   shopStoragePathUnique: uniqueIndex('recipes_shop_id_storage_path_unique')
     .on(t.shopId, t.storagePath)
     .where(sql`${t.storagePath} IS NOT NULL`),
-}));
+})).enableRLS();
 
 /** Global material/SKU cache. Null conversions are deliberately unresolved. */
 export const generalPrices = pgTable('general_prices', {
@@ -140,7 +140,7 @@ export const recipeIngredients = pgTable('recipe_ingredients', {
     'recipe_ingredients_price_link_check',
     sql`num_nonnulls(${t.inventoryItemId}, ${t.generalPriceId}) <= 1`,
   ),
-}));
+})).enableRLS();
 
 export type Category = typeof categories.$inferSelect;
 export type InventoryItem = typeof inventoryItems.$inferSelect;

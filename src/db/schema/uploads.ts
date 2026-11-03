@@ -44,4 +44,4 @@ export const mediaUploads = pgTable('media_uploads', {
   orderTenant: foreignKey({ name: 'uploads_order_shop_fk', columns: [t.shopId, t.orderId],
     foreignColumns: [orders.shopId, orders.id] }).onDelete('cascade'),
   sourceCount: check('media_uploads_source_count', sql`jsonb_array_length(${t.sources}) BETWEEN 1 AND 4`),
-}));
+})).enableRLS();

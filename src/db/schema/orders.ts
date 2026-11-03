@@ -48,7 +48,7 @@ export const orders = pgTable('orders', {
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
   shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
   shopOrderNumberUnique: uniqueIndex('orders_shop_id_order_number_unique').on(t.shopId, t.orderNumber),
-}));
+})).enableRLS();
 
 export const orderItems = pgTable('order_items', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -75,7 +75,7 @@ export const orderItems = pgTable('order_items', {
     foreignColumns: [orders.shopId, orders.id] }).onDelete('cascade'),
   recipeTenant: foreignKey({ name: 'order_items_recipe_shop_fk', columns: [t.shopId, t.recipeId],
     foreignColumns: [recipes.shopId, recipes.id] }).onDelete('restrict'),
-}));
+})).enableRLS();
 
 /**
  * The label an order line reports: the name snapshotted when the line was

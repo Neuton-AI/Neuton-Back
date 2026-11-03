@@ -11,7 +11,7 @@ export const productMeasurements = pgTable('product_measurements', {
   packagesPerPurchase: numeric('packages_per_purchase', { precision: 20, scale: 6 }).notNull().default('1'),
   evidence: jsonb('evidence').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, table => ({ product: uniqueIndex('product_measurements_shop_product_unique').on(table.shopId, table.productKey) }));
+}, table => ({ product: uniqueIndex('product_measurements_shop_product_unique').on(table.shopId, table.productKey) })).enableRLS();
 
 export const ingredientConversions = pgTable('ingredient_conversions', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -19,4 +19,4 @@ export const ingredientConversions = pgTable('ingredient_conversions', {
   scopeKey: text('scope_key').notNull(),
   profile: jsonb('profile').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-}, table => ({ scope: uniqueIndex('ingredient_conversions_shop_scope_unique').on(table.shopId, table.scopeKey) }));
+}, table => ({ scope: uniqueIndex('ingredient_conversions_shop_scope_unique').on(table.shopId, table.scopeKey) })).enableRLS();

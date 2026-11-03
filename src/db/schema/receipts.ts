@@ -67,7 +67,7 @@ export const receipts = pgTable('receipts', {
   shopDateIdx: index('receipts_shop_id_receipt_date_idx').on(t.shopId, t.receiptDate),
   tenantId: uniqueIndex('receipts_shop_id_id_unique').on(t.shopId, t.id),
   shopStatusIdx: index('receipts_shop_id_status_idx').on(t.shopId, t.status),
-}));
+})).enableRLS();
 
 export const receiptItems = pgTable('receipt_items', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -103,7 +103,7 @@ export const receiptItems = pgTable('receipt_items', {
   shopSkuIdx: index('receipt_items_shop_id_raw_sku_idx')
     .on(t.shopId, t.rawSku)
     .where(sql`${t.rawSku} IS NOT NULL`),
-}));
+})).enableRLS();
 
 export type Receipt = typeof receipts.$inferSelect;
 export type NewReceipt = typeof receipts.$inferInsert;

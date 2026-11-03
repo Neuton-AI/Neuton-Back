@@ -22,6 +22,62 @@
       "when": 1793739246938,
       "tag": "0002_document_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793741321735,
+      "tag": "0003_policy_helpers",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793741322490,
+      "tag": "0004_identity_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793741323237,
+      "tag": "0005_tenant_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793741323993,
+      "tag": "0006_internal_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793741324760,
+      "tag": "0007_worker_cleanup_routines",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793741325616,
+      "tag": "0008_business_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793741326466,
+      "tag": "0009_shop_routines",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793741335220,
+      "tag": "0010_schema_rls",
+      "breakpoints": true
     }
   ]
 }

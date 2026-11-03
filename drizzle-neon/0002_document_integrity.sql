@@ -56,4 +56,3 @@ END $$;
 REVOKE ALL ON FUNCTION app_private.immutable_upload_source() FROM PUBLIC;
 CREATE TRIGGER media_uploads_source_immutable BEFORE UPDATE ON public.media_uploads
 FOR EACH ROW EXECUTE FUNCTION app_private.immutable_upload_source();
-
