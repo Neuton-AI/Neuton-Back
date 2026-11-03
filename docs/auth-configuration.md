@@ -53,4 +53,8 @@ Templates use only APP_ORIGIN plus `/auth/confirm`, `/auth/reset-password` or `/
 
 Transport options follow the [official Nodemailer SMTP documentation](https://nodemailer.com/smtp) and the pinned package declarations.
 
+`MailDispatcher` claims only immediately available send capacity (two rows), up to 25 per drain, using SKIP LOCKED and per-record UUID lease tokens. It rechecks account/action state under the matching user guard, then releases SQL before SMTP. One-minute leases are renewed during delivery. Completion/retry checks the current lease token and deadline; an old process cannot complete a reassigned record. Successful or discarded rows erase encrypted payloads. Retry delay starts at 30 seconds, doubles to a one-hour cap, and never extends the record's original expiry. SMTP's ambiguous acceptance window may still produce a duplicate message.
+
+`AuthModule.forRoot` receives validated configuration and the API logger explicitly. Its runtime starts dispatch through the Nest initialization hook and drains active sends before closing SMTP/auth connections through the destruction hook. Module import alone reads no environment and creates no clients. The application installs this module with the auth HTTP boundaries in Task 32; the legacy API remains in place until that composition step.
+
 Primary references consulted: [pinned Argon2 documentation](https://github.com/ranisalt/node-argon2/blob/v0.45.2/README.md), [openid-client](https://github.com/panva/openid-client), and the installed packages' manifests and declarations. The cookie 2 API uses parseCookie/stringifySetCookie; SMTP 10 includes its own TypeScript declarations.

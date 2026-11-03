@@ -13,7 +13,7 @@ export const AUTH_POLICY = Object.freeze({
   limits: Object.freeze({ loginAccount: 10, loginIp: 60, loginWindowMs: 15 * MINUTE,
     mailDestination: 3, mailIp: 20, mailWindowMs: HOUR,
     startIp: 20, startWindowMs: HOUR, globalPerMinute: 300 }),
-  mail: Object.freeze({ batchSize: 25, concurrency: 2, leaseMs: MINUTE,
+  mail: Object.freeze({ batchSize: 25, concurrency: 2, leaseMs: MINUTE, dispatchIntervalMs: 1000,
     initialRetryMs: 30_000, maxRetryMs: HOUR, transportTimeoutMs: 30_000 }),
   cleanup: Object.freeze({ batchSize: 100, securityEventRetentionMs: 90 * DAY,
     sessionMetadataRetentionMs: 30 * DAY, intervalMs: MINUTE }),
