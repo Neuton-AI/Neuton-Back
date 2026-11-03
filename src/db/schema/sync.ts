@@ -9,6 +9,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { shops } from './identity.js';
+import { authUsers } from './auth.js';
 
 export const documentVersions = pgTable(
   'document_versions',
@@ -33,7 +34,7 @@ export const documentMutations = pgTable(
       .notNull()
       .references(() => shops.id, { onDelete: 'cascade' }),
     id: uuid('id').notNull(),
-    userId: uuid('user_id').notNull(),
+    userId: uuid('user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
     request: jsonb('request').notNull(),
     response: jsonb('response'),
     status: integer('status').notNull().default(200),

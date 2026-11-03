@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, pgSchema, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, foreignKey, index, pgSchema, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { authUsers } from './auth.js';
 import { shops } from './identity.js';
 import { mediaUploads } from './uploads.js';
@@ -15,7 +15,7 @@ export const jobAuthorizations = appPrivate.table('job_authorizations', {
   jobId: varchar('job_id', { length: 200 }).primaryKey(),
   shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'cascade' }),
   requestingUserId: uuid('requesting_user_id').notNull().references(() => authUsers.id, { onDelete: 'restrict' }),
-  uploadId: uuid('upload_id').notNull().references(() => mediaUploads.id, { onDelete: 'cascade' }),
+  uploadId: uuid('upload_id').notNull(),
   resourceKind: text('resource_kind', { enum: ['receipt', 'recipe', 'order', 'upload'] }).notNull(),
   resourceId: uuid('resource_id').notNull(),
   operation: text('operation', { enum: USER_PROCESSING_OPERATIONS }).notNull(),
@@ -31,6 +31,8 @@ export const jobAuthorizations = appPrivate.table('job_authorizations', {
   cancellationReason: varchar('cancellation_reason', { length: 80 }),
 }, table => ({
   uploadUnique: uniqueIndex('job_authorizations_upload_unique').on(table.uploadId),
+  uploadTenant: foreignKey({ name: 'job_upload_shop_fk', columns: [table.shopId, table.uploadId],
+    foreignColumns: [mediaUploads.shopId, mediaUploads.id] }).onDelete('cascade'),
   shopResource: index('job_authorizations_resource_idx').on(table.shopId, table.resourceKind, table.resourceId),
   expiry: index('job_authorizations_expiry_idx').on(table.expiresAt),
   publication: index('job_authorizations_publication_idx').on(table.createdAt).where(sql`${table.state} = 'accepted'`),

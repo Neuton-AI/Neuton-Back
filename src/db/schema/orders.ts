@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   index,
+  foreignKey,
   integer,
   numeric,
   pgTable,
@@ -43,6 +44,7 @@ export const orders = pgTable('orders', {
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
   shopDateIdx: index('orders_shop_id_order_date_idx').on(t.shopId, t.orderDate),
+  tenantId: uniqueIndex('orders_shop_id_id_unique').on(t.shopId, t.id),
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
   shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
   shopOrderNumberUnique: uniqueIndex('orders_shop_id_order_number_unique').on(t.shopId, t.orderNumber),
@@ -53,12 +55,8 @@ export const orderItems = pgTable('order_items', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  orderId: uuid('order_id')
-    .notNull()
-    .references(() => orders.id, { onDelete: 'cascade' }),
-  recipeId: uuid('recipe_id')
-    .notNull()
-    .references(() => recipes.id, { onDelete: 'restrict' }),
+  orderId: uuid('order_id').notNull(),
+  recipeId: uuid('recipe_id').notNull(),
   /**
    * The recipe's name at the moment the order line was written (N-107).
    *
@@ -73,6 +71,10 @@ export const orderItems = pgTable('order_items', {
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({
   orderIdx: index('order_items_order_id_idx').on(t.orderId),
+  orderTenant: foreignKey({ name: 'order_items_order_shop_fk', columns: [t.shopId, t.orderId],
+    foreignColumns: [orders.shopId, orders.id] }).onDelete('cascade'),
+  recipeTenant: foreignKey({ name: 'order_items_recipe_shop_fk', columns: [t.shopId, t.recipeId],
+    foreignColumns: [recipes.shopId, recipes.id] }).onDelete('restrict'),
 }));
 
 /**

@@ -2,11 +2,13 @@ import { sql } from 'drizzle-orm';
 import {
   char,
   date,
+  foreignKey,
   index,
   numeric,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { RECEIPT_STATUSES } from './enums.js';
@@ -63,6 +65,7 @@ export const receipts = pgTable('receipts', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   shopDateIdx: index('receipts_shop_id_receipt_date_idx').on(t.shopId, t.receiptDate),
+  tenantId: uniqueIndex('receipts_shop_id_id_unique').on(t.shopId, t.id),
   shopStatusIdx: index('receipts_shop_id_status_idx').on(t.shopId, t.status),
 }));
 
@@ -71,12 +74,8 @@ export const receiptItems = pgTable('receipt_items', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  receiptId: uuid('receipt_id')
-    .notNull()
-    .references(() => receipts.id, { onDelete: 'cascade' }),
-  inventoryItemId: uuid('inventory_item_id').references(() => inventoryItems.id, {
-    onDelete: 'set null',
-  }),
+  receiptId: uuid('receipt_id').notNull(),
+  inventoryItemId: uuid('inventory_item_id'),
   rawName: text('raw_name').notNull(),
   rawMaterialName: text('raw_material_name').notNull(),
   rawSku: text('raw_sku'),
@@ -93,6 +92,10 @@ export const receiptItems = pgTable('receipt_items', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   receiptIdx: index('receipt_items_receipt_id_idx').on(t.receiptId),
+  receiptTenant: foreignKey({ name: 'receipt_items_receipt_shop_fk', columns: [t.shopId, t.receiptId],
+    foreignColumns: [receipts.shopId, receipts.id] }).onDelete('cascade'),
+  inventoryTenant: foreignKey({ name: 'receipt_items_inventory_shop_fk', columns: [t.shopId, t.inventoryItemId],
+    foreignColumns: [inventoryItems.shopId, inventoryItems.id] }).onDelete('set null'),
   shopItemIdx: index('receipt_items_shop_id_inventory_item_id_idx').on(
     t.shopId,
     t.inventoryItemId,
