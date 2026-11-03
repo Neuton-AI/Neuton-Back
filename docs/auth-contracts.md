@@ -97,6 +97,10 @@ Errors retain `{error:{code,message,traceId}}`. Use 400 malformed input, 401 inv
 
 Security-version changes, session revocation, action invalidation and initiated OAuth/ticket invalidation share the locked account transaction. These primitives perform no network operations. Account flows own their permitted transitions, security events and mail enqueueing before commit.
 
+Security events accept enumerated event/result/reason labels, bounded correlation IDs, counts and internal UUIDs. Arbitrary metadata, addresses, URLs and protocol values are rejected before persistence. Successful transitions append their event in the same auth transaction. Invalid credentials and invalid links have fixed generic messages; transient storage failures produce 503 without exposing the driver error or its cause.
+
+The logger sanitizes merged static/dynamic/call metadata before every transport: secret fields and payloads are redacted recursively, request query/fragment strings are omitted, and Error arguments retain only type and call sites. Auth callers use fixed messages and allowlisted structured event fields; redaction is a backstop rather than permission to log raw protocol responses. Auth-boundary errors omit validation/detail objects that could echo submitted property names and carry no-store headers.
+
 ## Browser transport and redirects
 
 Every browser mutation requires the exact configured `APP_ORIGIN`, supported content type, and `x-csrf-token`. Reject missing/null origins. Callback GET is the narrow state-bound exception. CSRF bootstrap also enforces browser metadata; a public CSRF token never authorizes an account. Reissue CSRF after session replacement; retain it in memory only.

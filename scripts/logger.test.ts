@@ -33,19 +33,21 @@ test('message-first and meta-first call shapes produce the same line', () => {
   assert.deepEqual(lines[1], lines[0]);
 });
 
-test('an Error first argument lands under err and its message becomes the line message', () => {
+test('Error call shapes retain safe diagnostics and omit arbitrary messages', () => {
   const { transport, lines } = capture();
   const log = new LoggerImpl(transport, {}, 'debug');
   const err = new Error('boom');
 
   log.error(err, { traceId: 't1' });
-  assert.equal(lines[0]?.message, 'boom');
-  assert.equal(lines[0]?.meta.err, err);
+  assert.equal(lines[0]?.message, 'operation failed');
+  assert.equal((lines[0]?.meta.err as { type: string }).type, 'Error');
+  assert.equal(JSON.stringify(lines[0]).includes('boom'), false);
   assert.equal(lines[0]?.meta.traceId, 't1');
 
   log.error({ err }, 'custom message');
   assert.equal(lines[1]?.message, 'custom message');
-  assert.equal(lines[1]?.meta.err, err);
+  assert.equal((lines[1]?.meta.err as { type: string }).type, 'Error');
+  assert.match(JSON.stringify(lines[1]?.meta.err), /logger.test/);
 });
 
 test('child context merges over the parent and call meta wins over both', () => {

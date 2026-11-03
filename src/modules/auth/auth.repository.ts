@@ -3,6 +3,7 @@ import type { SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { AppError, conflict } from '../../lib/errors.js';
 import type { AuthPersistence, AuthTransaction } from './auth.ports.js';
+import { mapAuthDependencyError } from './auth-errors.js';
 
 const userSchema = z.object({ id: z.string().uuid(), email: z.string(), normalizedEmail: z.string(),
   status: z.enum(['pending_email', 'active', 'disabled']), securityVersion: z.number().int().positive(),
@@ -30,16 +31,20 @@ export class AuthRepository {
 
   constructor(private readonly persistence: AuthPersistence) {}
 
-  transaction<T>(work: (transaction: AuthTransaction) => Promise<T>): Promise<T> {
-    return this.persistence.transaction(async transaction => {
-      this.activeTransactions.add(transaction);
-      try {
-        return await work(transaction);
-      } finally {
-        this.activeTransactions.delete(transaction);
-        this.transactionUsers.delete(transaction);
-      }
-    });
+  async transaction<T>(work: (transaction: AuthTransaction) => Promise<T>): Promise<T> {
+    try {
+      return await this.persistence.transaction(async transaction => {
+        this.activeTransactions.add(transaction);
+        try {
+          return await work(transaction);
+        } finally {
+          this.activeTransactions.delete(transaction);
+          this.transactionUsers.delete(transaction);
+        }
+      });
+    } catch (error) {
+      throw mapAuthDependencyError(error);
+    }
   }
 
   withUser<T>(userId: string, work: (account: LockedAuthAccount) => Promise<T>): Promise<T | null> {

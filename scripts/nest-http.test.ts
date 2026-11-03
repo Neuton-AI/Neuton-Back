@@ -10,9 +10,11 @@ import { z } from 'zod';
 import { createHttpApplication } from '../src/http/application.js';
 import { conflict } from '../src/lib/errors.js';
 import { LoggerImpl } from '../src/lib/logger/index.js';
+import { registrationInput } from '../src/modules/auth/contracts.js';
 
 @Controller()
 class ProbeController {
+  @Post('/api/v1/auth/validation') authValidation(@Req() req: Request) { return registrationInput.parse(req.body); }
   @Get('/health') health() { return { ok: true, service: 'neuton-api' }; }
   @Get('/validation') validation() { return z.string().parse(42); }
   @Get('/conflict') conflict() { throw conflict('Already applied'); }
@@ -62,6 +64,23 @@ test('Nest HTTP foundation preserves errors, correlation, security and raw webho
     assert.match(cors.headers['access-control-expose-headers'] ?? '', /X-Trace-Id/i);
     assert.ok(events.some(e => e.event === 'http_request_completed' && e.traceId === 'error-trace' && e.statusCode === 500));
     assert.ok(events.every(e => typeof e.durationMs === 'number' && e.entryPoint === 'http'));
+  } finally { await app.close(); }
+});
+
+test('auth validation never echoes secret-bearing unknown properties in error details', async () => {
+  const app = await createHttpApplication(ProbeModule, {
+    origins: [], bodyLimit: 1024, rateLimit: { max: 10, windowMs: 60_000 },
+  });
+  try {
+    const response = await request(app.getHttpServer()).post('/api/v1/auth/validation').send({
+      email: 'synthetic@example.com', password: 'short-private-password', 'private-unknown-field': 'private-token',
+    });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+    assert.equal(response.body.error.details, undefined);
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.equal(JSON.stringify(response.body).includes('private-'), false);
+    assert.ok(response.body.error.traceId);
   } finally { await app.close(); }
 });
 

@@ -9,6 +9,7 @@ import { AuthRepository } from '../src/modules/auth/auth.repository.js';
 import { AccountRepository } from '../src/modules/auth/account.repository.js';
 import { ActionTokenRepository } from '../src/modules/auth/action-token.repository.js';
 import type { AuthTransaction } from '../src/modules/auth/auth.ports.js';
+import { SecurityEvents } from '../src/modules/auth/security-events.js';
 
 test('auth account and action transitions are atomic, version-bound and identity-safe', async () => {
   const database = new PGlite();
@@ -30,6 +31,7 @@ test('auth account and action transitions are atomic, version-bound and identity
     });
     const accounts = new AccountRepository(auth);
     const actions = new ActionTokenRepository(auth);
+    const events = new SecurityEvents();
     const encodedHash = '$argon2id$v=19$m=65536,t=3,p=1$S04tyw074m/eXVryuv7liA$TI44HwWFmhrQ79vWkMQVmudNvCwgte6f/vzLMrdus80';
     const created = await auth.transaction(async transaction => {
       const account = await accounts.createPending(transaction, {
@@ -38,6 +40,8 @@ test('auth account and action transitions are atomic, version-bound and identity
       assert.ok(account);
       const token = await actions.issue(account, 'confirm_email', account.user.normalizedEmail);
       const projection = await accounts.publicProjection(account);
+      await events.append(transaction, { event: 'registration_requested', result: 'success', correlationId: 'registered',
+        subjectUserId: account.user.id });
       assert.equal(projection.fullName, 'Alice');
       assert.equal('securityVersion' in projection, false);
       assert.equal('encodedHash' in projection, false);
@@ -75,9 +79,12 @@ test('auth account and action transitions are atomic, version-bound and identity
     assert.ok(replaced);
     await assert.rejects(auth.transaction(async transaction => {
       await accounts.createPending(transaction, { email: 'rollback@example.com', fullName: 'Rollback', encodedHash });
+      await events.append(transaction, { event: 'registration_requested', result: 'success', correlationId: 'rolled-back' });
       throw new Error('rollback synthetic transaction');
     }), /rollback synthetic/);
     assert.equal(await accounts.findPassword('rollback@example.com'), null);
+    const persistedEvents = await database.query<{ correlation_id: string }>('select correlation_id from auth_private.security_events');
+    assert.deepEqual(persistedEvents.rows, [{ correlation_id: 'registered' }]);
 
     const sessionId = randomUUID();
     const oauthId = randomUUID();

@@ -1,4 +1,5 @@
 import { env } from '../../env.js';
+import { redactLogMetadata, redactLogText } from './redaction.js';
 import {
   createTransport,
   type Transport,
@@ -43,25 +44,22 @@ interface NormalizedArgs {
 
 /**
  * Collapses the three accepted call shapes into one `(message, meta)` pair.
- * An Error first argument is copied into `err` so pino's serializer picks it
- * up, which is what the Loki DOD queries (`| json | level="error"`) rely on.
+ * Error arguments retain only safe type/call-site diagnostics before transport.
  */
 function normalizeArgs(first: unknown, second: unknown): NormalizedArgs {
   if (first instanceof Error) {
     return {
-      message: first.message,
+      message: 'operation failed',
       meta: { ...(isLogMeta(second) ? second : {}), err: first },
     };
   }
-  return {
-    message:
-      typeof first === 'string'
-        ? first
-        : typeof second === 'string'
-          ? second
-          : undefined,
-    meta: isLogMeta(first) ? first : isLogMeta(second) ? second : {},
-  };
+  let message: string | undefined;
+  if (typeof first === 'string') message = first;
+  else if (typeof second === 'string') message = second;
+  let meta: LogMeta = {};
+  if (isLogMeta(first)) meta = first;
+  else if (isLogMeta(second)) meta = second;
+  return { message, meta };
 }
 
 /**
@@ -98,11 +96,11 @@ export class LoggerImpl implements Logger {
     if (LEVEL_ORDER[level] < LEVEL_ORDER[this.#minLevel]) return;
     const { message, meta } = normalizeArgs(first, second);
     const dynamic = this.dynamic?.();
-    this.transport.write(level, message, {
+    this.transport.write(level, message === undefined ? undefined : redactLogText(message), redactLogMetadata({
       ...this.context,
       ...(dynamic ?? {}),
       ...meta,
-    });
+    }));
   }
 
   debug(message: string, meta?: LogMeta): void;

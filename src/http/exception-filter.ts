@@ -12,6 +12,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const http = host.switchToHttp();
     const request = http.getRequest<HttpRequest>();
     const response = http.getResponse<Response>();
+    const authBoundary = /^\/api\/v1\/(?:auth(?:\/|$)|session(?:\/|$)|profile\/password(?:\/|$))/.test(request.path);
     let status = 500;
     let code = 'INTERNAL_ERROR';
     let message = 'Something went wrong';
@@ -40,6 +41,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
       // Retain call sites, excluding the message and chained-cause text.
       stackFrames: error instanceof Error ? error.stack?.split('\n').filter(line => /^\s+at /.test(line)).slice(0, 20) : undefined,
     }, 'request failed');
+    if (authBoundary) {
+      response.setHeader('Cache-Control', 'no-store');
+      details = undefined;
+    }
     response.status(status).json({ error: { code, message, ...(details === undefined ? {} : { details }), traceId: request.traceId } });
   }
 }
