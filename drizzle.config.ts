@@ -1,13 +1,11 @@
 import { defineConfig } from 'drizzle-kit';
+import { readAuthConfig } from './src/config/auth.js';
 
-const url =
-  process.env.DATABASE_URL ??
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@localhost:5432/neuton';
+const { databaseUrl: url } = readAuthConfig('migration');
 
 export default defineConfig({
   schema: './src/db/schema/index.ts',
-  out: './drizzle',
+  out: './drizzle-neon',
   dialect: 'postgresql',
   dbCredentials: { url },
   verbose: true,

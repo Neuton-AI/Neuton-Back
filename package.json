@@ -22,10 +22,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:validate": "tsx scripts/validate-migrations.ts",
     "db:verify-rls": "tsx scripts/verify-rls.ts",
-    "db:mark-applied": "tsx scripts/mark-applied.ts",
-    "test:integrations": "tsx scripts/test-redis.ts && tsx scripts/test-upload-flow.ts",
-    "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "test:integrations": "tsx scripts/test-redis.ts && tsx scripts/test-upload-flow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",

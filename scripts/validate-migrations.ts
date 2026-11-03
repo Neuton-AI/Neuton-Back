@@ -1,13 +1,18 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { formatSqlError, hasSqlDetails, loadModule, parse } from 'libpg-query';
+import { migrationChecksum, validateMigrationHistory } from '../src/db/migration-ledger.js';
 
-const migrationsDir = join(process.cwd(), 'drizzle');
+const migrationsDir = join(process.cwd(), 'drizzle-neon');
 const BREAKPOINT = /(?:-->)?\s*statement-breakpoint/;
 
 const files = readdirSync(migrationsDir)
   .filter((file) => file.endsWith('.sql'))
   .sort();
+
+validateMigrationHistory(files.map(name => ({
+  name, checksum: migrationChecksum(readFileSync(join(migrationsDir, name), 'utf8')),
+})), []);
 
 let failures = 0;
 
