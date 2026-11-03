@@ -43,4 +43,14 @@ Email input retains its trimmed display form and normalizes its domain through I
 
 Primary cryptographic APIs: [Node 24 crypto](https://nodejs.org/docs/latest-v24.x/api/crypto.html), including createCipheriv/createDecipheriv, setAAD, authentication tags, randomBytes and timingSafeEqual. Password primitives use the pinned node-argon2 adapter above.
 
+## Account email delivery
+
+`MailOutboxRepository` inserts encrypted subject/text content in the same locked account transaction as its action. It rechecks the saved action digest, purpose, destination, account status, security version and expiry before enqueueing. Reset messages additionally require an existing password credential. The plaintext destination is required for delivery; the secret-bearing body is AES-GCM encrypted with the outbox UUID and purpose as associated data. Security notices contain no consumable token and use the account's current contact address.
+
+Templates use only APP_ORIGIN plus `/auth/confirm`, `/auth/reset-password` or `/auth/email-change`, with `#token=` fragments. No request supplies a redirect or mail origin. GET links never consume their token.
+
+`SmtpAuthMailer` uses the configured Brevo credentials through Nodemailer. Port 465 uses implicit TLS; other configured ports require STARTTLS, with certificate validation and TLS 1.2 minimum. Connection, greeting, DNS and socket timeouts use the central 30-second policy. SMTP logging/debug/transaction logging are disabled; file and URL content loading are disabled; messages have one explicitly constructed recipient and configured sender. Errors expose only MAIL_DELIVERY_UNAVAILABLE, and no provider response is attached. A stable outbox-based Message-ID does not imply SMTP deduplication or guarantee inbox delivery. The durable dispatcher owns retry and completion bookkeeping.
+
+Transport options follow the [official Nodemailer SMTP documentation](https://nodemailer.com/smtp) and the pinned package declarations.
+
 Primary references consulted: [pinned Argon2 documentation](https://github.com/ranisalt/node-argon2/blob/v0.45.2/README.md), [openid-client](https://github.com/panva/openid-client), and the installed packages' manifests and declarations. The cookie 2 API uses parseCookie/stringifySetCookie; SMTP 10 includes its own TypeScript declarations.

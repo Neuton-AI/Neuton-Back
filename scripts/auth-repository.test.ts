@@ -10,6 +10,9 @@ import { AccountRepository } from '../src/modules/auth/account.repository.js';
 import { ActionTokenRepository } from '../src/modules/auth/action-token.repository.js';
 import type { AuthTransaction } from '../src/modules/auth/auth.ports.js';
 import { SecurityEvents } from '../src/modules/auth/security-events.js';
+import { MailOutboxRepository } from '../src/modules/auth/mail-outbox.repository.js';
+import { AuthEncryption, newSecret } from '../src/modules/auth/crypto.js';
+import { MailTemplates } from '../src/modules/auth/mail-templates.js';
 
 test('auth account and action transitions are atomic, version-bound and identity-safe', async () => {
   const database = new PGlite();
@@ -32,6 +35,8 @@ test('auth account and action transitions are atomic, version-bound and identity
     const accounts = new AccountRepository(auth);
     const actions = new ActionTokenRepository(auth);
     const events = new SecurityEvents();
+    const encryption = new AuthEncryption('synthetic', new Map([['synthetic', Buffer.alloc(32, 11)]]));
+    const outbox = new MailOutboxRepository(auth, encryption, new MailTemplates('https://neuton.example'));
     const encodedHash = '$argon2id$v=19$m=65536,t=3,p=1$S04tyw074m/eXVryuv7liA$TI44HwWFmhrQ79vWkMQVmudNvCwgte6f/vzLMrdus80';
     const created = await auth.transaction(async transaction => {
       const account = await accounts.createPending(transaction, {
@@ -39,14 +44,28 @@ test('auth account and action transitions are atomic, version-bound and identity
       });
       assert.ok(account);
       const token = await actions.issue(account, 'confirm_email', account.user.normalizedEmail);
+      const mailId = await outbox.enqueueAction(account, token);
+      await outbox.enqueueNotice(account, 'sessions_revoked');
+      await assert.rejects(outbox.enqueueAction(account, { ...token, secret: newSecret() }), /Current account action/);
       const projection = await accounts.publicProjection(account);
       await events.append(transaction, { event: 'registration_requested', result: 'success', correlationId: 'registered',
         subjectUserId: account.user.id });
       assert.equal(projection.fullName, 'Alice');
       assert.equal('securityVersion' in projection, false);
       assert.equal('encodedHash' in projection, false);
-      return { id: account.user.id, token };
+      return { id: account.user.id, token, mailId };
     });
+    const storedMail = await database.query<{ id: string; encrypted_payload: string; payload_key_id: string; action_token_id: string | null }>(
+      'select id,encrypted_payload,payload_key_id,action_token_id from auth_private.mail_outbox');
+    assert.equal(storedMail.rows.length, 2);
+    assert.equal(JSON.stringify(storedMail.rows).includes(created.token.secret), false);
+    const actionMail = storedMail.rows.find(row => row.id === created.mailId);
+    assert.ok(actionMail);
+    assert.equal(actionMail.action_token_id, created.token.id);
+    const content = JSON.parse(encryption.decrypt('mail:confirm_email', actionMail.id,
+      { keyId: actionMail.payload_key_id, ciphertext: actionMail.encrypted_payload }));
+    assert.ok(content.text.includes('https://neuton.example/auth/confirm#token=' + created.token.secret));
+    assert.equal(storedMail.rows.filter(row => row.action_token_id === null).length, 1);
     const collision = await auth.transaction(transaction => accounts.createPending(transaction, {
       email: 'alice+tag@example.com', fullName: 'Attacker', encodedHash: encodedHash + 'different',
     }));
@@ -56,6 +75,8 @@ test('auth account and action transitions are atomic, version-bound and identity
     await auth.withUser(other.user.id, async account => {
       assert.equal(await actions.consume(account, { purpose: 'confirm_email', secret: created.token.secret }), null);
     });
+    await database.query(`update auth_private.users set status='active',email_confirmed_at=now() where id=$1`, [other.user.id]);
+    await assert.rejects(auth.withUser(other.user.id, account => actions.issue(account, 'password_reset', null)), /Account changed/);
     assert.equal((await accounts.findPassword('alice+tag@example.com'))?.encodedHash, encodedHash);
     const pendingProof = await accounts.findPassword('alice+tag@example.com');
     assert.ok(pendingProof);
@@ -73,16 +94,21 @@ test('auth account and action transitions are atomic, version-bound and identity
     const replaced = await auth.withUser(created.id, async account => {
       const first = await actions.issue(account, 'confirm_email', account.user.normalizedEmail);
       const second = await actions.issue(account, 'confirm_email', account.user.normalizedEmail);
+      await assert.rejects(outbox.enqueueAction(account, first), /Current account action/);
       assert.equal(await actions.consume(account, { purpose: 'confirm_email', secret: first.secret }), null);
       return second;
     });
     assert.ok(replaced);
     await assert.rejects(auth.transaction(async transaction => {
-      await accounts.createPending(transaction, { email: 'rollback@example.com', fullName: 'Rollback', encodedHash });
+      const rollbackAccount = await accounts.createPending(transaction, { email: 'rollback@example.com', fullName: 'Rollback', encodedHash });
+      assert.ok(rollbackAccount);
+      const rollbackToken = await actions.issue(rollbackAccount, 'confirm_email', rollbackAccount.user.normalizedEmail);
+      await outbox.enqueueAction(rollbackAccount, rollbackToken);
       await events.append(transaction, { event: 'registration_requested', result: 'success', correlationId: 'rolled-back' });
       throw new Error('rollback synthetic transaction');
     }), /rollback synthetic/);
     assert.equal(await accounts.findPassword('rollback@example.com'), null);
+    assert.equal((await database.query('select id from auth_private.mail_outbox')).rows.length, 2);
     const persistedEvents = await database.query<{ correlation_id: string }>('select correlation_id from auth_private.security_events');
     assert.deepEqual(persistedEvents.rows, [{ correlation_id: 'registered' }]);
 

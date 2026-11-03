@@ -34,6 +34,7 @@ export class ActionTokenRepository {
       select ${id}::uuid,id,${purpose},${digestSecret(purpose, secret)},${intendedEmail},security_version,
         clock_timestamp(),clock_timestamp()+${lifetimeMs}*interval '1 millisecond'
       from auth_private.users where id=${user.id}::uuid and status=${expectedStatus} and security_version=${user.securityVersion}
+      and (${purpose}<>'password_reset' or exists(select 1 from auth_private.password_credentials p where p.user_id=${user.id}::uuid))
       returning expires_at as "expiresAt"`, z.object({ expiresAt: z.coerce.date() }));
     if (!issued) throw new Error('Account changed during action issuance');
     return { id, secret, purpose, intendedEmail, securityVersion: user.securityVersion, expiresAt: issued.expiresAt };
@@ -65,6 +66,7 @@ export class ActionTokenRepository {
       and t.intended_email is not distinct from ${intendedEmail} and t.consumed_at is null and t.invalidated_at is null
       and t.expires_at>clock_timestamp() and exists(select 1 from auth_private.users u where u.id=t.user_id
         and u.security_version=t.security_version and u.status=${expectedStatus}
+        and (${action.purpose}<>'password_reset' or exists(select 1 from auth_private.password_credentials p where p.user_id=u.id))
         and (${action.purpose}<>'confirm_email' or u.normalized_email=t.intended_email))
       returning t.id,t.intended_email as "intendedEmail"`, z.object({ id: z.string().uuid(), intendedEmail: z.string().nullable() }));
     return consumed ?? null;
