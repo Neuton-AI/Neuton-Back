@@ -16,3 +16,6 @@ Temp/*
 docs/*
 Docs/*
 tasks/*
+
+/login.json
+/supabase_login.json
