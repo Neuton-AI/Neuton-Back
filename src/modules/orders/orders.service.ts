@@ -124,9 +124,9 @@ export class OrdersService {
     });
   }
   async create(actor: ActorContext, body: CreateOrderInput): Promise<CreateOrderOutput> {
-    requireActorRole(actor, ['owner', 'admin']);
+    requireActorRole(actor, ['owner', 'admin', 'member']);
     return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
-      requireActorRole(actor, ['owner', 'admin']);
+      requireActorRole(actor, ['owner', 'admin', 'member']);
       const quote = await new OrdersService(persistence, this.audit, this.deferEffect).quote(actor, body);
       const totals = calculateOrderTotals({ items: quote.items, deliveryFee: quote.deliveryFee });
       const created = await persistence.create(actor.shop.id, actor.user.id, body, quote.items, totals);

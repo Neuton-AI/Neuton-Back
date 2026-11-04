@@ -119,8 +119,32 @@ test('business services enforce live membership, atomic audit and rollback under
     assert.equal((await database.query('select id from public.document_mutations where id=$1', [rolledBackId])).rows.length, 0);
     assert.equal((await recipes.recipe(actor, created.recipe.id)).recipe.name, 'Synchronized bread');
     const orders = new OrdersService(new OrdersPersistence(application), new OrdersAudit());
+    await database.query("update public.shop_members set role='member' where shop_id=$1 and user_id=$2", [shop.id, userId]);
+    const memberActor = { ...actor, role: 'member' as const };
+    const memberInput = createOrderSchema.parse({ items: [{ recipeId: created.recipe.id, quantity: 1 }] });
+    const memberMutation = { mutationId: randomUUID(), kind: 'order' as const, documentId: null,
+      version: Date.now(), method: 'POST', path: '/orders', body: memberInput, status: 201,
+      allowedRoles: ['owner', 'admin', 'member'] as const };
+    const memberOrder = await sync.mutate(memberActor, memberMutation, async (scope, afterCommit) => {
+      assert.ok(scope); assert.ok(afterCommit);
+      return orders.inTransaction(scope, afterCommit).create(memberActor, memberInput);
+    });
+    const memberCreated = memberOrder.body as Awaited<ReturnType<typeof orders.create>>;
+    assert.equal(memberCreated.order.orderNumber, 1);
+    assert.equal(memberCreated.order.userId, userId);
+    await new OrdersPersistence(application).inShop(memberActor, async persistence => {
+      await persistence.database.execute(sql`update public.orders set customer_name='Forbidden edit' where id=${memberCreated.order.id}::uuid`);
+      await persistence.database.execute(sql`delete from public.orders where id=${memberCreated.order.id}::uuid`);
+    });
+    const unchangedMemberOrder = (await orders.detail(memberActor, memberCreated.order.id)).order;
+    assert.equal(unchangedMemberOrder.customerName, null);
+    assert.equal(unchangedMemberOrder.status, 'processing');
+    await orders.verify(memberActor, memberCreated.order.id);
+    await assert.rejects(orders.cancel(memberActor, memberCreated.order.id), { statusCode: 403 });
+    assert.deepEqual(await sync.mutate(memberActor, memberMutation, async () => { assert.fail('Member retry must replay'); }), memberOrder);
+    await database.query("update public.shop_members set role='owner' where shop_id=$1 and user_id=$2", [shop.id, userId]);
     const order = await orders.create(actor, createOrderSchema.parse({ items: [{ recipeId: created.recipe.id, quantity: 1 }] }));
-    assert.equal(order.order.orderNumber, 1);
+    assert.equal(order.order.orderNumber, 2);
     await orders.verify(actor, order.order.id);
     await orders.cancel(actor, order.order.id);
     const linkedUploadId = randomUUID();

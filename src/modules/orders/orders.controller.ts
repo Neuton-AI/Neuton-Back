@@ -63,7 +63,10 @@ export class OrdersController {
     const id = null;
     const result = await this.sync.mutate(
       actor,
-      syncMutation(request, 'order', id, 201),
+      {
+        ...syncMutation(request, 'order', id, 201),
+        allowedRoles: ['owner', 'admin', 'member'],
+      },
       async (tx, afterCommit) => {
         const service =
           tx && afterCommit

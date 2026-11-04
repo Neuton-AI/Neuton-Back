@@ -23,7 +23,7 @@ Upload renewal and completion resolve the associated live resource. Completion r
 
 ## Phase boundaries
 
-The current order policy allows owner/admin creation and cancellation, with member-permitted reads, quotes, and delivery verification. Task 46's reference to member creation differs from the existing service and baseline policy; that permission change awaits a product decision.
+Members, admins, and owners may create orders, read them, request quotes, and verify delivery. Members create processing orders attributed to their verified account and insert lines only for their own processing orders. Updates and cancellation remain administrative; delivery verification uses the narrow routine. Migration `0012_member_order_creation.sql` enables member creation and scoped number allocation without granting members direct shop-counter updates.
 
 Persisted worker authorization, restricted cleanup dispatch, sync read/snapshot scoping, and continuous event-stream reauthorization belong to Phase E. Browser business consumers and offline synchronization belong to Phase F. These later phases remain necessary before the complete Supabase cutover.
 

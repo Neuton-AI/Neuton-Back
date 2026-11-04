@@ -12,11 +12,10 @@ test('create input rejects fractional quantity and strips caller supplied lifecy
   const body = createOrderSchema.parse({ status: 'delivered', items: [{ recipeId: '44444444-4444-4444-4444-444444444444', quantity: 1 }] });
   assert.equal('status' in body, false);
 });
-test('business service refuses member mutations before touching persistence', async () => {
+test('business service refuses member cancellation before touching persistence', async () => {
   const repository = new OrdersPersistence({} as never);
   const service = new OrdersService(repository, new OrdersAudit());
   await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444'), { statusCode: 403 });
-  await assert.rejects(service.create(actorFor('member'), { items: [], deliveryDistanceKm: 0 }), { statusCode: 403 });
 });
 import request from 'supertest';
 import { FakeDb } from './support/fakeDb.js';
@@ -112,10 +111,27 @@ test('Nest order authorization, missing resources and input validation have stab
     assert.equal((await request(server).get('/api/v1/orders/not-id').set(auth)).status, 400);
     assert.equal((await request(server).get(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 404);
     assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 403);
-    assert.equal((await request(server).post('/api/v1/orders').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1 }] })).status, 403);
+    assert.equal((await request(server).post('/api/v1/orders').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1 }] })).status, 404);
     assert.equal((await request(server).post('/api/v1/orders/quote').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1.5 }] })).status, 400);
   }
   finally {
     await h.close();
   }
+});
+
+test('member HTTP requests can create and verify orders while cancellation stays administrative', async () => {
+  const fake = new FakeDb({ ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]],
+    'insert:orders': [[storedOrder]], 'insert:orderItems': [[]],
+    'select:orders': [[storedOrder]], 'update:orders': [[{ ...storedOrder, status: 'delivered' }]],
+  });
+  const h = await buildNestOrdersApp('member', fake as never);
+  try {
+    const server = h.app.getHttpServer();
+    const created = await request(server).post('/api/v1/orders').set(auth)
+      .send({ items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.order.userId, USER_ID);
+    assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 200);
+    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 403);
+  } finally { await h.close(); }
 });
