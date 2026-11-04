@@ -19,6 +19,7 @@ import {
   type WorkerDeps,
 } from '../src/worker.js';
 import { FakeDb, type FakeResponses } from './support/fakeDb.js';
+import { env } from '../src/env.js';
 
 const SHOP_ID = '11111111-1111-1111-1111-111111111111';
 const STORAGE_PATH = `${SHOP_ID}/receipts/abc123.jpg`;
@@ -275,9 +276,9 @@ test('receipt: a missing receipt row writes nothing at all', async () => {
     extractions: { receipt: receipt() },
   });
 
-  await processReceipt(deps, jobData, job);
+  await assert.rejects(processReceipt(deps, jobData, job), /Receipt no longer available/);
 
-  // Progress tracking updates happen before the early return
+  // Progress tracking updates happen before the missing-row rejection
   assert.ok(db.callsTo('update', 'receipts').length >= 1);
   assert.equal(db.callsTo('insert', 'receiptItems').length, 0);
   // No review-ready status update for a receipt row that does not exist
@@ -435,7 +436,7 @@ test('receipt: throws when storagePath is missing', async () => {
 
 test('receipt: the document bytes are fetched by storage path and sent base64-encoded', async () => {
   const { deps, job, jobData, extracted } = harness({
-    responses: { 'select:receipts': [[]] },
+    responses: { 'select:receipts': [[{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}]] },
     extractions: { receipt: receipt() },
   });
 
@@ -971,11 +972,11 @@ test('terminal failure: an order job still touches no row (orders have no status
   assert.equal(db.calls.length, 0);
 });
 
-test('terminal failure: a failing update is swallowed so the job still reports its own error', async () => {
+test('terminal failure: a database failure propagates so terminal state cannot report a false success', async () => {
   const { db, deps, jobData } = harness();
   db.failOn('update', 'receipts', new Error('connection reset'));
 
-  await recordTerminalFailure(deps, jobData, new Error('boom'));
+  await assert.rejects(recordTerminalFailure(deps, jobData, new Error('boom')), /connection reset/);
 
   assert.equal(db.callsTo('update', 'receipts').length, 1);
 });
@@ -987,17 +988,17 @@ test('terminal failure: a failing update is swallowed so the job still reports i
 function groupedHarness(options: Parameters<typeof harness>[0] = {}): Harness {
   const h = harness(options);
   const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const documentId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   h.jobData.uploadId = id;
-  const documentId = h.jobData.orderId ?? 'document-1';
-  const upload = { id, shopId: SHOP_ID, kind: h.jobData.kind, queuedAt: new Date(), processedAt: null,
+  h.jobData.jobId = `upload-${id}`;
+  h.db.jobFixture = { id, documentId, shopId: SHOP_ID, kind: h.jobData.kind, queuedAt: new Date(), processedAt: null,
     receiptId: h.jobData.kind === 'receipt' ? documentId : null,
     recipeId: !['receipt','order'].includes(h.jobData.kind) ? documentId : null,
     orderId: h.jobData.kind === 'order' ? documentId : null,
     sources: [{sourceId:id,storagePath:STORAGE_PATH,contentType:'image/jpeg',byteSize:2,originalFilename:'receipt.jpg'}] };
-  h.db.prepend('select','mediaUploads',[upload]).prepend('select','mediaUploads',[upload]).prepend('select','mediaUploads',[upload]);
-  h.db.prepend('select', h.jobData.kind === 'receipt' ? 'receipts' : h.jobData.kind === 'order' ? 'orders' : 'recipes', [{id:documentId}]);
   return h;
 }
+
 test('runJob: routes every media kind to its handler', async () => {
   const orderRun = groupedHarness({
     responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
@@ -1015,25 +1016,37 @@ test('runJob: routes every media kind to its handler', async () => {
     extractions: { recipe: { ...RECIPE, ingredients: [] } },
   });
   await runJob(productRun.jobData, productRun.job, productRun.deps);
-  assert.equal(productRun.db.onlyCallTo('insert', 'recipes').inTransaction, true);
+  assert.ok(productRun.db.callsTo('update', 'recipes').every(call => call.inTransaction));
 
   const recipeRun = groupedHarness({ data: { kind: 'recipe' }, extractions: { recipe: null } });
   await assert.rejects(() => runJob(recipeRun.jobData, recipeRun.job, recipeRun.deps), /recipe extraction/);
 
   const receiptRun = groupedHarness({
-    responses: { 'select:receipts': [[]] },
+    responses: { 'select:receipts': [[{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}]] },
     extractions: { receipt: receipt() },
   });
   await runJob(receiptRun.jobData, receiptRun.job, receiptRun.deps);
   assert.equal(receiptRun.extracted.length, 1, 'receipt jobs call the receipt extractor');
 });
 
-test('runJob: an unknown kind is rejected', async () => {
+test('runJob: queue kind hints cannot override the persisted kind', async () => {
   const { deps, job, jobData } = groupedHarness();
-  // The kind is deliberately off-union: the route must reject it at runtime.
+  // Forged queue hints cannot select a different handler from the persisted job.
   const bogus = { ...jobData, kind: 'invoice' } as unknown as MediaJobData;
 
-  await assert.rejects(() => runJob(bogus, job, deps), /Unsupported job kind: invoice/);
+  await assert.rejects(() => runJob(bogus, job, deps), /receipt extraction/);
+});
+
+test('runJob: a hanging external call reaches its deadline without holding SQL or committing extraction', async () => {
+  const h = groupedHarness();
+  const previous = env.RECEIPT_PROCESSING_TIMEOUT_MS;
+  env.RECEIPT_PROCESSING_TIMEOUT_MS = 10;
+  h.deps.getObjectBytes = async () => new Promise(() => {});
+  try {
+    await assert.rejects(runJob(h.jobData, h.job, h.deps), UnrecoverableError);
+    assert.equal(h.db.callsTo('update', 'mediaUploads').length, 0);
+    assert.equal(h.db.callsTo('update', 'receipts').at(-1)!.set!.status, 'failed');
+  } finally { env.RECEIPT_PROCESSING_TIMEOUT_MS = previous; }
 });
 
 test('runJob: a permanent upstream failure stops retrying and records the receipt', async () => {
@@ -1089,8 +1102,8 @@ test('runJob: a permanent failure on a recipe job records failure on the recipe 
 
     await assert.rejects(() => runJob(jobData, job, deps), UnrecoverableError);
     // recordTerminalFailure is called and updates recipes table
-    assert.equal(db.callsTo('update', 'recipes').length, 1);
-    assert.equal((db.onlyCallTo('update', 'recipes').set as Record<string, unknown>).status, 'failed');
+    assert.equal(db.callsTo('update', 'recipes').length, 2);
+    assert.equal((db.callsTo('update', 'recipes').at(-1)!.set as Record<string, unknown>).status, 'failed');
   });
 
 test('recipe: both save paths preserve repeated linked lines before verification and skip supermarket search', async () => {
