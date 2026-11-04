@@ -1,12 +1,13 @@
-import { Controller, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
+import { Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { CsrfService } from './csrf.service.js';
+import { AuthRateLimitGuard } from './rate-limit.guard.js';
 
 @Controller('api/v1/auth')
 export class CsrfController {
   constructor(@Inject(CsrfService) private readonly csrf: CsrfService) {}
-  @Post('csrf') @HttpCode(200)
+  @Post('csrf') @HttpCode(200) @UseGuards(AuthRateLimitGuard)
   async bootstrap(@Req() request: Request, @Res({ passthrough: true }) response: Response) {
     z.object({}).strict().parse(request.body ?? {});
     const result = await this.csrf.bootstrap(request.headers);

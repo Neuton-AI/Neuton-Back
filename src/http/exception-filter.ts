@@ -42,6 +42,10 @@ export class ApiExceptionFilter implements ExceptionFilter {
       stackFrames: error instanceof Error ? error.stack?.split('\n').filter(line => /^\s+at /.test(line)).slice(0, 20) : undefined,
     }, 'request failed');
     if (authBoundary) {
+      if (status === 429 && details && typeof details === 'object' && 'retryAfterSeconds' in details &&
+        typeof details.retryAfterSeconds === 'number' && Number.isFinite(details.retryAfterSeconds)) {
+        response.setHeader('Retry-After', String(Math.max(1, Math.min(3600, Math.ceil(details.retryAfterSeconds)))));
+      }
       response.setHeader('Cache-Control', 'no-store');
       details = undefined;
     }
