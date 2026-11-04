@@ -1,12 +1,15 @@
 import { buildApp } from './app.js';
 import { env } from './env.js';
 import { loggerFactory, apiLogger } from './lib/logger/index.js';
-import { db, sql as connection } from './db/client.js';
+import { sql as connection } from './db/client.js';
+import { createCleanupDatabase } from './db/cleanup-client.js';
+import { closeMediaQueue } from './lib/queue.js';
 import { deleteObject } from './lib/storage.js';
 import { StorageCleanupDispatcher } from './lib/storageCleanup.js';
 const app = await buildApp();
+const cleanupPool = createCleanupDatabase();
 const cleanup = new StorageCleanupDispatcher({
-  db,
+  db: cleanupPool.database,
   deleteObject,
   log: apiLogger,
 });
@@ -20,6 +23,10 @@ try {
 } catch {
   apiLogger.error({ event: 'api_start_failed' }, 'API startup failed');
   await app.close().catch(() => {});
+  await cleanup.stop();
+  await cleanupPool.close();
+  await closeMediaQueue();
+  await connection.end({ timeout: 5 });
   process.exit(1);
 }
 let stopping = false;
@@ -32,6 +39,8 @@ const shutdown = async (signal: string) => {
   try {
     await app.close();
     await cleanup.stop();
+    await cleanupPool.close();
+    await closeMediaQueue();
     await connection.end({ timeout: 5 });
     await loggerFactory.shutdown();
     clearTimeout(timer);

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import type { Logger } from "./logger/types.js";
+import { queryRows, type SqlExecutor } from '../db/query-rows.js';
+import { z } from 'zod';
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 export async function scheduleObjectDeletions(
@@ -24,18 +26,10 @@ export async function scheduleObjectDeletions(
   }
 }
 
-interface CleanupRow {
-  id: string;
-  storage_path: string;
-  shop_id: string;
-  trace_id: string;
-  attempts: number;
-}
 export interface CleanupOptions {
-  db: Database;
+  db: SqlExecutor;
   deleteObject: (path: string, signal?: AbortSignal) => Promise<void>;
   log: Logger;
-  now?: () => Date;
   timeoutMs?: number;
   leaseMs?: number;
   batchSize?: number;
@@ -83,22 +77,16 @@ export class StorageCleanupDispatcher {
   }
   private async run(): Promise<number> {
     const { db, log } = this.options;
-    const now = (this.options.now ?? (() => new Date()))();
     const token = randomUUID();
-    const timeout = Math.max(1, this.options.timeoutMs ?? 10000);
-    const leaseUntil = new Date(
-      now.getTime() + Math.max(timeout * 2, this.options.leaseMs ?? 60000),
-    );
+    const timeout = Math.max(1, Math.min(120000, this.options.timeoutMs ?? 10000));
+    const leaseSeconds = Math.ceil(Math.max(timeout * 2, this.options.leaseMs ?? 60000) / 1000);
     const limit = Math.max(1, Math.min(20, this.options.batchSize ?? 10));
     // One short atomic SQL statement claims work and releases DB locks before R2 I/O.
-    const rows = await db.execute(sql`with due as (
-      select id from storage_object_deletions where next_attempt_at <= ${now.toISOString()}::timestamptz
-      and (lease_until is null or lease_until <= ${now.toISOString()}::timestamptz)
-      order by next_attempt_at,created_at for update skip locked limit ${limit}
-    ) update storage_object_deletions d set lease_token=${token}::uuid,lease_until=${leaseUntil.toISOString()}::timestamptz,attempts=d.attempts+1
-      from due where d.id=due.id returning d.id,d.storage_path,d.shop_id,d.trace_id,d.attempts`);
+    const rows = await queryRows(db,
+      sql`select * from app_private.claim_storage_deletions(${token}::uuid,${limit}::integer,${leaseSeconds}::integer)`,
+      z.object({ id: z.string().uuid(), shop_id: z.string().uuid(), storage_path: z.string(), trace_id: z.string(), attempts: z.number().int() }));
     await Promise.all(
-      (rows as unknown as CleanupRow[]).map(async (row) => {
+      rows.map(async (row) => {
         const context = log.child({
           entryPoint: "storage_cleanup",
           requestId: row.id,
@@ -122,22 +110,17 @@ export class StorageCleanupDispatcher {
               timer = setTimeout(() => controller.abort(), timeout);
             }),
           ]);
-          const acknowledged = await db.execute(
-            sql`delete from storage_object_deletions where id=${row.id}::uuid and lease_token=${token}::uuid returning id`,
-          );
-          if (acknowledged.length) {
+          const [acknowledged] = await queryRows(db,
+            sql`select app_private.complete_storage_deletion(${row.id}::uuid,${token}::uuid) as completed`, z.object({ completed: z.boolean() }));
+          if (acknowledged?.completed) {
             context.info(
               { event: "storage_cleanup_deleted", attempt: row.attempts },
               "storage object deleted",
             );
           }
         } catch {
-          const retryAt = new Date(
-            (this.options.now ?? (() => new Date()))().getTime() +
-            Math.min(3600000, 1000 * 2 ** Math.min(row.attempts, 12)),
-          );
-          await db.execute(sql`update storage_object_deletions set lease_token=null,lease_until=null,next_attempt_at=${retryAt.toISOString()}::timestamptz
-          where id=${row.id}::uuid and lease_token=${token}::uuid`);
+          const delay = Math.min(3600, 2 ** Math.min(row.attempts, 12));
+          await db.execute(sql`select app_private.retry_storage_deletion(${row.id}::uuid,${token}::uuid,${delay}::integer)`);
           context.warn(
             { event: "storage_cleanup_retry", attempt: row.attempts },
             "storage cleanup will retry",
