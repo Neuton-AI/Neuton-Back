@@ -1,6 +1,8 @@
 import { forbidden, unauthorized } from '../../lib/errors.js';
 import { SessionRepository } from './session.repository.js';
 import { SecurityEvents } from './security-events.js';
+import { sql } from 'drizzle-orm';
+import { digestSecret } from './crypto.js';
 
 export class SessionService {
   constructor(private readonly sessions: SessionRepository, private readonly events: SecurityEvents) {}
@@ -26,9 +28,11 @@ export class SessionService {
     if (!renewed) throw unauthorized();
     return renewed;
   }
-  async logout(secret: string, correlationId: string): Promise<void> {
+  async logout(secret: string, correlationId: string, browserSecret?: string): Promise<void> {
     const revoked = await this.sessions.withSession(secret, async (account, session) => {
       const result = await this.sessions.revoke(account, session.id);
+      if (browserSecret) await account.transaction.execute(sql`delete from auth_private.browser_contexts
+        where token_digest=${digestSecret('browser_context', browserSecret)}`);
       await this.events.append(account.transaction, { event: 'logout', result: 'success', correlationId,
         actorUserId: account.user.id, sessionId: session.id });
       return result;

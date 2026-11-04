@@ -8,7 +8,10 @@ import {
   Inject,
   Query,
   UseGuards,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import { AuthCookies } from '../auth/cookies.js';
 import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import type { ActorContext } from '../identity/contracts.js';
@@ -27,12 +30,7 @@ import {
 } from './contracts.js';
 @Controller('api/v1')
 export class ShopsController {
-  constructor(@Inject(ShopsService) private readonly shops: ShopsService) {}
-  @Get('session') @UseGuards(SessionGuard) session(
-    @CurrentSession() actor: SessionActor,
-  ) {
-    return this.shops.session(actor);
-  }
+  constructor(@Inject(ShopsService) private readonly shops: ShopsService, @Inject(AuthCookies) private readonly cookies: AuthCookies) {}
   @Post('shops') @UseGuards(SessionGuard) create(
     @CurrentSession() actor: SessionActor,
     @Body() body: unknown,
@@ -59,11 +57,14 @@ export class ShopsController {
   ) {
     return this.shops.updateProfile(actor, updateProfileSchema.parse(body));
   }
-  @Post('profile/password') @HttpCode(200) @UseGuards(SessionGuard) password(
+  @Post('profile/password') @HttpCode(200) @UseGuards(SessionGuard) async password(
     @CurrentSession() actor: SessionActor,
     @Body() body: unknown,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.shops.password(actor, passwordSchema.parse(body));
+    const result = await this.shops.password(actor, passwordSchema.parse(body));
+    response.setHeader('Set-Cookie', this.cookies.set('session', result.secret, result.expiresAt));
+    return { ok: true };
   }
   @Get('shop/delivery-preview') @UseGuards(ShopGuard) delivery(
     @CurrentActor() actor: ActorContext,

@@ -1,7 +1,10 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { createHttpApplication, type HttpOptions } from './http/application.js';
-import { env, corsOrigins } from './env.js';
-import { LoggerImpl } from './lib/logger/index.js';
+import { env } from './env.js';
+import { LoggerImpl, apiLogger } from './lib/logger/index.js';
+import { AuthModule } from './modules/auth/auth.module.js';
+import { readAuthConfig, readBrowserConfig } from './config/auth.js';
+import { db } from './db/client.js';
 import { IdentityModule } from './modules/identity/identity.module.js';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
 import { RecipeModule } from './modules/recipes/recipe.module.js';
@@ -33,14 +36,17 @@ class HealthController {
   ],
   controllers: [HealthController],
 })
+export class BusinessModule {}
+@Module({ imports: [BusinessModule, AuthModule.forRoot(() => readAuthConfig('api'), apiLogger, env.UPSTASH_REDIS_URL, db)] })
 export class AppModule {}
 export interface BuildAppOptions {
   logger?: boolean;
   http?: Partial<HttpOptions>;
 }
 export function buildApp(options: BuildAppOptions = {}) {
+  const browser = readBrowserConfig();
   return createHttpApplication(AppModule, {
-    origins: corsOrigins,
+    origins: [browser.origin], authOrigin: browser.origin,
     bodyLimit: env.MAX_UPLOAD_BYTES,
     rateLimit: { max: env.RATE_LIMIT_MAX, windowMs: env.RATE_LIMIT_WINDOW },
     trustProxy: env.TRUST_PROXY,

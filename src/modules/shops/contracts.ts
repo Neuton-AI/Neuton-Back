@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
+import { authPasswordSchema } from '../auth/contracts.js';
 export const shopSettingsSchema = z.object({
   name: htmlFree(z.string().trim().min(2).max(120)).optional(),
   slug: z
@@ -19,7 +20,7 @@ export const shopSettingsSchema = z.object({
   deliveryRatePerKm: z.coerce.number().min(0).max(100_000).optional(),
   currency: htmlFree(z.string().trim().length(3).toUpperCase()).optional(),
   timezone: htmlFree(z.string().trim().min(1).max(80)).optional(),
-});
+}).strict();
 
 export const createShopSchema = z.object({
   name: htmlFree(z.string().trim().min(2).max(120)),
@@ -28,17 +29,17 @@ export const createShopSchema = z.object({
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).default(18),
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).default(3),
   deliveryRatePerKm: z.coerce.number().min(0).max(100_000).default(0.8),
-});
+}).strict();
 
 export const updateProfileSchema = z.object({
   fullName: htmlFree(z.string().trim().min(1).max(120)).nullable().optional(),
   avatarUrl: z.string().trim().url().max(500).nullable().optional(),
-});
+}).strict();
 
 export const passwordSchema = z.object({
-  currentPassword: z.string().min(1),
-  newPassword: z.string().min(8),
-});
+  currentPassword: authPasswordSchema,
+  newPassword: authPasswordSchema,
+}).strict();
 export const deliverySchema = z
   .object({ distanceKm: z.coerce.number().finite().min(0) })
   .strict();

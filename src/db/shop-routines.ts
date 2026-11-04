@@ -1,5 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
-import type { z } from 'zod';
+import { z } from 'zod';
+import { queryRows } from './query-rows.js';
 import { AppError } from '../lib/errors.js';
 import type { createShopSchema } from '../modules/shops/contracts.js';
 import type { ShopRole } from './schema/enums.js';
@@ -7,9 +8,9 @@ import { shops } from './schema/identity.js';
 import type { ShopTransaction, UserTransaction } from './types.js';
 
 export async function createShop(scope: UserTransaction, input: z.infer<typeof createShopSchema>, slug: string) {
-  const rows = await scope.database.execute<{ id: string }>(sql`
+  const rows = await queryRows(scope.database, sql`
     select id from app_private.create_shop(${input.name},${slug},${input.storeAddress ?? null},
-      ${input.targetProfitMargin},${input.hourlyLaborCost},${input.deliveryBaseFee},${input.deliveryRatePerKm})`);
+      ${input.targetProfitMargin},${input.hourlyLaborCost},${input.deliveryBaseFee},${input.deliveryRatePerKm})`, z.object({ id: z.string().uuid() }));
   const id = rows[0]?.id;
   if (!id) throw new AppError(503, 'SHOP_CREATION_UNAVAILABLE', 'Unable to create the shop');
   const [shop] = await scope.database.select().from(shops).where(eq(shops.id, id)).limit(1);

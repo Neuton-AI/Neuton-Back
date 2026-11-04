@@ -6,7 +6,7 @@ import {
   defaultUploadServices,
   UPLOAD_SERVICES,
 } from '../../src/modules/uploads/uploads.persistence.js';
-import { AppModule } from '../../src/app.js';
+import { BusinessModule } from '../../src/app.js';
 import { INVENTORY_DATABASE } from '../../src/modules/inventory/inventory.persistence.js';
 import { RECIPE_DATABASE } from '../../src/modules/recipes/recipe.persistence.js';
 import { CATEGORIES_DATABASE } from '../../src/modules/categories/categories.persistence.js';
@@ -20,7 +20,6 @@ import {
   SHOPS_DATABASE,
   ShopsPersistence,
 } from '../../src/modules/shops/shops.persistence.js';
-import { SHOPS_AUDIT } from '../../src/modules/shops/shops.service.js';
 import { ANALYTICS_DEPS } from '../../src/modules/analytics/analytics.persistence.js';
 import { SYNC_DATABASE } from '../../src/modules/sync/sync.persistence.js';
 import {
@@ -93,7 +92,7 @@ export async function domainHarness(
       ]),
     ),
   };
-  const app = await testApplication(AppModule, [
+  const app = await testApplication(BusinessModule, [
     [INVENTORY_DATABASE, database],
     [RECIPE_DATABASE, database],
     [CATEGORIES_DATABASE, database],
@@ -113,7 +112,6 @@ export async function domainHarness(
     ],
     [DomainAudit, { record: async () => {} }],
     [OrdersAudit, { record: async () => {} }],
-    [SHOPS_AUDIT, async () => {}],
     [
       SessionVerifier,
       {

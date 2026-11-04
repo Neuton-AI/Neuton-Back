@@ -53,10 +53,6 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   DATABASE_LISTEN_URL: emptyToUndefined(z.string().min(1)),
-  SUPABASE_URL: z.string().url().min(1, 'SUPABASE_URL is required'),
-  SUPABASE_SERVICE_ROLE_KEY: z
-    .string()
-    .min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
 
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),

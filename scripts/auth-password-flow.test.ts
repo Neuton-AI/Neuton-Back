@@ -31,7 +31,7 @@ test('registration, pending login, resend and deliberate confirmation preserve a
     }, async release(key) { counters.set(key, Math.max(0, (counters.get(key) ?? 0) - 1)); } },
     Buffer.alloc(32, 31), 'test:synthetic', 'neuton:auth:test:synthetic');
     const accountService = new AccountService(auth, accounts, actions, outbox, hasher, limits, events);
-    const passwords = new PasswordService(auth, accounts, sessions, hasher, limits, events);
+    const passwords = new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox);
     const context = { ip: '192.0.2.1', traceId: 'synthetic-flow' };
     const input = registrationInput.parse({ email: ' Alice+Tag@Example.com ', password: 'a long real password', fullName: 'Alice' });
     await accountService.register(input, context);
@@ -73,8 +73,17 @@ test('registration, pending login, resend and deliberate confirmation preserve a
         });
         return valid;
       },
-    }, limits, events);
+    }, limits, events, outbox);
     await assert.rejects(racing.login(loginInput.parse({ email: input.email.display, password: input.password }), context), { code: 'INVALID_CREDENTIALS' });
     assert.equal(await sessions.resolve(active.secret), null);
+    const changedLogin = await passwords.login(loginInput.parse({ email: input.email.display, password: 'a different new password' }), context);
+    const verified = await sessions.resolve(changedLogin.secret);
+    assert.ok(verified);
+    const beforeFailedChange = await accounts.findPasswordForUser(verified.userId);
+    await assert.rejects(passwords.change(verified.reference, { currentPassword: 'wrong long password', newPassword: 'a final replacement password' }, context), { code: 'INVALID_CREDENTIALS' });
+    assert.equal((await accounts.findPasswordForUser(verified.userId))?.encodedHash, beforeFailedChange?.encodedHash);
+    const finalSession = await passwords.change(verified.reference, { currentPassword: 'a different new password', newPassword: 'a final replacement password' }, context);
+    assert.equal(await sessions.resolve(changedLogin.secret), null);
+    assert.ok(await sessions.resolve(finalSession.secret));
   } finally { await database.close(); }
 });

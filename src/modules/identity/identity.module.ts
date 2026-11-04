@@ -26,7 +26,7 @@ const defaultProviders: Provider[] = [
     inject: [{ token: AUTH_BROWSER_CONFIG, optional: true }] },
 ];
 
-@Module({ providers: [...defaultProviders, IdentityService, ShopGuard, SessionGuard], exports: [IdentityService, ShopGuard, SessionGuard] })
+@Module({ providers: [...defaultProviders, IdentityService, ShopGuard, SessionGuard], exports: [IdentityService, ShopGuard, SessionGuard, AuthCookies] })
 export class IdentityModule {
   /** Replace external collaborators without replacing the guard or use case. */
   static register(options: { sessionVerifier: SessionVerifier; repository: IdentityRepository }): DynamicModule {

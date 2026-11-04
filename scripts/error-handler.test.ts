@@ -1,8 +1,13 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import {httpClient} from './support/httpClient.js';
-import { buildApp } from '../src/app.js';
+import { httpClient, testApplication } from './support/httpClient.js';
+import { AppModule } from '../src/app.js';
+import { isolatedAuthDatabase } from './support/authDatabase.js';
+import { syntheticAuthConfig } from './support/authConfig.js';
+import { createAuthServices } from '../src/modules/auth/auth-services.js';
+import { AUTH_SERVICES } from '../src/modules/auth/auth.module.js';
+import { AuthRateLimits } from '../src/modules/auth/rate-limit.service.js';
 
 /**
  * Regression net for N-3.
@@ -24,13 +29,21 @@ import { buildApp } from '../src/app.js';
  */
 
 let app:ReturnType<typeof httpClient>;
+let database: Awaited<ReturnType<typeof isolatedAuthDatabase>>['database'];
 
 before(async () => {
-  app = httpClient(await buildApp({ logger: false }));
+  const isolated = await isolatedAuthDatabase();
+  database = isolated.database;
+  const config = syntheticAuthConfig();
+  const limits = new AuthRateLimits({ async increment(_key, windowMs) { return { count: 1, retryMs: windowMs, windowId: 'synthetic' }; }, async release() {} },
+    config.encryption.rateLimitSecret, config.environment, config.redisNamespace);
+  const services = createAuthServices(config, isolated.auth, isolated.orm, limits);
+  app = httpClient(await testApplication(AppModule, [[AUTH_SERVICES, services]], { origins: [config.origin], authOrigin: config.origin }));
 });
 
 after(async () => {
-  await app.close();
+  await app?.close();
+  await database?.close();
 });
 
 /**

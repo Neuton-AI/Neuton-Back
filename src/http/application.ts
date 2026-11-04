@@ -6,6 +6,9 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import type { NextFunction, Response } from 'express';
+import { json } from 'express';
+import { AUTH_POLICY } from '../config/auth-policy.js';
+import { assertBrowserMutation } from '../modules/auth/csrf.service.js';
 import { apiLogger } from '../lib/logger/index.js';
 import type { Logger } from '../lib/logger/types.js';
 import { ApiExceptionFilter } from './exception-filter.js';
@@ -14,6 +17,7 @@ import { resolveTraceId, type HttpRequest } from './request-context.js';
 export interface HttpOptions {
   origins: string[];
   bodyLimit: number;
+  authOrigin?: string;
   rateLimit: { max: number; windowMs: number };
   /** Explicit trusted proxy addresses/subnets; direct deployments trust none. */
   trustProxy?: string[];
@@ -36,6 +40,7 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     req.traceId = resolveTraceId(req.headers);
     req.log = (options.logger ?? apiLogger).child({ requestId: req.requestId, traceId: req.traceId, entryPoint: 'http' });
     res.setHeader('X-Trace-Id', req.traceId);
+    if (/^\/api\/v1\/(?:auth|session|profile)(?:\/|$)/.test(req.path)) res.setHeader('Cache-Control', 'no-store');
     res.once('finish', () => {
       const event = {
         event: 'http_request_completed', entryPoint: 'http', requestId: req.requestId,
@@ -50,6 +55,14 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
   app.use(helmet({ contentSecurityPolicy: { useDefaults: false, directives: {
     defaultSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"], formAction: ["'none'"],
   } } }));
+  app.use((req: HttpRequest, _res: Response, next: NextFunction) => {
+    try {
+      if (options.authOrigin && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+        assertBrowserMutation(req.headers, options.authOrigin, req.path === '/api/v1/auth/csrf');
+      }
+      next();
+    } catch (error) { next(error); }
+  });
   app.enableCors({
     origin: (origin, callback) => callback(origin && !options.origins.includes(origin) ? new Error('Origin not allowed') : null, true),
     credentials: true, exposedHeaders: ['Retry-After', 'X-Trace-Id'],
@@ -62,6 +75,7 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
       code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests', traceId: (req as HttpRequest).traceId,
     } }),
   }));
+  app.use(['/api/v1/auth', '/api/v1/profile/password'], json({ limit: AUTH_POLICY.maxAuthBodyBytes }));
   app.useBodyParser('json', { limit: options.bodyLimit });
   app.useGlobalFilters(new ApiExceptionFilter());
   await app.init();

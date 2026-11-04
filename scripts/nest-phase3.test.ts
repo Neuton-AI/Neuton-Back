@@ -4,21 +4,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import request from 'supertest';
 import { Module } from '@nestjs/common';
+import { sql } from 'drizzle-orm';
+import { isolatedAuthDatabase } from './support/authDatabase.js';
+import { digestSecret } from '../src/modules/auth/crypto.js';
 import { createHttpApplication } from '../src/http/application.js';
 import { IdentityModule } from '../src/modules/identity/identity.module.js';
 import { ShopsController } from '../src/modules/shops/shops.controller.js';
 import {
   ShopsService,
-  SHOPS_AUDIT,
 } from '../src/modules/shops/shops.service.js';
 import {
   ShopsPersistence,
   SHOPS_DATABASE,
 } from '../src/modules/shops/shops.persistence.js';
-import {
-  PasswordService,
-  PASSWORD_CLIENT,
-} from '../src/modules/shops/password.service.js';
+import { PasswordService } from '../src/modules/shops/password.service.js';
 import { AnalyticsController } from '../src/modules/analytics/analytics.controller.js';
 import { AnalyticsService } from '../src/modules/analytics/analytics.service.js';
 import {
@@ -35,8 +34,22 @@ const shop = {
   updatedAt: date,
   privateColumn: 'hidden',
 };
-async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
-  let passwordWrites = 0;
+async function fixture(db: FakeDb, role = 'owner') {
+  const { database, orm } = await isolatedAuthDatabase();
+  await database.query(`insert into auth_private.users(id,email,normalized_email,status,email_confirmed_at)
+    values($1,'test@example.test','test@example.test','active',now())`, [USER_ID]);
+  await database.query('insert into public.profiles(id,full_name,created_at,updated_at) values($1,$2,$3,$3)', [USER_ID, 'User', date]);
+  await database.query(`insert into auth_private.sessions(id,user_id,token_digest,csrf_digest,security_version,authenticated_at,
+    authentication_method,last_activity_at,idle_expires_at,absolute_expires_at)
+    values($1,$2,$3,$4,1,now(),'password',now(),now()+interval '7 days',now()+interval '30 days')`,
+  [TEST_SESSION_ID, USER_ID, digestSecret('session', TEST_SESSION_SECRET), 'a'.repeat(64)]);
+  await database.query(`insert into public.shops(id,name,slug,target_profit_margin,hourly_labor_cost,delivery_base_fee,delivery_rate_per_km)
+    values($1,'Shop','shop',30,25,5,1.5)`, [SHOP_ID]);
+  await database.query('insert into public.shop_members(shop_id,user_id,role) values($1,$2,$3)', [SHOP_ID, USER_ID, role]);
+  type Transaction = Parameters<Parameters<typeof orm.transaction>[0]>[0];
+  const scopedDatabase = { transaction<T>(work: (transaction: Transaction) => Promise<T>) {
+    return orm.transaction(async transaction => { await transaction.execute(sql`set local role neuton_app`); return work(transaction); });
+  } };
   @Module({
     imports: [
       IdentityModule.register({
@@ -56,31 +69,14 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
     ],
     controllers: [ShopsController, AnalyticsController],
     providers: [
-      { provide: SHOPS_AUDIT, useValue: async () => {} },
+      { provide: 'PHASE_C_DATABASE', useValue: { onModuleDestroy: () => database.close() } },
       ShopsService,
       ShopsPersistence,
       PasswordService,
       AnalyticsService,
       AnalyticsPersistence,
-      { provide: SHOPS_DATABASE, useValue: db },
+      { provide: SHOPS_DATABASE, useValue: scopedDatabase },
       { provide: ANALYTICS_DEPS, useValue: { db, now: () => date } },
-      {
-        provide: PASSWORD_CLIENT,
-        useValue: {
-          auth: {
-            signInWithPassword: async () => ({
-              data: { user: { id: providerId } },
-              error: null,
-            }),
-            admin: {
-              updateUserById: async () => {
-                passwordWrites++;
-                return { error: null };
-              },
-            },
-          },
-        },
-      },
     ],
   })
   class Root {}
@@ -89,10 +85,10 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
     bodyLimit: 100000,
     rateLimit: { max: 1000, windowMs: 60000 },
   });
-  return { app, passwordWrites: () => passwordWrites };
+  return { app, database };
 }
 const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
-test('session/profile require authentication but no selected shop; profile fields are explicit', async () => {
+test('profile requires authentication without a selected shop and maps only public fields', async () => {
   const db = new FakeDb({
     'select:shopMembers': [
       [
@@ -121,15 +117,6 @@ test('session/profile require authentication but no selected shop; profile field
   });
   const h = await fixture(db);
   try {
-    assert.equal(
-      (await request(h.app.getHttpServer()).get('/api/v1/session')).status,
-      401,
-    );
-    const session = await request(h.app.getHttpServer())
-      .get('/api/v1/session')
-      .set('Cookie', TEST_SESSION_COOKIE);
-    assert.equal(session.status, 200);
-    assert.equal(session.body.memberships[0].shop.id, SHOP_ID);
     const profile = await request(h.app.getHttpServer())
       .get('/api/v1/profile')
       .set('Cookie', TEST_SESSION_COOKIE);
@@ -157,9 +144,11 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
       .set('Cookie', TEST_SESSION_COOKIE)
       .send({ name: 'Shop' });
     assert.equal(response.status, 201);
-    assert.equal(response.body.shop.targetProfitMargin, '30.00');
+    assert.equal(response.body.shop.targetProfitMargin, '35.00');
     assert.equal('privateColumn' in response.body.shop, false);
-    assert.equal(db.onlyCallTo('insert', 'shopMembers').inTransaction, true);
+    assert.equal((await h.database.query<{ role: string }>('select role from public.shop_members where shop_id=$1 and user_id=$2',
+      [response.body.shop.id, USER_ID])).rows[0]?.role, 'owner');
+    assert.equal((await h.database.query('select id from public.audit_logs where shop_id=$1', [response.body.shop.id])).rows.length, 1);
     const preview = await request(h.app.getHttpServer())
       .get('/api/v1/shop/delivery-preview?distanceKm=2')
       .set(headers);
@@ -179,7 +168,7 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
 });
 test('tenant/role and password identity checks reject writes before persistence', async () => {
   const db = new FakeDb();
-  const h = await fixture(db, 'member', 'another-user');
+  const h = await fixture(db, 'member');
   try {
     assert.equal(
       (
@@ -210,7 +199,6 @@ test('tenant/role and password identity checks reject writes before persistence'
       ).status,
       400,
     );
-    assert.equal(h.passwordWrites(), 0);
     assert.equal(db.calls.length, 0);
   } finally {
     await h.app.close();

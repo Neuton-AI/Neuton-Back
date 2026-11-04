@@ -72,6 +72,12 @@ export class SessionRepository {
     const session = await this.resolve(secret);
     return session ? { id: session.id, csrfDigest: session.csrfDigest } : null;
   }
+  async current(account: LockedAuthAccount, sessionId: string): Promise<SessionRecord | null> {
+    this.auth.assertLocked(account);
+    const [session] = await authRows(account.transaction, sql`${selectSession} where s.id=${sessionId}::uuid
+      and s.user_id=${account.user.id}::uuid and ${validSession} for update of s`, sessionRecordSchema);
+    return session ?? null;
+  }
   rotateCsrf(secret: string, digest: string) {
     return this.withSession(secret, async (account, session) => {
       await account.transaction.execute(sql`update auth_private.sessions set csrf_digest=${digest} where id=${session.id}::uuid`);

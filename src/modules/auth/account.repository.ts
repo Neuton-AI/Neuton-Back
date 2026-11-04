@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AuthTransaction } from './auth.ports.js';
 import { AuthRepository, authRows } from './auth.repository.js';
@@ -42,11 +43,17 @@ export class AccountRepository {
   }
 
   findPassword(normalizedEmail: string): Promise<PasswordProof | null> {
+    return this.findPasswordBy(sql`u.normalized_email=${normalizedEmail}`);
+  }
+  findPasswordForUser(userId: string): Promise<PasswordProof | null> {
+    return this.findPasswordBy(sql`u.id=${userId}::uuid`);
+  }
+  private findPasswordBy(condition: SQL): Promise<PasswordProof | null> {
     return this.auth.transaction(async transaction => {
       const [proof] = await authRows(transaction, sql`select u.id as "userId",p.encoded_hash as "encodedHash",
         p.password_changed_at as "passwordChangedAt",u.security_version as "securityVersion",u.status
         from auth_private.users u join auth_private.password_credentials p on p.user_id=u.id
-        where u.normalized_email=${normalizedEmail}`, credentialSchema);
+        where ${condition}`, credentialSchema);
       return proof ?? null;
     });
   }

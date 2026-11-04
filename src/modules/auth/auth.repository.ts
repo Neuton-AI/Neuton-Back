@@ -1,9 +1,10 @@
 import { sql } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { AppError, conflict } from '../../lib/errors.js';
+import { conflict } from '../../lib/errors.js';
 import type { AuthPersistence, AuthTransaction } from './auth.ports.js';
 import { mapAuthDependencyError } from './auth-errors.js';
+import { queryRows as authRows } from '../../db/query-rows.js';
+export { authRows };
 
 const userSchema = z.object({ id: z.string().uuid(), email: z.string(), normalizedEmail: z.string(),
   status: z.enum(['pending_email', 'active', 'disabled']), securityVersion: z.number().int().positive(),
@@ -13,15 +14,6 @@ export interface LockedAuthAccount {
   readonly [lockedAccount]: true;
   readonly user: Readonly<z.infer<typeof userSchema>>;
   readonly transaction: AuthTransaction;
-}
-
-export async function authRows<S extends z.ZodTypeAny>(transaction: AuthTransaction, query: SQL, schema: S): Promise<z.infer<S>[]> {
-  const result = await transaction.execute(query);
-  let rows: unknown = result;
-  if (result && typeof result === 'object' && 'rows' in result) rows = result.rows;
-  const parsed = schema.array().safeParse(rows);
-  if (!parsed.success) throw new AppError(503, 'AUTH_STORAGE_UNAVAILABLE', 'Account storage temporarily unavailable');
-  return parsed.data;
 }
 
 export class AuthRepository {
