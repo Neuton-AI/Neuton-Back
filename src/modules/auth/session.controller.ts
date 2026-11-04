@@ -21,13 +21,13 @@ export class SessionController {
   async renew(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response): Promise<void> {
     z.object({}).strict().parse(request.body ?? {});
     const secret = this.secret(request);
-    const result = await this.sessions.renew(secret, request.traceId);
+    const result = await this.sessions.renew(secret, request.traceId, request.headers['x-client-user-id']);
     response.setHeader('Set-Cookie', this.cookies.set('session', secret, result.idleExpiresAt));
   }
   @Post('auth/logout') @HttpCode(204)
   async logout(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response): Promise<void> {
     z.object({}).strict().parse(request.body ?? {});
-    await this.sessions.logout(this.secret(request), request.traceId, this.cookies.read('browser', request.headers.cookie));
+    await this.sessions.logout(this.secret(request), request.traceId, this.cookies.read('browser', request.headers.cookie), request.headers['x-client-user-id']);
     response.setHeader('Set-Cookie', [this.cookies.clear('session'), this.cookies.clear('browser')]);
   }
 }

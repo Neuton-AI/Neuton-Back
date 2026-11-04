@@ -64,6 +64,9 @@ test('cookie HTTP auth enforces CSRF, pending restrictions, safe session DTOs an
     assert.equal(active.body.user.fullName, 'Alice');
     assert.deepEqual(active.body.memberships, []);
     const activeCsrf = await boot();
+    await agent.post('/api/v1/auth/logout').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken,
+      'X-Client-User-Id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }).send({}).expect(409);
+    await agent.get('/api/v1/session').expect(200);
     await agent.post('/api/v1/probe/mutation').set({ ...headers, Origin: 'https://evil.example', 'X-CSRF-Token': activeCsrf.body.csrfToken }).send({}).expect(403);
     await agent.post('/api/v1/auth/register').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken }).send({ large: 'x'.repeat(17_000) }).expect(413);
     await agent.post('/api/v1/auth/logout').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken }).send({}).expect(204);
