@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -21,7 +22,7 @@ const inventory = {
   currentQuantity: '2.000', reorderLevel: '2.000', lastUnitCost: '2.0000',
   averageUnitCost: '1.5000', isActive: true, createdAt, updatedAt: createdAt,
 } satisfies InventoryItem;
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
 const recipe = {
   id: '66666666-6666-6666-6666-666666666666', shopId: SHOP_ID,
   categoryId: category.id, name: 'Reviewed bread', description: null,

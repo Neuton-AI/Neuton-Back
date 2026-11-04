@@ -40,15 +40,15 @@ test(
         IdentityService,
         {
           resolve: async ({
-            authorization,
+            cookie,
             shopId,
           }: {
-            authorization?: string;
+            cookie?: string;
             shopId?: string;
           }) => {
             if (
               !allowed ||
-              authorization !== 'Bearer fixture' ||
+              cookie !== 'fixture-cookie' ||
               shopId !== 'shop-a'
             )
               throw forbidden('Access denied');
@@ -64,7 +64,7 @@ test(
     await app.listen(0, '127.0.0.1');
     const address = app.getHttpServer().address() as { port: number };
     const url = `http://127.0.0.1:${address.port}/api/v1/sync/events`;
-    const headers = { Authorization: 'Bearer fixture', 'x-shop-id': 'shop-a' };
+    const headers = { Cookie: 'fixture-cookie', 'x-shop-id': 'shop-a' };
     const abort = new AbortController();
     try {
       const denied = await fetch(url, {
@@ -123,7 +123,7 @@ async function streamHarness(t: TestContext, enableTimers = true) {
   );
   await controller.stream(
     { shop: { id: 'shop-a' } } as ActorContext,
-    { headers: { authorization: 'Bearer fixture' } } as Request,
+    { headers: { cookie: 'fixture-cookie' } } as Request,
     response as unknown as Response,
   );
   t.after(() => response.emit('close'));

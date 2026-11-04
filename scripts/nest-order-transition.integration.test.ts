@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -64,14 +65,14 @@ test('Nest order verification preserves concurrent outcomes and defers effects u
           select: (...args: Parameters<typeof database.select>) => pauseAfterSelect(database.select(...args), selected, resume),
           update: database.update.bind(database),
         } as unknown as Database });
-      const verifying = request(app.app.getHttpServer()).post(`/api/v1/orders/${ORDER_ID}/verify`).set({ authorization: 'Bearer test', 'x-shop-id': SHOP_ID });
+      const verifying = request(app.app.getHttpServer()).post(`/api/v1/orders/${ORDER_ID}/verify`).set({ cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID });
       // Supertest starts the request when its promise is consumed.
       const result = Promise.resolve(verifying);
       await selected.promise;
       if (competitor === 'cancelled') {
         // Exercise the real cancellation transaction, including its row lock.
         app.use({ db: database });
-        const cancelled = await request(app.app.getHttpServer()).delete(`/api/v1/orders/${ORDER_ID}`).set({ authorization: 'Bearer test', 'x-shop-id': SHOP_ID });
+        const cancelled = await request(app.app.getHttpServer()).delete(`/api/v1/orders/${ORDER_ID}`).set({ cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID });
         assert.equal(cancelled.status, 200);
       } else if (competitor === 'delivered') {
         await connection`UPDATE orders SET status = 'delivered' WHERE id = ${ORDER_ID}`;

@@ -43,7 +43,7 @@ export class SyncEventsController {
       try {
         // Recheck membership/session before forwarding any hint, including recovery.
         await this.identity.resolve({
-          authorization: request.headers.authorization,
+          cookie: request.headers.cookie,
           shopId: actor.shop.id,
         });
         if (closed) return;

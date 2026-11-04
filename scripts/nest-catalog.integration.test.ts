@@ -1,3 +1,5 @@
+import { referenceVerifiedSession } from '../src/modules/identity/verified-session.js';
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -46,7 +48,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     const database = drizzle(connection, { schema });
     app = await buildNestCatalogApp(database, 'member');
     const get = (path: string) => request(app!.app.getHttpServer()).get(`/api/v1${path}`)
-      .set({ authorization: 'Bearer test', 'x-shop-id': SHOP_ID });
+      .set({ cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID });
     const categories = await get('/categories');
     assert.equal(categories.status, 200);
     assert.deepEqual(categories.body.categories.map((row: { name: string }) => row.name), ['Alpha', 'Zulu']);
@@ -91,7 +93,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
 
     const events: Record<string, unknown>[] = [];
     const actor: ActorContext = {
-      shop: TEST_SHOP, user: { id: USER_ID, email: null, fullName: null, avatarUrl: null },
+      sessionId: TEST_SESSION_ID, session: referenceVerifiedSession(USER_ID, TEST_SESSION_ID), shop: TEST_SHOP, user: { id: USER_ID, email: null, fullName: null, avatarUrl: null },
       role: 'owner', requestId: 'category-test', traceId: 'category-test',
       log: new LoggerImpl({ write: (_level, _message, meta) => { events.push(meta); } }, {}, 'debug'),
     };

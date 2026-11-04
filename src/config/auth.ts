@@ -34,7 +34,7 @@ function encryption(source: EnvironmentSource) {
   return { activeKeyId, keys, rateLimitSecret };
 }
 
-function applicationOrigin(source: EnvironmentSource) {
+export function readBrowserConfig(source: EnvironmentSource = process.env) {
   const mode = source.NODE_ENV ?? 'development';
   if (!['development', 'production', 'test'].includes(mode)) invalidConfig('NODE_ENV');
   const origin = requiredSetting(source, 'APP_ORIGIN');
@@ -77,7 +77,7 @@ function smtp(source: EnvironmentSource) {
 }
 
 function readApiConfig(source: EnvironmentSource) {
-  const application = applicationOrigin(source);
+  const application = readBrowserConfig(source);
   const redirectUri = requiredSetting(source, 'GOOGLE_REDIRECT_URI');
   if (redirectUri !== `${application.origin}/api/v1/auth/google/callback`) invalidConfig('GOOGLE_REDIRECT_URI');
   const listenUrl = databaseUrl(source, 'DATABASE_LISTEN_URL', 'neuton_app');

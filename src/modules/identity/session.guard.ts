@@ -20,12 +20,12 @@ export class SessionGuard implements CanActivate {
   ) {}
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<SessionRequest>();
-    const user = await this.identity.authenticate(
-      request.headers.authorization,
+    const identity = await this.identity.authenticate(
+      request.headers.cookie,
     );
-    request.log = request.log.child({ userId: user.id });
+    request.log = request.log.child({ userId: identity.user.id });
     request.sessionActor = {
-      user,
+      ...identity,
       requestId: request.requestId,
       traceId: request.traceId,
       ipAddress: request.ip,

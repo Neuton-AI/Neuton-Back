@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './authIdentity.js';
 import {SyncModule} from '../../src/modules/sync/sync.module.js';
 import 'reflect-metadata';
 import { Module } from '@nestjs/common';
@@ -24,7 +25,7 @@ export async function buildNestCatalogApp(database: TransactionalDatabase, role:
   })
   class TestFeatureModules {}
   const app = await testApplication(TestFeatureModules, [
-    [SessionVerifier, { verify: async () => ({ id: USER_ID, email: null }) }],
+    [SessionVerifier, { verify: async () => (testIdentity(USER_ID)) }],
     [IdentityRepository, {
         findMembership: async (_userId: string, shopId: string) => shopId === SHOP_ID ? { shopId, role } : null,
         findShop: async () => TEST_SHOP,

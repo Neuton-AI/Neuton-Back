@@ -1,5 +1,6 @@
 import type { ShopRole } from '../../db/schema/enums.js';
 import type { Logger } from '../../lib/logger/types.js';
+import type { VerifiedSessionReference } from './verified-session.js';
 
 export interface AuthUser {
   id: string;
@@ -23,6 +24,8 @@ export interface ShopContext {
 
 /** Verified identity and explicit tenant scope passed into application services. */
 export interface ActorContext {
+  sessionId: string;
+  session: VerifiedSessionReference;
   user: AuthUser;
   shop: ShopContext;
   role: ShopRole;

@@ -8,41 +8,47 @@ import {
 } from '../../lib/errors.js';
 import type { ActorContext } from './contracts.js';
 import { IdentityRepository, SessionVerifier } from './identity.ports.js';
+import { AuthCookies } from '../auth/cookies.js';
+import { referenceVerifiedSession } from './verified-session.js';
 
 @Injectable()
 export class IdentityService {
   constructor(
     @Inject(SessionVerifier) private readonly sessions: SessionVerifier,
     @Inject(IdentityRepository) private readonly repository: IdentityRepository,
+    @Inject(AuthCookies) private readonly cookies: AuthCookies,
   ) {}
 
-  private async verifySession(authorization?: string) {
-    const token =
-      typeof authorization === 'string'
-        ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1]
-        : undefined;
-    if (!token) throw unauthorized('Missing bearer token');
+  private async verifySession(cookie?: string) {
+    const token = this.cookies.read('session', cookie);
+    if (!token) throw unauthorized();
     const session = await this.sessions.verify(token);
     if (!session) throw unauthorized('Invalid or expired session');
+    if (session.status !== 'active') throw forbidden('Confirm your email before accessing shop data');
     return session;
   }
 
-  async authenticate(authorization?: string): Promise<ActorContext['user']> {
-    const session = await this.verifySession(authorization);
-    const profile = await this.repository.findProfile(session.id);
+  async authenticate(cookie?: string): Promise<Pick<ActorContext, 'user' | 'session' | 'sessionId'>> {
+    const session = await this.verifySession(cookie);
+    const reference = referenceVerifiedSession(session.id, session.sessionId);
+    const profile = await this.repository.findProfile(session.id, reference);
     return {
-      id: session.id,
-      email: session.email,
-      fullName: profile?.fullName ?? null,
-      avatarUrl: profile?.avatarUrl ?? null,
+      session: reference, sessionId: session.sessionId,
+      user: {
+        id: session.id,
+        email: session.email,
+        fullName: profile?.fullName ?? null,
+        avatarUrl: profile?.avatarUrl ?? null,
+      },
     };
   }
 
   async resolve(input: {
-    authorization?: string;
+    cookie?: string;
     shopId?: string;
-  }): Promise<Pick<ActorContext, 'user' | 'shop' | 'role'>> {
-    const session = await this.verifySession(input.authorization);
+  }): Promise<Pick<ActorContext, 'user' | 'shop' | 'role' | 'session' | 'sessionId'>> {
+    const session = await this.verifySession(input.cookie);
+    const reference = referenceVerifiedSession(session.id, session.sessionId);
 
     const requestedShopId = input.shopId;
     if (typeof requestedShopId !== 'string' || !requestedShopId.trim()) {
@@ -62,6 +68,7 @@ export class IdentityService {
     const membership = await this.repository.findMembership(
       session.id,
       requestedShopId,
+      reference,
     );
     if (
       !membership ||
@@ -70,10 +77,11 @@ export class IdentityService {
     ) {
       throw forbidden('You do not have access to the requested shop');
     }
-    const shop = await this.repository.findShop(membership.shopId);
+    const shop = await this.repository.findShop(membership.shopId, reference);
     if (!shop || shop.id !== requestedShopId) throw forbidden('Shop not found');
-    const profile = await this.repository.findProfile(session.id);
+    const profile = await this.repository.findProfile(session.id, reference);
     return {
+      session: reference, sessionId: session.sessionId,
       user: {
         id: session.id,
         email: session.email,

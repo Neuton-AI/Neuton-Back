@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -12,7 +13,7 @@ import { FakeDb } from './support/fakeDb.js';
 import { httpClient, testApplication } from './support/httpClient.js';
 import { SHOP_ID, TEST_SHOP } from './support/domainApp.js';
 
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
 
 for (const feature of [
   { module: InventoryModule, database: INVENTORY_DATABASE, path: 'inventory', table: 'inventoryItems', envelope: 'items' },
@@ -23,7 +24,7 @@ for (const feature of [
     const database = new FakeDb({ [`select:${feature.table}`]: [[]] });
     const app = await testApplication(feature.module, [
       [feature.database, database],
-      [SessionVerifier, { verify: async () => ({ id: 'user', email: null }) }],
+      [SessionVerifier, { verify: async () => (testIdentity('33333333-3333-3333-3333-333333333333')) }],
       [IdentityRepository, {
         findProfile: async () => null,
         findMembership: async () => ({ shopId: SHOP_ID, role: 'member' }),

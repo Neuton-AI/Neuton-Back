@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './authIdentity.js';
 import { Module } from '@nestjs/common';
 import type { Database } from '../../src/db/client.js';
 import type {
@@ -40,8 +41,8 @@ export async function buildSyncApplication(
       SessionVerifier,
       {
         verify: async (token: string) =>
-          token === 'test-session'
-            ? { id: userId, email: 'sync@example.com' }
+          token === TEST_SESSION_SECRET
+            ? testIdentity(userId, 'sync@example.com')
             : null,
       },
     ],

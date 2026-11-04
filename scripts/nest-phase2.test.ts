@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -73,7 +74,7 @@ const source = {
   originalFilename: 'receipt.jpg',
   byteSize: 8,
 };
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
 
 test('production feature modules compose with explicit Nest injection', async () => {
   @Module({ imports: [InventoryModule, RecipeModule, CategoriesModule, ReceiptsModule, UploadsModule] })

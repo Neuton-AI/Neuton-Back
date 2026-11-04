@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -33,7 +34,7 @@ test(
         sql`insert into recipes(id,shop_id,name,status) values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`,
       );
       const headers = {
-        authorization: 'Bearer test-session',
+        cookie: TEST_SESSION_COOKIE,
         'x-shop-id': shopId,
       };
       const check = () =>

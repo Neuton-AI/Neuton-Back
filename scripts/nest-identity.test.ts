@@ -1,4 +1,5 @@
 import './support/testEnv.js';
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -30,7 +31,7 @@ class ProbeController {
   }
 }
 
-async function fixture(options: { missingProfile?: boolean; missingShop?: boolean; databaseFailure?: boolean } = {}) {
+async function fixture(options: { missingProfile?: boolean; missingShop?: boolean; databaseFailure?: boolean; pending?: boolean } = {}) {
   const calls: string[] = [];
   const logs: Record<string, unknown>[] = [];
   const logger = new LoggerImpl({ write: (_level, _message, meta) => { logs.push(meta); } }, {}, 'debug');
@@ -39,7 +40,9 @@ async function fixture(options: { missingProfile?: boolean; missingShop?: boolea
       sessionVerifier: {
         async verify(token: string) {
           calls.push(`verify:${token}`);
-          return token === 'private-session-token' ? { id: 'user-a', email: 'private@example.test' } : null;
+          if (token !== TEST_SESSION_SECRET) return null;
+          return { ...testIdentity('33333333-3333-3333-3333-333333333333', 'private@example.test'),
+            status: options.pending ? 'pending_email' as const : 'active' as const };
         },
       },
       repository: {
@@ -50,7 +53,7 @@ async function fixture(options: { missingProfile?: boolean; missingShop?: boolea
         async findMembership(userId: string, shopId: string) {
           calls.push(`member:${userId}:${shopId}`);
           if (options.databaseFailure) throw new Error('private database credential and session-token');
-          return userId === 'user-a' && shopId === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' ? { shopId, role: 'member' as const } : null;
+          return userId === '33333333-3333-3333-3333-333333333333' && shopId === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' ? { shopId, role: 'member' as const } : null;
         },
         async findShop(shopId: string) { calls.push(`shop:${shopId}`); return shopId === 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' && !options.missingShop ? shop : null; },
       },
@@ -67,7 +70,7 @@ async function fixture(options: { missingProfile?: boolean; missingShop?: boolea
 test('shop guard rejects missing and malformed credentials before external I/O', async () => {
   const { app, calls, server } = await fixture();
   try {
-    for (const authorization of [undefined, 'Basic token', 'Bearer', 'Bearer token extra']) {
+    for (const authorization of [undefined, 'Basic token', 'Bearer', 'Bearer token extra', 'Bearer ' + TEST_SESSION_SECRET]) {
       const req = request(server).get('/identity-probe').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
       if (authorization) req.set('Authorization', authorization);
       const response = await req;
@@ -79,16 +82,26 @@ test('shop guard rejects missing and malformed credentials before external I/O',
   } finally { await app.close(); }
 });
 
+test('pending email sessions cannot enter tenant identity or profile queries', async () => {
+  const { app, server, calls } = await fixture({ pending: true });
+  try {
+    const response = await request(server).get('/identity-probe').set('Cookie', TEST_SESSION_COOKIE)
+      .set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    assert.equal(response.status, 403);
+    assert.deepEqual(calls, ['verify:' + TEST_SESSION_SECRET]);
+  } finally { await app.close(); }
+});
+
 test('shop guard rejects expired sessions, missing shops and foreign shops without fallback', async () => {
   const { app, calls, server } = await fixture();
   try {
-    const invalid = await request(server).get('/identity-probe').set('Authorization', 'Bearer expired').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const invalid = await request(server).get('/identity-probe').set('Cookie', 'neuton-dev-session=' + Buffer.alloc(32, 8).toString('base64url')).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     assert.equal(invalid.status, 401);
-    assert.deepEqual(calls, ['verify:expired']);
-    const missing = await request(server).get('/identity-probe').set('Authorization', 'Bearer private-session-token');
+    assert.deepEqual(calls, ['verify:' + Buffer.alloc(32, 8).toString('base64url')]);
+    const missing = await request(server).get('/identity-probe').set('Cookie', TEST_SESSION_COOKIE);
     assert.equal(missing.status, 400);
     assert.equal(missing.body.error.code, 'MISSING_SHOP_ID');
-    const foreign = await request(server).get('/identity-probe').set('Authorization', 'Bearer private-session-token').set('x-shop-id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    const foreign = await request(server).get('/identity-probe').set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
     assert.equal(foreign.status, 403);
     assert.equal(foreign.body.error.code, 'FORBIDDEN');
     assert.ok(!calls.includes('shop:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'));
@@ -100,16 +113,16 @@ test('valid membership provides actor correlation and enriches safe logs without
   const { app, server, logs } = await fixture();
   try {
     const response = await request(server).get('/identity-probe')
-      .set('Authorization', 'bEaReR private-session-token').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').set('X-Trace-Id', 'identity-trace');
+      .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').set('X-Trace-Id', 'identity-trace');
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body.user, { id: 'user-a', email: 'private@example.test', fullName: 'Private Person', avatarUrl: null });
+    assert.deepEqual(response.body.user, { id: '33333333-3333-3333-3333-333333333333', email: 'private@example.test', fullName: 'Private Person', avatarUrl: null });
     assert.deepEqual(response.body.shop, shop);
     assert.equal(response.body.role, 'member');
     assert.equal(response.body.traceId, 'identity-trace');
     assert.ok(response.body.requestId);
     assert.ok(response.body.ipAddress);
     const probeLog = logs.find(line => line.event === 'identity_probe');
-    assert.equal(probeLog?.userId, 'user-a');
+    assert.equal(probeLog?.userId, '33333333-3333-3333-3333-333333333333');
     assert.equal(probeLog?.shopId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     assert.equal(probeLog?.traceId, 'identity-trace');
     const failed = await request(server).get('/identity-probe').set('X-Trace-Id', 'unauthenticated-trace');
@@ -126,7 +139,7 @@ test('service role policy rejects members independently of controller metadata',
   const { app, server } = await fixture();
   try {
     const response = await request(server).get('/identity-probe/admin')
-      .set('Authorization', 'Bearer private-session-token').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     assert.equal(response.status, 403);
     assert.equal(response.body.error.code, 'FORBIDDEN');
   } finally { await app.close(); }
@@ -136,7 +149,7 @@ test('missing profiles remain nullable and orphaned memberships cannot create an
   const missingProfile = await fixture({ missingProfile: true });
   try {
     const response = await request(missingProfile.server).get('/identity-probe')
-      .set('Authorization', 'Bearer private-session-token').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     assert.equal(response.status, 200);
     assert.equal(response.body.user.fullName, null);
     assert.equal(response.body.user.avatarUrl, null);
@@ -144,7 +157,7 @@ test('missing profiles remain nullable and orphaned memberships cannot create an
   const missingShop = await fixture({ missingShop: true });
   try {
     const response = await request(missingShop.server).get('/identity-probe')
-      .set('Authorization', 'Bearer private-session-token').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+      .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     assert.equal(response.status, 403);
     assert.equal(response.body.error.message, 'Shop not found');
     assert.ok(!missingShop.logs.some(line => line.event === 'identity_probe'));
@@ -155,7 +168,7 @@ test('identity dependency failures preserve generic error responses and safe dia
   const { app, server, logs } = await fixture({ databaseFailure: true });
   try {
     const response = await request(server).get('/identity-probe')
-      .set('Authorization', 'Bearer private-session-token').set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').set('X-Trace-Id', 'identity-failure');
+      .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').set('X-Trace-Id', 'identity-failure');
     assert.equal(response.status, 500);
     assert.deepEqual(response.body, { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong', traceId: 'identity-failure' } });
     assert.ok(logs.some(line => line.event === 'http_request_failed' && line.traceId === 'identity-failure'));
@@ -170,10 +183,10 @@ test('malformed shop ids fail as client input before persistence', async () => {
   try {
     for (const shopId of ['not-a-uuid', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb']) {
       const response = await request(server).get('/identity-probe')
-        .set('Authorization', 'Bearer private-session-token').set('x-shop-id', shopId);
+        .set('Cookie', TEST_SESSION_COOKIE).set('x-shop-id', shopId);
       assert.equal(response.status, 400);
       assert.equal(response.body.error.code, 'BAD_REQUEST');
     }
-    assert.ok(calls.every(call => call === 'verify:private-session-token'));
+    assert.ok(calls.every(call => call === 'verify:' + TEST_SESSION_SECRET));
   } finally { await app.close(); }
 });

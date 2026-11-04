@@ -4,6 +4,7 @@ import { isBearerSecret } from './normalization.js';
 
 type CookieKind = 'session' | 'browser';
 export interface BrowserConfig { origin: string; environment: string; localHttp: boolean }
+export const AUTH_BROWSER_CONFIG = Symbol('AUTH_BROWSER_CONFIG');
 
 export class AuthCookies {
   constructor(private readonly config: BrowserConfig) {

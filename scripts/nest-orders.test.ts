@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -26,7 +27,7 @@ const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const storedOrder: Order = {
   id: ORDER_ID, orderNumber: 1, shopId: SHOP_ID, userId: USER_ID, customerName: 'Dana', orderDate: new Date('2026-01-01T00:00:00Z'), destinationAddress: null, deliveryDistanceKm: '0.00', deliveryFee: '5.00', appliedProfitMargin: '30.00', totalCost: '4.00', totalAmount: '15.00', documentUrl: null, status: 'processing', createdAt: new Date('2026-01-01T00:00:00Z'), deletedAt: null
 };
-const auth = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const auth = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
 function pricingResponses() { return { 'select:recipes': [[{
         id: RECIPE_ID, name: 'Focaccia', prepTimeMinutes: 0, yieldQuantity: '1', targetMarginPct: null
       }]], 'select:recipeIngredients': [[{

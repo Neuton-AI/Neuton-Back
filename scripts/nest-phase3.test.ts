@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -41,8 +42,8 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
       IdentityModule.register({
         sessionVerifier: {
           verify: async (token) =>
-            token === 'test'
-              ? { id: USER_ID, email: 'test@example.test' }
+            token === TEST_SESSION_SECRET
+              ? testIdentity(USER_ID, 'test@example.test')
               : null,
         },
         repository: {
@@ -90,7 +91,7 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
   });
   return { app, passwordWrites: () => passwordWrites };
 }
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
 test('session/profile require authentication but no selected shop; profile fields are explicit', async () => {
   const db = new FakeDb({
     'select:shopMembers': [
@@ -126,12 +127,12 @@ test('session/profile require authentication but no selected shop; profile field
     );
     const session = await request(h.app.getHttpServer())
       .get('/api/v1/session')
-      .set('authorization', 'Bearer test');
+      .set('Cookie', TEST_SESSION_COOKIE);
     assert.equal(session.status, 200);
     assert.equal(session.body.memberships[0].shop.id, SHOP_ID);
     const profile = await request(h.app.getHttpServer())
       .get('/api/v1/profile')
-      .set('authorization', 'Bearer test');
+      .set('Cookie', TEST_SESSION_COOKIE);
     assert.equal(profile.status, 200);
     assert.equal(profile.body.profile.createdAt, date.toISOString());
     assert.equal('secret' in profile.body.profile, false);
@@ -139,7 +140,7 @@ test('session/profile require authentication but no selected shop; profile field
       (
         await request(h.app.getHttpServer())
           .get('/api/v1/shop')
-          .set('authorization', 'Bearer test')
+          .set('Cookie', TEST_SESSION_COOKIE)
       ).status,
       400,
     );
@@ -153,7 +154,7 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
   try {
     const response = await request(h.app.getHttpServer())
       .post('/api/v1/shops')
-      .set('authorization', 'Bearer test')
+      .set('Cookie', TEST_SESSION_COOKIE)
       .send({ name: 'Shop' });
     assert.equal(response.status, 201);
     assert.equal(response.body.shop.targetProfitMargin, '30.00');
@@ -204,7 +205,7 @@ test('tenant/role and password identity checks reject writes before persistence'
       (
         await request(h.app.getHttpServer())
           .post('/api/v1/profile/password')
-          .set('authorization', 'Bearer test')
+          .set('Cookie', TEST_SESSION_COOKIE)
           .send({ currentPassword: 'private', newPassword: 'private-new' })
       ).status,
       400,

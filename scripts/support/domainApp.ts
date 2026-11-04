@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './authIdentity.js';
 import type { Database } from '../../src/db/client.js';
 import type { MediaUploadDeps } from '../../src/lib/mediaUploads.js';
 import { mediaUploadServices } from '../../src/lib/mediaUploads.js';
@@ -117,8 +118,8 @@ export async function domainHarness(
       SessionVerifier,
       {
         verify: async (token: string) =>
-          token === 'test'
-            ? { id: USER_ID, email: 'tester@example.com' }
+          token === TEST_SESSION_SECRET
+            ? testIdentity(USER_ID, 'tester@example.com')
             : null,
       },
     ],
@@ -133,7 +134,7 @@ export async function domainHarness(
     ],
   ]);
   const client = httpClient(app, {
-    authorization: 'Bearer test',
+    cookie: TEST_SESSION_COOKIE,
     'x-shop-id': SHOP_ID,
   });
   return {

@@ -1,3 +1,4 @@
+import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -64,7 +65,7 @@ test(
           method: 'PATCH',
           url: `/api/v1/recipes/${recipeId}`,
           headers: {
-            authorization: 'Bearer test-session',
+            cookie: TEST_SESSION_COOKIE,
             'x-shop-id': shopId,
             'x-sync-id': id,
             'x-sync-version': String(version),
@@ -75,7 +76,7 @@ test(
       const first = await patch('First edit', base + 100, base, mutationId);
       assert.equal(first.statusCode, 200);
     const snapshot = await fixture.inject({ method: 'GET', url: `/api/v1/recipes/${recipeId}`, headers: {
-      authorization: 'Bearer test-session', 'x-shop-id': shopId, 'x-sync-snapshot': 'true',
+      cookie: TEST_SESSION_COOKIE, 'x-shop-id': shopId, 'x-sync-snapshot': 'true',
     } });
     assert.equal(snapshot.statusCode, 200);
     assert.equal(snapshot.json().syncVersion, base + 100);
