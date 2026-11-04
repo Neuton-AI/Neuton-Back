@@ -32,10 +32,9 @@ export function databaseUrl(source: EnvironmentSource, field: string, role?: str
   if (role && username !== role) invalidConfig(field);
   const runtimeRoles = ['neuton_app', 'neuton_auth', 'neuton_worker', 'neuton_cleanup', 'neuton_policy_reader', 'neuton_bootstrap', 'neuton_maintenance'];
   if (!role && runtimeRoles.includes(username)) invalidConfig(field);
-  // postgres-js forwards unknown URL parameters as startup settings; those
-  // must not override the validated user, database, role or connection policy.
+  // Accept only recognized transport settings, never startup/role overrides.
   for (const key of parsed.searchParams.keys()) {
-    if (!['sslmode', 'sslrootcert'].includes(key) || parsed.searchParams.getAll(key).length !== 1) {
+    if (!['sslmode', 'sslrootcert', 'channel_binding'].includes(key) || parsed.searchParams.getAll(key).length !== 1) {
       invalidConfig(field);
     }
   }
@@ -45,6 +44,8 @@ export function databaseUrl(source: EnvironmentSource, field: string, role?: str
   if (sslMode && !['require', 'verify-ca', 'verify-full'].includes(sslMode)) {
     invalidConfig(field);
   }
+  const binding = parsed.searchParams.get('channel_binding');
+  if (binding !== null && binding !== 'require') invalidConfig(field);
   return value;
 }
 

@@ -15,6 +15,8 @@ test('connection factories use only their role-specific setting and force certif
       assert.deepEqual(connection.options.ssl, { rejectUnauthorized: true });
       assert.equal(connection.options.user, role);
       assert.equal(connection.options.prepare, false);
+      assert.equal(connection.options.channel_binding, 'require');
+      assert.equal(connection.options.infer, true);
       assert.equal(connection.options.max, kind === 'migration' ? 1 : 10);
     } finally {
       await connection.end();

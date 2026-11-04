@@ -11,9 +11,9 @@ NOLOGIN helper roles. In Neon, set/reset each LOGIN role's password, then copy
 its connection string into the matching runtime environment variable. No runtime
 URL is needed before its role exists. Existing role passwords are preserved.
 
-The owner URL must target the fresh, empty application database. Copied URLs may
-contain `channel_binding=require`; remove that option for this PostgreSQL driver,
-retaining `sslmode=require` and certificate validation. After provisioning, run
+The owner URL must target the fresh, empty application database. Copied URLs can retain `sslmode=require&channel_binding=require`. The v4 driver
+requires both verified TLS and channel-bound authentication, including during
+role provisioning. After provisioning, run
 `npm run db:migrate` with the owner connection exported in the terminal. Role
 creation does not apply the baseline automatically or run during API startup.
 

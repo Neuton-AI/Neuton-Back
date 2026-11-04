@@ -10,6 +10,17 @@ const CONNECTION_ROLES = {
   migration: { field: 'MIGRATION_DATABASE_URL', role: undefined },
 } as const;
 
+/** Shared by runtime pools, provisioning and the dedicated notification connection. */
+export function databaseTransportOptions() {
+  return {
+    ssl: { rejectUnauthorized: true },
+    channel_binding: 'require' as const,
+    // Preserve v3 parameter typing while upgrading transport and authentication.
+    infer: true,
+    prepare: false,
+  };
+}
+
 export function createDatabaseConnection(
   purpose: keyof typeof CONNECTION_ROLES,
   source: EnvironmentSource = process.env,
@@ -18,11 +29,10 @@ export function createDatabaseConnection(
   const url = databaseUrl(source, setting.field, setting.role);
   const migration = purpose === 'migration';
   return postgres(url, {
+    ...databaseTransportOptions(),
     max: migration ? 1 : 10,
     idle_timeout: 20,
     connect_timeout: 15,
-    prepare: false,
-    ssl: { rejectUnauthorized: true },
     connection: { application_name: `neuton-${purpose}`,
       statement_timeout: migration ? 300_000 : 30_000,
       idle_in_transaction_session_timeout: 30_000 },

@@ -1,6 +1,6 @@
 import postgres from 'postgres';
-import { databaseUrl } from '../config/database.js';
 import type { EnvironmentSource } from '../config/database.js';
+import { createDatabaseConnection } from './connection.js';
 
 interface ProvisioningRole { name: string; login: boolean }
 interface RoleAttributes {
@@ -30,9 +30,7 @@ export function assertRestrictedRole(name: string, login: boolean, role: RoleAtt
 }
 
 export async function provisionNeonRoles(source: EnvironmentSource): Promise<void> {
-  const ownerUrl = databaseUrl(source, 'MIGRATION_DATABASE_URL');
-  const connection = postgres(ownerUrl, { max: 1, prepare: false,
-    ssl: { rejectUnauthorized: true }, connect_timeout: 15, onnotice: () => {} });
+  const connection = createDatabaseConnection('migration', source);
   try {
     await connection.begin(provisionRoleTransaction);
   } finally {

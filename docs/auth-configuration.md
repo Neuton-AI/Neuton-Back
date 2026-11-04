@@ -11,7 +11,22 @@
 
 Database URLs must use PostgreSQL, include credentials and a database name, and must not request insecure SSL modes. Connection factories enforce certificate validation. Runtime usernames must be exactly neuton_app, neuton_auth, neuton_worker or neuton_cleanup for their respective settings. The migration owner must be separate. DATABASE_LISTEN_URL uses neuton_app with a direct/session endpoint; a Neon pooler endpoint is rejected.
 
-Only sslmode and sslrootcert=system URL options are accepted. postgres-js 3.4.9 forwards unknown URL parameters as PostgreSQL startup settings, so user/database/options overrides are rejected. It does not implement SCRAM channel binding: URLs used by this driver must omit channel_binding rather than pretending to enforce channel_binding=require. TLS certificate validation remains mandatory. This applies to copied Neon console connection strings as well; no actual environment value was inspected.
+The pinned postgres-js 4.0.0 driver supports SCRAM-SHA-256-PLUS. All runtime,
+migration, provisioning and notification connections require channel binding
+(`channel_binding: 'require'`) and verified TLS certificates. The URL may retain
+`channel_binding=require`; omitted URL settings still use the required policy.
+Explicit `prefer`/`disable`, duplicates and arbitrary startup/role overrides are
+rejected. Accepted URL options are sslmode, sslrootcert=system and
+channel_binding=require. No connection silently falls back to unbound login.
+
+Connection factories set `infer: true` to preserve v3 parameter typing while
+upgrading the transport. Drizzle retains its existing timestamp/date and decimal
+mappings. Notifications use the same v4 transport on a dedicated session with
+pool size one and disabled idle/lifetime retirement; they mark streams unavailable
+on disconnect and reconcile after an explicit restart. No environment values
+were inspected while making this upgrade.
+
+Primary upgrade reference: [postgres-js v4 upgrade guide](https://github.com/porsager/postgres/tree/v4.0.0#upgrading-from-v3).
 
 APP_ORIGIN is an exact origin without path/trailing slash/credentials. HTTPS is required except explicit development/test localhost HTTP. CORS/CSRF origins derive from that single origin. The environment identifier and Redis auth namespace derive deterministically from NODE_ENV plus APP_ORIGIN. Expose only the environment identifier in the public session response for browser partitions; never expose private configuration.
 

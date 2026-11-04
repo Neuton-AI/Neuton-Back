@@ -32,7 +32,7 @@ export async function promptMigrationUrl(): Promise<string> {
 export function provisioningFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : '';
   if (message === 'Invalid authentication configuration: MIGRATION_DATABASE_URL') {
-    return 'Provide a valid PostgreSQL OWNER connection string. Only sslmode and sslrootcert=system URL options are supported; remove channel_binding from copied Neon URLs. In a noninteractive shell, export MIGRATION_DATABASE_URL first.';
+    return 'Provide a valid PostgreSQL OWNER connection string. Supported URL options are sslmode, sslrootcert=system and channel_binding=require. In a noninteractive shell, export MIGRATION_DATABASE_URL first.';
   }
   if (message === 'Role provisioning requires an empty application database') {
     return 'The selected database already contains application tables. Select the fresh, empty migration database.';
@@ -44,6 +44,7 @@ export function provisioningFailureMessage(error: unknown): string {
     }
   }
   const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  if (code === 'CHANNEL_BINDING_REQUIRED') return 'The endpoint did not complete required channel-bound authentication. Verify the selected Neon endpoint supports SCRAM-SHA-256-PLUS.';
   if (code === '42501') return 'The owner connection lacks permission to create roles or configure database privileges.';
   if (code === '28P01') return 'Neon rejected the owner username or password.';
   if (['ENOTFOUND', 'ECONNREFUSED', 'CONNECT_TIMEOUT'].includes(String(code))) {

@@ -49,7 +49,8 @@ test('API fails closed for unsafe origins, callbacks, roles and SMTP modes', () 
     { DATABASE_URL: url('neondb_owner') }, { DATABASE_URL: url('neuton_app').replace('require', 'disable') },
     { DATABASE_URL: url('neuton_app') + '&user=neondb_owner' },
     { DATABASE_URL: url('neuton_app') + '&options=-crole%3Dneuton_auth' },
-    { DATABASE_URL: url('neuton_app') + '&channel_binding=require' },
+    { DATABASE_URL: url('neuton_app') + '&channel_binding=disable' },
+    { DATABASE_URL: url('neuton_app') + '&channel_binding=prefer' },
     { SMTP_SECURE: 'truthy' }, { SMTP_PORT: '465', SMTP_SECURE: 'false' },
     { SMTP_PORT: '587', SMTP_SECURE: 'true' }, { MAIL_FROM: 'Neuton\r\nBcc: attacker@example.com' },
     { MAIL_FROM: 'noreply@example.com>' }, { MAIL_FROM: 'Neuton <noreply@example.com' },
@@ -78,4 +79,11 @@ test('configuration failures disclose field names without supplied values', () =
     assert.doesNotMatch(error.message, /secret-owner|secret-password|secret-host/);
     return true;
   });
+});
+
+test('database URLs accept required channel binding without permitting a downgrade or duplicate options', () => {
+  const input = source();
+  const bound = input.DATABASE_URL + '&channel_binding=require';
+  assert.equal(readAuthConfig('api', { ...input, DATABASE_URL: bound }).databases.app, bound);
+  assert.throws(() => readAuthConfig('api', { ...input, DATABASE_URL: bound + '&channel_binding=require' }));
 });
