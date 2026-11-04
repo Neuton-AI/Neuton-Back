@@ -6,7 +6,7 @@ import { SyncService } from './sync.service.js';
 import { SyncPersistence, SYNC_DATABASE } from './sync.persistence.js';
 import { SyncEvents, SyncEventSource } from './sync-events.js';
 import { PostgresSyncEvents } from './postgres-sync-events.js';
-import { env } from '../../env.js';
+import { listenDatabaseUrl } from '../../config/database.js';
 import { SyncEventsController } from './sync-events.controller.js';
 @Module({
   imports: [IdentityModule],
@@ -19,7 +19,7 @@ import { SyncEventsController } from './sync-events.controller.js';
       provide: SyncEventSource,
       inject: [SyncEvents],
       useFactory: (events: SyncEvents) => new PostgresSyncEvents(
-        env.DATABASE_LISTEN_URL ?? env.DATABASE_URL, events,
+        listenDatabaseUrl(), events,
       ),
     },
     { provide: SYNC_DATABASE, useValue: db },

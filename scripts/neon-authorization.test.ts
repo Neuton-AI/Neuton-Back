@@ -141,10 +141,11 @@ test('fresh Neon schema enforces tenant, credential, worker and cleanup boundari
       values ($1,$2,'foreign','foreign',1,'g')`, [shop, foreignRecipe])), /foreign key/);
 
     const uploadId = randomUUID();
+    const productRecipe = (await asUser(owner, shop, tx => tx.query<{id:string}>("insert into public.recipes(shop_id,name,status) values ($1,'Product placeholder','pending') returning id", [shop]))).rows[0]!.id;
     const sources = [1, 2].map(index => ({ sourceId: `source-${index}`, storagePath: `${shop}/${index}.webp`,
       contentType: 'image/webp', originalFilename: null, byteSize: 10 }));
-    await asUser(owner, shop, tx => tx.query(`insert into public.media_uploads(id,shop_id,uploaded_by,kind,sources)
-      values ($1,$2,$3,'product',$4::jsonb)`, [uploadId, shop, owner.user, JSON.stringify(sources)]));
+    await asUser(owner, shop, tx => tx.query(`insert into public.media_uploads(id,shop_id,uploaded_by,kind,sources,recipe_id,queued_at)
+      values ($1,$2,$3,'product',$4::jsonb,$5,now())`, [uploadId, shop, owner.user, JSON.stringify(sources), productRecipe]));
     await assert.rejects(asUser(owner, shop, tx => tx.query('update public.media_uploads set sources=$1::jsonb where id=$2',
       [JSON.stringify([...sources].reverse()), uploadId])), /Immutable upload source/);
     const job = (await asUser(owner, shop, tx => tx.query<{ id: string }>('select app_private.register_job($1) as id', [uploadId]))).rows[0]!.id;
@@ -155,11 +156,16 @@ test('fresh Neon schema enforces tenant, credential, worker and cleanup boundari
       await tx.exec('set local role neuton_worker');
       const claim = await tx.query('select * from app_private.claim_job_context($1)', [job]);
       assert.equal(claim.rows.length, 1, 'logout must not cancel accepted work');
-      const result = await tx.query(`insert into public.inventory_items(shop_id,name,raw_material_name,unit,base_unit,base_unit_amount,base_unit_cost)
-        values ($1,'Worker product','worker product','g','g',100,1) returning id`, [shop]);
+      const result = await tx.query("update public.recipes set description='Worker product' where id=$1 returning id", [productRecipe]);
       assert.equal(result.rows.length, 1);
-      assert.equal((await tx.query("update public.recipes set status='failed' returning id")).rows.length, 0);
+      assert.equal((await tx.query("update public.recipes set description='Forbidden' where id<>$1 returning id", [productRecipe])).rows.length, 0);
     });
+    await assert.rejects(db.transaction(async tx => {
+      await tx.exec('set local role neuton_worker');
+      await tx.query('select * from app_private.claim_job_context($1)', [job]);
+      await tx.query(`insert into public.inventory_items(shop_id,name,raw_material_name,unit,base_unit,base_unit_amount,base_unit_cost)
+        values ($1,'Forbidden','forbidden','g','g',100,1)`, [shop]);
+    }), /permission denied/);
     await db.query("update auth_private.users set status='disabled',security_version=security_version+1 where id=$1", [owner.user]);
     await db.transaction(async tx => {
       await tx.exec('set local role neuton_worker');

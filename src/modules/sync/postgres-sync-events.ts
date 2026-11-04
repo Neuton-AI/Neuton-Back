@@ -1,13 +1,16 @@
 import postgres from 'postgres';
 import { databaseTransportOptions } from '../../db/connection.js';
 import { SyncEventSource, type SyncEvents } from './sync-events.js';
+import { listenDatabaseUrl } from '../../config/database.js';
 
 /** Own session: never point this connection at a transaction pooler. */
 export class PostgresSyncEvents extends SyncEventSource {
   private client?: postgres.Sql;
   private starting?: Promise<void>;
   private stopped = false;
-  constructor(private readonly url: string, private readonly events: SyncEvents) { super(); }
+  constructor(private readonly url: string, private readonly events: SyncEvents) {
+    super(); listenDatabaseUrl({ DATABASE_LISTEN_URL: url });
+  }
 
   ready() {
     if (this.stopped) return Promise.reject(new Error('Sync listener stopped'));

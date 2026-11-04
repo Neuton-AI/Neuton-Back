@@ -48,6 +48,7 @@ test('processing success waits for the durable processed marker to commit', asyn
       'select:mediaUploads': [[upload], [upload]],
       'select:receipts': [[{ id }], [{ id }]],
     });
+    db.jobFixture = { ...upload, documentId: id };
     if (fail)
       db.failOn('update', 'mediaUploads', new Error('processed marker failed'));
     const deps = {
@@ -64,27 +65,19 @@ test('processing success waits for the durable processed marker to commit', asyn
       searchProduct: async () => [],
     } as unknown as WorkerDeps;
     return new DocumentProcessingService(deps).run(
-      {
-        uploadId: id,
-        shopId,
-        uploadedBy: null,
-        kind: 'receipt',
-        storagePath: path,
-        contentType: 'image/jpeg',
-        originalFilename: null,
-      } satisfies MediaJobData,
+      { jobId: `upload-${id}` },
       { id: 'job', updateProgress: async () => {} },
     );
   };
   try {
     await assert.rejects(run(true), /processed marker failed/);
     assert.equal(
-      events.includes('receipt extracted, awaiting verification'),
+      events.includes('document processing completed'),
       false,
     );
     await run(false);
     assert.equal(
-      events.includes('receipt extracted, awaiting verification'),
+      events.includes('document processing completed'),
       true,
     );
   } finally {

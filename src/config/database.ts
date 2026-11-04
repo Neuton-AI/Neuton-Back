@@ -60,3 +60,9 @@ export function readProcessDatabase<P extends Exclude<DatabaseProcess, 'api'>>(
   }
   return { process, databaseUrl: databaseUrl(source, 'CLEANUP_DATABASE_URL', 'neuton_cleanup') };
 }
+
+export function listenDatabaseUrl(source: EnvironmentSource = process.env): string {
+  const value = databaseUrl(source, 'DATABASE_LISTEN_URL', 'neuton_app');
+  if (new URL(value).hostname.includes('-pooler.')) invalidConfig('DATABASE_LISTEN_URL');
+  return value;
+}

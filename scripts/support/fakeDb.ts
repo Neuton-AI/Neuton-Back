@@ -53,6 +53,7 @@ export function tableName(table: unknown): string {
 }
 
 export class FakeQuery<T = unknown> implements PromiseLike<T> {
+  private locked = false;
   private payload?: unknown;
   private patch?: Record<string, unknown>;
   private rowLimit?: number;
@@ -86,6 +87,7 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
    * that needs to assert on locking asserts on the code that issues it.
    */
   for(): this {
+    this.locked = true;
     return this;
   }
 
@@ -140,6 +142,13 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
   ): PromiseLike<A | B> {
     let result: Promise<T>;
     try {
+      const fixture = this.db.jobFixture;
+      if (fixture && this.op === 'select') {
+        if (this.table === 'mediaUploads') return Promise.resolve([fixture] as T).then(onFulfilled, onRejected);
+        if (this.locked && this.fields && typeof this.fields === 'object' && 'status' in this.fields) {
+          return Promise.resolve([{ id: fixture.documentId, status: 'processing' }] as T).then(onFulfilled, onRejected);
+        }
+      }
       result = Promise.resolve(this.db.settle({
         op: this.op,
         table: this.table,
@@ -158,6 +167,10 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
 }
 
 export class FakeDb {
+  jobFixture?: {
+    id: string; shopId: string; documentId: string; kind: string; receiptId: string | null;
+    recipeId: string | null; orderId: string | null; processedAt?: Date | null; [key: string]: unknown;
+  };
   role = 'owner';
   readonly routineCalls: string[] = [];
   readonly calls: RecordedCall[] = [];
@@ -215,6 +228,17 @@ export class FakeDb {
     this.routineCalls.push(query.sql);
     if (query.sql.includes('set_config')) return [];
     if (query.sql.includes('register_job')) return [{ job_id: `upload-${query.params[0]}` }];
+    if (query.sql.includes('claim_job_context')) {
+      const upload = this.jobFixture;
+      if (!upload) return [];
+      return [{ job_id: `upload-${upload.id}`, shop_id: upload.shopId, requesting_user_id: '33333333-3333-3333-3333-333333333333',
+        upload_id: upload.id, resource_kind: upload.kind === 'product' ? 'upload' : upload.kind,
+        resource_id: upload.kind === 'product' ? upload.id : upload.documentId, operation: `extract_${upload.kind}` }];
+    }
+    if (query.sql.includes('begin_job_stage')) return [{ valid: true }];
+    if (query.sql.includes('job_revision')) return [{ valid: true }];
+    if (query.sql.includes('finish_job')) return [{ finished: true }];
+    if (query.sql.includes('select correlation_id')) return [{ correlation_id: 'fixture-job' }];
     if (query.sql.includes('lock_shop_context')) return [{ role: this.role }];
     if (query.sql.includes('pg_advisory_xact_lock')) return [];
     if (query.sql.includes('upsert_general_price')) {

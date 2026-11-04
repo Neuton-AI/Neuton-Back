@@ -1,17 +1,21 @@
 import { Queue, type JobsOptions } from 'bullmq';
 import { Redis } from 'ioredis';
 import { env } from '../env.js';
+import type { PersistedProcessingJob } from '../modules/processing/contracts.js';
 import type { UploadSource } from '../db/schema/uploads.js';
 
 export const QUEUE_NAME = 'neuton-media';
 
-/**
- * Upstash requires TLS and forbids the blocking/`maxRetriesPerRequest` patterns
- * BullMQ needs, so connection options are explicit here.
- */
-export function createRedisConnection(): Redis {
+/** Workers reconnect; publishers fail within a bounded connection/retry budget. */
+export function createRedisConnection(purpose: 'worker' | 'producer' = 'worker'): Redis {
   return new Redis(env.UPSTASH_REDIS_URL, {
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: purpose === 'worker' ? null : 1,
+    connectTimeout: 5000,
+    retryStrategy: attempt => {
+      if (purpose === 'worker') return Math.min(attempt * 50, 2000);
+      if (attempt >= 2) return null;
+      return 100;
+    },
     enableReadyCheck: false,
     lazyConnect: true,
     tls: env.UPSTASH_REDIS_URL.startsWith('rediss://') ? {} : undefined,
@@ -44,16 +48,31 @@ export const DEFAULT_JOB_OPTIONS: JobsOptions = {
   removeOnFail: { age: 60 * 60 * 24 * 7 },
 };
 
-let queue: Queue<MediaJobData> | null = null;
+let queue: Queue<PersistedProcessingJob> | null = null;
+let queueRedis: Redis | undefined;
 
-export function getMediaQueue(): Queue<MediaJobData> {
+export function getMediaQueue(): Queue<PersistedProcessingJob> {
+  if (queueRedis?.status === 'end') {
+    void queue?.close().catch(() => undefined);
+    queue = null; queueRedis = undefined;
+  }
   if (!queue) {
-    queue = new Queue<MediaJobData>(QUEUE_NAME, {
-      connection: createRedisConnection(),
+    queueRedis = createRedisConnection('producer');
+    queue = new Queue<PersistedProcessingJob>(QUEUE_NAME, {
+      connection: queueRedis,
       defaultJobOptions: DEFAULT_JOB_OPTIONS,
     });
+    // Publication callers report failures with bounded context; driver error
+    // events must not escape as unhandled errors or expose connection details.
+    queue.on('error', () => {});
   }
   return queue;
+}
+
+export async function closeMediaQueue() {
+  await queue?.close();
+  queueRedis?.disconnect();
+  queue = null; queueRedis = undefined;
 }
 
 export interface EnqueueResult {
@@ -64,7 +83,7 @@ export interface EnqueueResult {
 
 /** Stable group IDs make dispatch retries safe, including retrying a retained failed job. */
 export async function enqueueMediaJobOn(
-  mediaQueue: Pick<Queue<MediaJobData>, 'getJob' | 'add'>,
+  mediaQueue: Pick<Queue<PersistedProcessingJob>, 'getJob' | 'add'>,
   data: MediaJobData,
 ): Promise<EnqueueResult> {
   if (!data.uploadId) throw new Error('Grouped uploadId is required for media jobs');
@@ -75,7 +94,7 @@ export async function enqueueMediaJobOn(
     if (await existing.getState() === 'failed') await existing.retry();
     return { queued: true, jobId: String(existing.id) };
   }
-  const job = await mediaQueue.add(data.kind, data, { jobId });
+  const job = await mediaQueue.add('document', { jobId }, { jobId });
   return { queued: true, jobId: String(job.id) };
 }
 

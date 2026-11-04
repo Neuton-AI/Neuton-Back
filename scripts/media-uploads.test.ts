@@ -185,9 +185,10 @@ test('a missing source stops the worker before any partial extraction', async ()
 
 test('durably processed group skips all worker effects after queue redelivery', async () => {
   const h = harness(upload({ processedAt: new Date(), queuedAt: new Date() }));
-  const data = { uploadId: UPLOAD, shopId: SHOP, uploadedBy: USER, kind: 'receipt' } as MediaJobData;
+  h.db.jobFixture = { ...upload({ processedAt: new Date(), queuedAt: new Date() }), documentId: UPLOAD };
+  const data = { jobId: `upload-${UPLOAD}` };
   await runJob(data, { id: 'duplicate' } as Job<MediaJobData>, { db: h.deps.db } as WorkerDeps);
-  assert.deepEqual(h.db.callSequence(), ['select:mediaUploads']);
+  assert.equal(h.db.callsTo('update', 'receipts').length, 0);
 });
 
 test('legacy single input retains the previous one-part vision contract', () => {
@@ -226,6 +227,6 @@ test('ungrouped jobs are rejected before queue, database, or extraction effects'
   const forbidden = async () => { throw new Error('Queue must not be touched'); };
   await assert.rejects(enqueueMediaJobOn({ getJob: forbidden, add: forbidden } as never, data), /Grouped uploadId is required/);
   const db = new FakeDb();
-  await assert.rejects(runJob(data, { id: 'legacy' } as Job<MediaJobData>, { db } as unknown as WorkerDeps), /Legacy upload jobs are no longer supported/);
+  await assert.rejects(runJob(data, { id: 'legacy' } as Job<MediaJobData>, { db } as unknown as WorkerDeps), /Persisted job ID is required/);
   assert.equal(db.calls.length, 0);
 });

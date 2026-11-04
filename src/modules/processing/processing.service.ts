@@ -1,4 +1,10 @@
-import { db, type Database } from '../../db/client.js';
+import type { TransactionalDatabase } from '../../db/types.js';
+import { withJobTransaction, finishJob, type JobTransaction } from '../../db/job-context.js';
+import { auditLogs, mediaUploads, recipes } from '../../db/schema/index.js';
+import { eq } from 'drizzle-orm';
+import { prepareSourcePreviews } from '../../lib/documentPreviews.js';
+import { recordTerminalFailure as persistTerminalFailure } from './processing.persistence.js';
+import { validateSourceLimits } from '../../lib/mediaUploads.js';
 import type { MediaJobData } from '../../lib/queue.js';
 import { getObjectBytes, putPreviewBytes } from '../../lib/storage.js';
 import { createDocumentPreview, previewStoragePath } from '../../lib/documentPreviews.js';
@@ -29,13 +35,12 @@ import {
   saveRecipe,
   applyOrderDocument,
   committedLog,
-  processGroup,
 } from './processing.persistence.js';
 function jobLogContext(data: MediaJobData, job: ProcessingJob) {
   return {
     entryPoint: 'worker',
-    requestId: job.id,
-    jobId: job.id,
+    requestId: data.jobId ?? job.id,
+    jobId: data.jobId ?? job.id,
     kind: data.kind,
     shopId: data.shopId,
     userId: data.uploadedBy ?? undefined,
@@ -46,11 +51,12 @@ function jobLogContext(data: MediaJobData, job: ProcessingJob) {
 /**
  * Collaborators each job handler reaches for. Injected so the handlers can be
  * exercised without a live Postgres, an R2 bucket or a Gemini key; production
- * always passes `defaultWorkerDeps`.
+ * injects the worker pool and `defaultWorkerServices`.
  */
 export interface WorkerDeps {
+  scope?: JobTransaction;
   afterCommit?: (effect: () => Promise<void>) => void;
-  db: Database;
+  db: TransactionalDatabase;
   getObjectBytes: (key: string) => Promise<Uint8Array>;
   extractReceipt: typeof extractReceipt;
   extractRecipe: typeof extractRecipe;
@@ -59,8 +65,7 @@ export interface WorkerDeps {
   createSourcePreview?: (source: UploadSource, bytes: Uint8Array) => Promise<SourcePreview>;
 }
 
-export const defaultWorkerDeps: WorkerDeps = {
-  db,
+export const defaultWorkerServices: Omit<WorkerDeps, 'db'> = {
   getObjectBytes,
   extractReceipt,
   extractRecipe,
@@ -106,6 +111,16 @@ function checkDeadline(deadline: Date | null): void {
   if (deadline && new Date() > deadline) {
     throw new Error('Processing deadline exceeded');
   }
+}
+
+async function withinDeadline<T>(deadline: Date, work: () => Promise<T>): Promise<T> {
+  checkDeadline(deadline);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work(), new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Processing deadline exceeded')), Math.max(1, deadline.getTime() - Date.now()));
+    })]);
+  } finally { clearTimeout(timer); }
 }
 
 export async function processReceipt(
@@ -276,34 +291,130 @@ export { recordTerminalFailure } from './processing.persistence.js';
 export { findOrCreateInventoryItem } from './processing.persistence.js';
 
 export class DocumentProcessingService {
-  constructor(private readonly deps: WorkerDeps = defaultWorkerDeps) {}
-  async run(data: MediaJobData, job: ProcessingJob) {
-    if (!data.uploadId) throw new Error('Grouped uploadId is required');
-    const effects: Array<() => Promise<void>> = [];
-    await processGroup(
-      {
-        ...this.deps,
-        afterCommit: (effect) => {
-          effects.push(effect);
-        },
-      },
-      data,
-      async (deps, current) =>
-        new DocumentProcessingService(deps).process(current, job),
-    );
-    for (const effect of effects) await effect();
+  constructor(private readonly deps: WorkerDeps) {}
+
+  private stage<T>(jobId: string, work: (deps: WorkerDeps, data: MediaJobData, scope: JobTransaction) => Promise<T>) {
+    return withJobTransaction(this.deps.db, jobId, scope => work(
+      { ...this.deps, db: scope.database, scope }, hydratedJob(scope), scope,
+    ));
   }
-  async process(data: MediaJobData, job: ProcessingJob) {
-    switch (data.kind) {
-      case 'receipt':
-        return processReceipt(this.deps, data, job);
-      case 'recipe':
-      case 'product':
-        return processRecipe(this.deps, data, job);
-      case 'order':
-        return processOrderDocument(this.deps, data, job);
-      default:
-        throw new Error('Unsupported document kind');
+
+  async run(payload: { jobId: string }, job: ProcessingJob) {
+    const startedAt = new Date();
+    const deadline = new Date(startedAt.getTime() + env.RECEIPT_PROCESSING_TIMEOUT_MS);
+    const data = await this.stage(payload.jobId, async (deps, current, scope) => {
+      validateSourceLimits([...scope.sources]);
+      if (!['pending','processing','failed'].includes(scope.resourceStatus) && current.kind !== 'order') {
+        await finishJob(scope, 'cancelled'); return null;
+      }
+      if (current.kind === 'receipt') await startReceipt(deps, current, current.storagePath!, startedAt, deadline);
+      else if (current.kind !== 'order') {
+        await deps.db.update(recipes).set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
+          .where(eq(recipes.id, scope.documentId));
+      }
+      return current;
+    });
+    if (!data) return false;
+    const log = workerLogger.child(jobLogContext(data, job));
+    log.info({ event: 'document_processing_started' }, 'document processing started');
+    const external = <T>(work: () => Promise<T>) => withinDeadline(deadline, work);
+    const search: typeof searchProduct = (...args) => external(() => this.deps.searchProduct(...args));
+    const bytes = new Map<string, Uint8Array>();
+    const externalDeps = { ...this.deps, getObjectBytes: async (key: string) => {
+      const value = await external(() => this.deps.getObjectBytes(key)); bytes.set(key, value); return value;
+    } };
+    const document = await loadDocumentInput(externalDeps, data);
+    checkDeadline(deadline);
+    await external(() => job.updateProgress(10));
+    let commit: (deps: WorkerDeps, current: MediaJobData, scope: JobTransaction) => Promise<void>;
+    const quietProgress = { id: job.id, updateProgress: async () => {} };
+    if (data.kind === 'receipt') {
+      const extraction = await external(() => this.deps.extractReceipt(document, jobLogContext(data, job)));
+      if (!extraction) throw new Error('Gemini returned no parsable receipt extraction');
+      checkDeadline(deadline);
+      const enriched = await enrichReciptItems(extraction, search);
+      const items = setUnitsData(enriched);
+      commit = (deps, current) => saveReceipt(deps, current, quietProgress, current.storagePath!, deadline, extraction, items, log);
+    } else if (data.kind === 'order') {
+      const extraction = await external(() => this.deps.extractOrder(document, jobLogContext(data, job)));
+      if (!extraction?.items.length) throw new Error('Gemini returned no parsable order extraction');
+      commit = (deps, current) => applyOrderDocument(deps, current, extraction, log);
+    } else {
+      const extraction = await external(() => this.deps.extractRecipe(document, jobLogContext(data, job)));
+      if (!extraction?.name) throw new Error('Gemini returned no parsable recipe extraction');
+      const converted = convertRecipeToBaseUnits(extraction);
+      const links = await this.stage(payload.jobId, deps => recipeLinks(deps, data.shopId, converted.ingredients));
+      if (!links) return false;
+      const prices = await prepareRecipeFallbackPrices(converted.ingredients.map((ingredient, index) => ({
+        ...ingredient, inventoryItemId: links[index] ?? null,
+      })), search);
+      commit = async (deps, current, scope) => {
+        const currentLinks = await recipeLinks(deps, scope.shopId, converted.ingredients);
+        const shop = await recipeShop(deps, scope.shopId);
+        await saveRecipe(deps, current, current.storagePath!, { id: scope.documentId, status: scope.resourceStatus },
+          extraction, converted, currentLinks, prices, shop, log);
+      };
     }
+    checkDeadline(deadline);
+    await external(() => job.updateProgress(85));
+    const previewAllowed = await this.stage(payload.jobId, async (_deps, _data, scope) => {
+      if (scope.resourceStatus !== 'processing') { await finishJob(scope, 'cancelled'); return false; }
+      return true;
+    });
+    if (!previewAllowed) return false;
+    const sources = this.deps.createSourcePreview ? await prepareSourcePreviews(data.sources!, async source => {
+      const sourceBytes = bytes.get(source.storagePath);
+      if (!sourceBytes) throw new Error('Source bytes unavailable');
+      return external(() => this.deps.createSourcePreview!(source, sourceBytes));
+    }, () => log.warn({ event: 'document_preview_failed' }, 'preview unavailable; original retained')) : data.sources!;
+    checkDeadline(deadline);
+    const effects: Array<() => Promise<void>> = [];
+    const completed = await this.stage(payload.jobId, async (deps, current, scope) => {
+      if (scope.resourceStatus !== 'processing') { await finishJob(scope, 'cancelled'); return false; }
+      checkDeadline(deadline);
+      await commit({ ...deps, afterCommit: effect => effects.push(effect) }, current, scope);
+      checkDeadline(deadline);
+      await scope.database.update(mediaUploads).set({ processedAt: new Date(), sources }).where(eq(mediaUploads.id, scope.uploadId));
+      let eventType = 'RECIPE_UPDATED';
+      if (scope.kind === 'receipt') eventType = 'RECEIPT_PROCESSED';
+      else if (scope.kind === 'order') eventType = 'ORDER_UPDATED';
+      await scope.database.insert(auditLogs).values({ shopId: scope.shopId, userId: scope.requestingUserId,
+        eventType, resourceId: scope.documentId, metadata: { jobId: scope.jobId } });
+      await finishJob(scope, 'completed');
+      return true;
+    });
+    if (!completed) return false;
+    for (const effect of effects) {
+      try { await effect(); }
+      catch { log.error({ event: 'processing_commit_effect_failed' }, 'post-commit effect failed'); }
+    }
+    log.info({ event: 'document_processing_committed' }, 'document processing completed');
+    try { await job.updateProgress(100); }
+    catch { log.warn({ event: 'processing_progress_unavailable' }, 'completed progress could not be published'); }
+    return true;
   }
+
+  async fail(jobId: string, error: unknown) {
+    return this.stage(jobId, async (deps, data, scope) => {
+      if (!['pending','processing','failed'].includes(scope.resourceStatus)) {
+        await finishJob(scope, 'cancelled'); return;
+      }
+      await persistTerminalFailure(deps, data, error);
+      await scope.database.insert(auditLogs).values({ shopId: scope.shopId, userId: scope.requestingUserId,
+        eventType: 'DOCUMENT_PROCESSING_FAILED', resourceId: scope.documentId, metadata: { jobId: scope.jobId } });
+      await finishJob(scope, 'failed');
+    });
+  }
+}
+
+export function hydratedJob(scope: JobTransaction): MediaJobData {
+  const first = scope.sources[0];
+  if (!first || scope.sources.some(source => !source.storagePath.startsWith(`${scope.shopId}/`))) {
+    throw new Error('Invalid persisted document source');
+  }
+  return { jobId: scope.jobId, uploadId: scope.uploadId, shopId: scope.shopId,
+    uploadedBy: scope.requestingUserId, kind: scope.kind, sources: [...scope.sources], storagePath: first.storagePath,
+    contentType: first.contentType, originalFilename: first.originalFilename, traceId: scope.correlationId,
+    ...(scope.kind === 'order' ? { orderId: scope.documentId } : {}),
+  };
 }

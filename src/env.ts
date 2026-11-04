@@ -51,8 +51,6 @@ const envSchema = z.object({
   }, 'Expected an HTTP(S) URL without credentials').default('http://localhost:3000'),
   SCRAPY_API_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5000),
 
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  DATABASE_LISTEN_URL: emptyToUndefined(z.string().min(1)),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
 
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),

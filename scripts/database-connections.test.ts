@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDatabaseConnection } from '../src/db/connection.js';
+import { listenDatabaseUrl } from '../src/config/database.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 test('connection factories use only their role-specific setting and force certificate validation', async () => {
   for (const [kind, field, role] of [
@@ -22,6 +25,27 @@ test('connection factories use only their role-specific setting and force certif
       await connection.end();
     }
   }
+});
+
+test('LISTEN requires its own direct app-role URL and never falls back to another connection', () => {
+  const direct = 'postgresql://neuton_app:synthetic@db.example/neuton?sslmode=require';
+  assert.equal(listenDatabaseUrl({ DATABASE_LISTEN_URL: direct }), direct);
+  assert.throws(() => listenDatabaseUrl({ DATABASE_URL: direct }), /DATABASE_LISTEN_URL/);
+  assert.throws(() => listenDatabaseUrl({ DATABASE_LISTEN_URL: direct.replace('db.example', 'ep-example-pooler.neon.tech') }), /DATABASE_LISTEN_URL/);
+  assert.throws(() => listenDatabaseUrl({ DATABASE_LISTEN_URL: direct.replace('neuton_app:', 'neuton_auth:') }), /DATABASE_LISTEN_URL/);
+});
+
+test('importing the worker requires no app, auth, migration, SMTP or Google credentials', async () => {
+  const script = `await import('./scripts/support/testEnv.ts');
+    for (const key of Object.keys(process.env)) {
+      if (/DATABASE|SMTP|MAIL_|GOOGLE|AUTH_/.test(key)) delete process.env[key];
+    }
+    await import('./src/worker.ts');
+    console.log('worker-imported');`;
+  const result = await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    cwd: process.cwd(), timeout: 15000, windowsHide: true,
+  });
+  assert.match(result.stdout, /worker-imported/);
 });
 
 test('runtime connections never fall back to an owner URL or another process URL', () => {

@@ -1,7 +1,5 @@
 import type { ProcessingJob } from './contracts.js';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
-import { db, type Database } from '../../db/client.js';
-import { prepareSourcePreviews } from '../../lib/documentPreviews.js';
 import {
   inventoryItems,
   generalPrices,
@@ -35,7 +33,6 @@ import { resolveUniqueRecipeName } from '../../lib/recipeName.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { type ReceiptProgressStage } from '../../db/schema/receipts.js';
 import { setUnitsData } from '../../lib/supermarket/conversion.js';
-import { validateSourceLimits } from '../../lib/mediaUploads.js';
 
 import type {
   ReceiptExtraction,
@@ -72,7 +69,7 @@ export async function updateReceiptProgress(
       updatedAt: new Date(),
     })
     .where(
-      and(eq(receipts.shopId, shopId), eq(receipts.storagePath, storagePath)),
+      and(eq(receipts.shopId, shopId), deps.scope ? eq(receipts.id, deps.scope.documentId) : eq(receipts.storagePath, storagePath)),
     );
 }
 
@@ -97,7 +94,7 @@ export async function startReceipt(
     .where(
       and(
         eq(receipts.shopId, data.shopId),
-        eq(receipts.storagePath, storagePath),
+        deps.scope ? eq(receipts.id, deps.scope.documentId) : eq(receipts.storagePath, storagePath),
       ),
     );
 }
@@ -118,14 +115,13 @@ export async function saveReceipt(
       .where(
         and(
           eq(receipts.shopId, data.shopId),
-          eq(receipts.storagePath, storagePath),
+          deps.scope ? eq(receipts.id, deps.scope.documentId) : eq(receipts.storagePath, storagePath),
         ),
       )
       .limit(1);
     const receiptId = receiptRows[0]?.id;
     if (!receiptId) {
-      jobLogger.warn('receipt row missing for storage path');
-      return;
+      throw new Error('Receipt no longer available for processing');
     }
 
     checkDeadline(deadline);
@@ -234,7 +230,7 @@ export async function claimRecipe(
     .where(
       and(
         eq(recipes.shopId, data.shopId),
-        eq(recipes.storagePath, storagePath),
+        deps.scope ? eq(recipes.id, deps.scope.documentId) : eq(recipes.storagePath, storagePath),
       ),
     )
     .limit(1);
@@ -643,7 +639,7 @@ export async function recordTerminalFailure(
         .where(
           and(
             eq(receipts.shopId, data.shopId),
-            eq(receipts.storagePath, storagePath),
+            deps.scope ? eq(receipts.id, deps.scope.documentId) : eq(receipts.storagePath, storagePath),
             inArray(receipts.status, ['pending', 'processing', 'failed']),
           ),
         );
@@ -658,7 +654,7 @@ export async function recordTerminalFailure(
         .where(
           and(
             eq(recipes.shopId, data.shopId),
-            eq(recipes.storagePath, storagePath),
+            deps.scope ? eq(recipes.id, deps.scope.documentId) : eq(recipes.storagePath, storagePath),
             inArray(recipes.status, ['pending', 'processing', 'failed']),
           ),
         );
@@ -680,6 +676,7 @@ export async function recordTerminalFailure(
         },
         'could not record terminal failure',
       );
+    throw updateError;
   }
 }
 
@@ -695,111 +692,4 @@ export async function findOrCreateInventoryItem(
 export function checkDeadline(deadline: Date | null) {
   if (deadline && new Date() > deadline)
     throw new Error('Processing deadline exceeded');
-}
-
-export async function processGroup(
-  deps: WorkerDeps,
-  data: MediaJobData,
-  operation: (deps: WorkerDeps, data: MediaJobData) => Promise<void>,
-) {
-  await deps.db.transaction(async (tx) => {
-    const [association] = await tx
-      .select()
-      .from(mediaUploads)
-      .where(
-        and(
-          eq(mediaUploads.id, data.uploadId!),
-          eq(mediaUploads.shopId, data.shopId),
-        ),
-      )
-      .limit(1);
-    if (!association || association.processedAt) return;
-    const documentTable =
-      association.kind === 'receipt'
-        ? receipts
-        : association.kind === 'order'
-          ? orders
-          : recipes;
-    const documentId =
-      association.receiptId ?? association.recipeId ?? association.orderId;
-    if (!documentId) throw new Error('Upload has no associated document');
-    // Deletion and processing share document -> upload lock order.
-    const [document] = await tx
-      .select({ id: documentTable.id })
-      .from(documentTable)
-      .where(
-        and(
-          eq(documentTable.id, documentId),
-          eq(documentTable.shopId, data.shopId),
-        ),
-      )
-      .limit(1)
-      .for('update');
-    if (!document) return;
-    const [upload] = await tx
-      .select()
-      .from(mediaUploads)
-      .where(
-        and(
-          eq(mediaUploads.id, data.uploadId!),
-          eq(mediaUploads.shopId, data.shopId),
-        ),
-      )
-      .limit(1)
-      .for('update');
-    if (!upload || upload.processedAt) return;
-    if (
-      (upload.receiptId ?? upload.recipeId ?? upload.orderId) !== documentId ||
-      upload.kind !== association.kind
-    ) {
-      throw new Error('Upload document association changed during processing');
-    }
-    if (!upload.queuedAt)
-      throw new Error('Document has not completed uploading');
-    validateSourceLimits(upload.sources);
-    const first = upload.sources[0]!;
-    const sourceBytes = new Map<string, Uint8Array>();
-    await operation(
-      {
-        ...deps,
-        db: tx as unknown as Database,
-        afterCommit: deps.afterCommit,
-        getObjectBytes: async (path) => {
-          const bytes = await deps.getObjectBytes(path);
-          sourceBytes.set(path, bytes);
-          return bytes;
-        },
-      },
-      {
-        ...data,
-        kind: upload.kind,
-        sources: upload.sources,
-        storagePath: first.storagePath,
-        contentType: first.contentType,
-        originalFilename: first.originalFilename,
-        orderId: upload.orderId ?? undefined,
-      },
-    );
-    const createPreview = deps.createSourcePreview;
-    const sources = createPreview
-      ? await prepareSourcePreviews(
-          upload.sources,
-          async (source) => {
-            const bytes = sourceBytes.get(source.storagePath);
-            if (!bytes) throw new Error('Source bytes unavailable');
-            return createPreview(source, bytes);
-          },
-          (source) => {
-            workerLogger.warn({
-              event: 'document_preview_failed', shopId: data.shopId, uploadId: upload.id,
-              sourceId: source.sourceId, contentType: source.contentType,
-            }, 'preview unavailable; original retained');
-          },
-        )
-      : upload.sources;
-    await tx
-      .update(mediaUploads)
-      .set({ processedAt: new Date(), sources })
-      .where(eq(mediaUploads.id, upload.id));
-  });
 }

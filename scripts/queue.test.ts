@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_JOB_OPTIONS } from '../src/lib/queue.js';
+import { DEFAULT_JOB_OPTIONS, createRedisConnection } from '../src/lib/queue.js';
 
 /**
  * BullMQ's built-in `exponential` strategy is `delay * 2 ** (attemptsMade - 1)`
@@ -38,4 +38,15 @@ test('queue: the worst case is one 3s wait, not 5s/10s/20s', () => {
 test('queue: neither half of the old 4-attempt / 5s schedule survives', () => {
   assert.notEqual(DEFAULT_JOB_OPTIONS.attempts, 4);
   assert.notEqual((DEFAULT_JOB_OPTIONS.backoff as { delay: number }).delay, 5_000);
+});
+
+test('queue publishers bound Redis retries while workers retain the blocking connection contract', () => {
+  const producer = createRedisConnection('producer'), worker = createRedisConnection('worker');
+  try {
+    assert.equal(producer.options.maxRetriesPerRequest, 1);
+    assert.equal(producer.options.connectTimeout, 5000);
+    assert.equal(producer.options.retryStrategy!(2), null);
+    assert.equal(worker.options.maxRetriesPerRequest, null);
+    assert.equal(worker.options.retryStrategy!(100), 2000);
+  } finally { producer.disconnect(); worker.disconnect(); }
 });

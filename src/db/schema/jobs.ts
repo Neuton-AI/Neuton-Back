@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, foreignKey, index, pgSchema, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { bigint, check, foreignKey, index, pgSchema, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { authUsers } from './auth.js';
 import { shops } from './identity.js';
 import { mediaUploads } from './uploads.js';
@@ -22,6 +22,7 @@ export const jobAuthorizations = appPrivate.table('job_authorizations', {
   sourcesDigest: varchar('sources_digest', { length: 64 }).notNull(),
   state: text('state', { enum: ['accepted', 'queued', 'processing', 'completed', 'failed', 'cancelled'] }).notNull().default('accepted'),
   correlationId: varchar('correlation_id', { length: 128 }).notNull(),
+  resourceRevision: bigint('resource_revision', { mode: 'number' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   queuedAt: timestamp('queued_at', { withTimezone: true }),

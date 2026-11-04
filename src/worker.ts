@@ -1,196 +1,111 @@
 import { pathToFileURL } from 'node:url';
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { sql as sqlClient } from './db/client.js';
-import {
-  createRedisConnection,
-  QUEUE_NAME,
-  type MediaJobData,
-} from './lib/queue.js';
+import { createWorkerDatabase } from './db/worker-client.js';
+import { createRedisConnection, QUEUE_NAME, getMediaQueue, enqueueMediaJobOn, closeMediaQueue } from './lib/queue.js';
 import { env } from './env.js';
 import { workerLogger, loggerFactory } from './lib/logger/index.js';
-import {
-  geminiCircuitBreaker,
-  CircuitOpenError,
-} from './lib/circuitBreaker.js';
+import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
-import {
-  DocumentProcessingService,
-  defaultWorkerDeps,
-  type WorkerDeps,
-  recordTerminalFailure,
-} from './modules/processing/processing.service.js';
-export {
-  processReceipt,
-  processRecipe,
-  processOrderDocument,
-  loadDocumentInput,
-  findOrCreateInventoryItem,
-  recordTerminalFailure,
-  defaultWorkerDeps,
-  type WorkerDeps,
-} from './modules/processing/processing.service.js';
-function jobLogContext(data: MediaJobData, job: Job<MediaJobData>) {
-  return {
-    entryPoint: 'worker',
-    requestId: job.id,
-    jobId: job.id,
-    kind: data.kind,
-    shopId: data.shopId,
-    userId: data.uploadedBy ?? undefined,
-    traceId: data.traceId,
-  };
+import { DocumentProcessingService, defaultWorkerServices, hydratedJob, type WorkerDeps } from './modules/processing/processing.service.js';
+import type { PersistedProcessingJob } from './modules/processing/contracts.js';
+import { withJobTransaction } from './db/job-context.js';
+import { queryRows } from './db/query-rows.js';
+import { sql } from 'drizzle-orm';
+import { z } from 'zod';
+export { processReceipt, processRecipe, processOrderDocument, loadDocumentInput,
+  findOrCreateInventoryItem, recordTerminalFailure, type WorkerDeps } from './modules/processing/processing.service.js';
+
+export function persistedJobId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || !('jobId' in payload) || typeof payload.jobId !== 'string') return null;
+  return /^upload-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.jobId) ? payload.jobId : null;
 }
 
-/**
- * Routes a job to its handler and translates failures into BullMQ semantics.
- * Permanent errors stop the retry schedule and surface a shop-safe message.
- * Also enforces an overall processing deadline and respects the circuit breaker.
- */
-export async function runJob(
-  data: MediaJobData,
-  job: Job<MediaJobData>,
-  deps: WorkerDeps = defaultWorkerDeps,
-): Promise<void> {
-  const jobLogger = workerLogger.child(jobLogContext(data, job));
-  if (!data.uploadId)
-    throw new UnrecoverableError('Legacy upload jobs are no longer supported');
-  if (!['receipt', 'recipe', 'product', 'order'].includes(data.kind))
-    throw new UnrecoverableError(`Unsupported job kind: ${String(data.kind)}`);
-  jobLogger.info('job started');
-
-  // Check circuit breaker before starting
-  if (!geminiCircuitBreaker.canExecute()) {
-    const status = geminiCircuitBreaker.getStatus();
-    jobLogger.warn(
-      { circuitState: status.state, failureCount: status.failureCount },
-      'circuit breaker open, failing fast',
-    );
-    throw new CircuitOpenError(env.CIRCUIT_BREAKER_RESET_MS);
-  }
-
-  // Overall deadline for the entire job (including retries within the job)
-  const deadline = Date.now() + env.RECEIPT_PROCESSING_TIMEOUT_MS;
-  const checkDeadline = () => {
-    if (Date.now() > deadline) {
-      throw new Error(
-        `Job exceeded overall processing deadline of ${env.RECEIPT_PROCESSING_TIMEOUT_MS}ms`,
-      );
-    }
-  };
-
+export async function runJob(data: unknown, job: Pick<Job, 'id' | 'updateProgress'>, deps: WorkerDeps): Promise<void> {
+  const jobId = persistedJobId(data);
+  if (!jobId) throw new UnrecoverableError('Persisted job ID is required; legacy upload jobs are not supported');
+  if (!geminiCircuitBreaker.canExecute()) throw new CircuitOpenError(env.CIRCUIT_BREAKER_RESET_MS);
+  const service = new DocumentProcessingService(deps);
   try {
-    checkDeadline();
-    await new DocumentProcessingService(deps).run(data, job);
-    // Record success for circuit breaker
-    geminiCircuitBreaker.recordSuccess();
+    const completed = await service.run({ jobId }, job);
+    if (completed) geminiCircuitBreaker.recordSuccess();
   } catch (error) {
-    // Record failure for circuit breaker (but not for permanent errors or circuit open)
-    if (!(error instanceof CircuitOpenError) && !isPermanentError(error)) {
-      geminiCircuitBreaker.recordFailure();
-    }
-
-    // Billing/auth/malformed-payload errors will not resolve on retry, so
-    // drop them straight to failed instead of spending the backoff schedule.
-    if (isPermanentError(error)) {
-      await recordTerminalFailure(deps, data, error);
-      throw new UnrecoverableError(publicFailureMessage(error));
-    }
-
-    // Processing deadline exceeded - treat as permanent failure to avoid retries
-    if (error instanceof Error && error.message.includes('deadline exceeded')) {
-      await recordTerminalFailure(deps, data, error);
+    if (!(error instanceof CircuitOpenError) && !isPermanentError(error)) geminiCircuitBreaker.recordFailure();
+    const timedOut = error instanceof Error && /deadline exceeded/i.test(error.message);
+    if (isPermanentError(error) || timedOut) {
+      await service.fail(jobId, error);
       throw new UnrecoverableError(publicFailureMessage(error));
     }
     throw error;
   }
-
-  jobLogger.info('job completed');
 }
 
-/**
- * Importing this module must not boot a worker: the test suite imports it to
- * exercise the handlers above, and a stray worker would hold a Redis
- * connection and the event loop open.
- */
-function isEntrypoint(): boolean {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  try {
-    return import.meta.url === pathToFileURL(entry).href;
-  } catch {
-    return false;
+/** Fixed IDs recover the SQL-commit/Redis-publication crash window. */
+export class JobPublicationDispatcher {
+  private timer?: ReturnType<typeof setInterval>;
+  private running?: Promise<void>;
+  private stopped = false;
+  constructor(private readonly deps: Pick<WorkerDeps, 'db'>, private readonly publish = async (data: ReturnType<typeof hydratedJob>) =>
+    enqueueMediaJobOn(getMediaQueue(), data)) {}
+  drain() {
+    if (this.stopped) return Promise.resolve();
+    if (!this.running) this.running = this.run().finally(() => { this.running = undefined; });
+    return this.running;
   }
+  private async run() {
+    const jobs = await queryRows(this.deps.db, sql`select * from app_private.pending_job_publications(20)`, z.object({ job_id: z.string() }));
+    for (const job of jobs) {
+      if (this.stopped) return;
+      const data = await withJobTransaction(this.deps.db, job.job_id, async scope => hydratedJob(scope), false);
+      if (!data) continue;
+      const publication = await this.publish(data);
+      if (!publication.queued) continue;
+      await withJobTransaction(this.deps.db, job.job_id, async scope => {
+        await scope.database.execute(sql`select app_private.mark_job_published(${scope.jobId}::text)`);
+      }, false);
+    }
+  }
+  start() {
+    if (this.timer || this.stopped) return;
+    const tick = () => { void this.drain().catch(() => workerLogger.error({ event: 'job_publication_failed' }, 'job publication will retry')); };
+    this.timer = setInterval(tick, 5000); this.timer.unref(); tick();
+  }
+  async stop() { this.stopped = true; clearInterval(this.timer); await this.running; }
 }
 
-function startWorker(): void {
-  const worker = new Worker<MediaJobData>(
-    QUEUE_NAME,
-    (job) => runJob(job.data, job),
-    {
-      connection: createRedisConnection(),
-      concurrency: env.RECEIPT_WORKER_CONCURRENCY,
-      /** Duration of the lock for the job in milliseconds. If the lock is lost, the job will be moved back to wait. */
-      lockDuration: env.JOB_LOCK_DURATION_MS,
-    },
-  );
-
-  worker.on('completed', (job) =>
-    workerLogger.info(
-      { jobId: job.id, traceId: job.data.traceId, shopId: job.data.shopId },
-      'job done',
-    ),
-  );
-  worker.on('failed', (job, error) => {
-    workerLogger.error(
-      {
-        jobId: job?.id,
-        errorType: error.constructor.name,
-        traceId: job?.data.traceId,
-        shopId: job?.data.shopId,
-      },
-      'job failed',
-    );
-    // Covers transient errors that ran out of attempts, so the receipt row does
-    // not stay on "processing" with no explanation.
-    if (
-      job &&
-      (error instanceof UnrecoverableError || error instanceof CircuitOpenError)
-    )
-      return;
-    if (!job) return;
-    void recordTerminalFailure(defaultWorkerDeps, job.data, error);
+function startWorker() {
+  const pool = createWorkerDatabase();
+  const deps: WorkerDeps = { db: pool.database, ...defaultWorkerServices };
+  const redis = createRedisConnection();
+  const worker = new Worker<PersistedProcessingJob>(QUEUE_NAME, job => runJob(job.data, job, deps), {
+    connection: redis, concurrency: env.RECEIPT_WORKER_CONCURRENCY, lockDuration: env.JOB_LOCK_DURATION_MS,
   });
-  worker.on('error', (error) =>
-    workerLogger.error({ errorType: error.constructor.name }, 'worker error'),
-  );
-
-  workerLogger.info(
-    { queue: QUEUE_NAME, concurrency: env.RECEIPT_WORKER_CONCURRENCY },
-    'neuton vision worker ready',
-  );
-
+  const publications = new JobPublicationDispatcher(deps);
+  const failures = new Set<Promise<unknown>>();
+  worker.on('failed', (job, error) => {
+    workerLogger.error({ jobId: job?.id, errorType: error.constructor.name }, 'job failed');
+    if (!job || error instanceof UnrecoverableError || job.attemptsMade < (job.opts.attempts ?? 1)) return;
+    const jobId = persistedJobId(job.data);
+    if (!jobId) return;
+    const failure = new DocumentProcessingService(deps).fail(jobId, error).catch(() => {
+      workerLogger.error({ event: 'terminal_failure_unavailable', jobId }, 'could not record terminal failure');
+    }).finally(() => failures.delete(failure));
+    failures.add(failure);
+  });
+  worker.on('error', error => workerLogger.error({ errorType: error.constructor.name }, 'worker error'));
+  publications.start();
+  workerLogger.info({ queue: QUEUE_NAME, concurrency: env.RECEIPT_WORKER_CONCURRENCY }, 'neuton vision worker ready');
   let stopping = false;
-  const shutdown = async (signal: string) => {
+  const shutdown = async () => {
     if (stopping) return;
     stopping = true;
-    workerLogger.info(`${signal} received, closing worker`);
-    const timer = setTimeout(() => process.exit(1), 15000);
-    timer.unref();
+    const timer = setTimeout(() => process.exit(1), 15000); timer.unref();
     try {
-      await worker.close();
-      await sqlClient.end({ timeout: 5 });
-      await loggerFactory.shutdown();
-      clearTimeout(timer);
-      process.exit(0);
-    } catch {
-      process.exit(1);
-    }
+      await publications.stop(); await worker.close(); await Promise.allSettled(failures);
+      await closeMediaQueue(); await redis.quit(); await pool.close(); await loggerFactory.shutdown();
+      clearTimeout(timer); process.exit(0);
+    } catch { process.exit(1); }
   };
-
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown()); process.on('SIGINT', () => void shutdown());
 }
-
-if (isEntrypoint()) {
-  startWorker();
-}
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) startWorker();
