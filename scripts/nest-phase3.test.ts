@@ -34,7 +34,7 @@ const shop = {
   updatedAt: date,
   privateColumn: 'hidden',
 };
-async function fixture(db: FakeDb, role = 'owner') {
+async function fixture(db: FakeDb, role = 'owner', passwordChange?: PasswordService['change']) {
   const { database, orm } = await isolatedAuthDatabase();
   await database.query(`insert into auth_private.users(id,email,normalized_email,status,email_confirmed_at)
     values($1,'test@example.test','test@example.test','active',now())`, [USER_ID]);
@@ -72,7 +72,7 @@ async function fixture(db: FakeDb, role = 'owner') {
       { provide: 'PHASE_C_DATABASE', useValue: { onModuleDestroy: () => database.close() } },
       ShopsService,
       ShopsPersistence,
-      PasswordService,
+      passwordChange ? { provide: PasswordService, useValue: { change: passwordChange } } : PasswordService,
       AnalyticsService,
       AnalyticsPersistence,
       { provide: SHOPS_DATABASE, useValue: scopedDatabase },
@@ -88,6 +88,27 @@ async function fixture(db: FakeDb, role = 'owner') {
   return { app, database };
 }
 const headers = { cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID };
+test('password change returns 204 with only a replacement cookie and no response body', async () => {
+  const secret = Buffer.alloc(32, 19).toString('base64url');
+  const h = await fixture(new FakeDb(), 'owner', async () => ({
+    secret, sessionId: TEST_SESSION_ID, expiresAt: new Date(Date.now() + 60_000),
+  }));
+  try {
+    const response = await request(h.app.getHttpServer())
+      .post('/api/v1/profile/password')
+      .set('Cookie', TEST_SESSION_COOKIE)
+      .send({ currentPassword: 'synthetic current password', newPassword: 'synthetic replacement password' });
+    assert.equal(response.status, 204);
+    assert.equal(response.text, '');
+    assert.equal(response.headers['cache-control'], 'no-store');
+    const cookies = response.headers['set-cookie'];
+    assert.ok(Array.isArray(cookies));
+    assert.ok(cookies.some((cookie: string) =>
+      cookie.startsWith(`neuton-dev-session=${secret};`) && cookie.includes('HttpOnly')));
+  } finally {
+    await h.app.close();
+  }
+});
 test('profile requires authentication without a selected shop and maps only public fields', async () => {
   const db = new FakeDb({
     'select:shopMembers': [

@@ -57,14 +57,13 @@ export class ShopsController {
   ) {
     return this.shops.updateProfile(actor, updateProfileSchema.parse(body));
   }
-  @Post('profile/password') @HttpCode(200) @UseGuards(SessionGuard) async password(
+  @Post('profile/password') @HttpCode(204) @UseGuards(SessionGuard) async password(
     @CurrentSession() actor: SessionActor,
     @Body() body: unknown,
     @Res({ passthrough: true }) response: Response,
   ) {
     const result = await this.shops.password(actor, passwordSchema.parse(body));
     response.setHeader('Set-Cookie', this.cookies.set('session', result.secret, result.expiresAt));
-    return { ok: true };
   }
   @Get('shop/delivery-preview') @UseGuards(ShopGuard) delivery(
     @CurrentActor() actor: ActorContext,
