@@ -114,7 +114,7 @@ async function streamHarness(t: TestContext, enableTimers = true) {
     },
     end: t.mock.fn(),
   });
-  const resolve = t.mock.fn(async () => ({}));
+  const resolve = t.mock.fn(async () => ({ user: { id: 'user-a' }, sessionId: 'session-a', shop: { id: 'shop-a' } }));
   const events = new SyncEvents();
   const controller = new SyncEventsController(
     events,
@@ -122,20 +122,19 @@ async function streamHarness(t: TestContext, enableTimers = true) {
     { resolve } as unknown as IdentityService,
   );
   await controller.stream(
-    { shop: { id: 'shop-a' } } as ActorContext,
+    { user: { id: 'user-a' }, sessionId: 'session-a', shop: { id: 'shop-a' } } as ActorContext,
     { headers: { cookie: 'fixture-cookie' } } as Request,
     response as unknown as Response,
   );
   t.after(() => response.emit('close'));
   const tick = async (ms: number) => {
     t.mock.timers.tick(ms);
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let index = 0; index < 12; index++) { await Promise.resolve(); }
   };
   return { frames, response, resolve, events, tick };
 }
 
-test('idle heartbeats skip identity checks and cannot flush a jittered hint early', async (t) => {
+test('idle heartbeats reauthorize and cannot flush a jittered hint early', async (t) => {
   t.mock.method(Math, 'random', () => 0.999999);
   const h = await streamHarness(t);
   assert.equal(h.resolve.mock.callCount(), 1);
@@ -143,16 +142,16 @@ test('idle heartbeats skip identity checks and cannot flush a jittered hint earl
   h.events.changed('shop-a');
   await h.tick(1000); // Heartbeat during the 4.249 second change window.
   assert.deepEqual(h.frames, ['event: reconcile\ndata: {}\n\n', ': heartbeat\n\n']);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
   h.events.changed('shop-a'); // Does not restart the existing timer.
   await h.tick(3248);
   assert.equal(h.frames.length, 2);
   await h.tick(2);
   assert.equal(h.frames.length, 3);
-  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.resolve.mock.callCount(), 3);
   await h.tick(11750);
   assert.equal(h.frames.at(-1), ': heartbeat\n\n');
-  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.resolve.mock.callCount(), 4);
 });
 
 test('minimum batching is 250 ms and a hint during authorization gets a trailing send', async (t) => {
@@ -160,7 +159,7 @@ test('minimum batching is 250 ms and a hint during authorization gets a trailing
   const h = await streamHarness(t);
   let release!: () => void;
   h.resolve.mock.mockImplementationOnce(() => new Promise((resolve) => {
-    release = () => resolve({});
+    release = () => resolve({ user: { id: 'user-a' }, sessionId: 'session-a', shop: { id: 'shop-a' } });
   }));
   h.events.changed('shop-a');
   await h.tick(249);
@@ -200,15 +199,15 @@ test('disconnect detaches listeners and cancels delayed hints', async (t) => {
   assert.equal(h.response.end.mock.callCount(), 1);
 });
 
-test('slow heartbeat clients are closed without another identity check', async (t) => {
+test('slow heartbeat clients are closed after reauthorizing', async (t) => {
   const h = await streamHarness(t);
   h.response.write = () => false;
   await h.tick(15000);
   assert.equal(h.response.end.mock.callCount(), 1);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
   h.events.changed('shop-a');
   await h.tick(60000);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
 });
 
 test('separate connections independently sample jitter for each new batch', async (t) => {
@@ -228,4 +227,27 @@ test('separate connections independently sample jitter for each new batch', asyn
   assert.equal(a.frames.length, 2);
   await a.tick(1);
   assert.equal(a.frames.length, 3);
+});
+
+test('a quiet stream closes on revocation at its next fifteen-second check', async t => {
+  const h = await streamHarness(t);
+  h.resolve.mock.mockImplementation(async () => { throw forbidden('Revoked without a hint'); });
+  await h.tick(14999);
+  assert.equal(h.response.end.mock.callCount(), 0);
+  await h.tick(1);
+  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.response.end.mock.callCount(), 1);
+  assert.equal(h.frames.length, 1);
+});
+
+test('quiet streams close when current authority cannot be established or their resolved identity changes', async t => {
+  const h = await streamHarness(t);
+  h.resolve.mock.mockImplementation(async () => ({ user: { id: 'other-user' }, sessionId: 'other-session', shop: { id: 'shop-a' } }));
+  await h.tick(15000);
+  assert.equal(h.response.end.mock.callCount(), 1);
+  const unavailable = await streamHarness(t, false);
+  unavailable.resolve.mock.mockImplementation(() => new Promise(() => {}));
+  await unavailable.tick(15000);
+  await unavailable.tick(15000);
+  assert.equal(unavailable.response.end.mock.callCount(), 1);
 });

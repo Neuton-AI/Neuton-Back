@@ -26,6 +26,8 @@ export class SyncEventsController {
     let sending = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let authorization: Promise<void> | undefined;
+    let authorizationTimeout: ReturnType<typeof setTimeout> | undefined;
     let detach = () => {};
     const stop = () => {
       if (closed) return;
@@ -33,19 +35,31 @@ export class SyncEventsController {
       detach();
       clearTimeout(timer);
       clearInterval(heartbeat);
+      clearTimeout(authorizationTimeout);
       response.end();
     };
     response.once('close', stop);
+    const authorize = (): Promise<void> => {
+      if (authorization) return authorization;
+      authorizationTimeout = setTimeout(stop, 15000);
+      authorization = (async () => {
+        const resolved = await this.identity.resolve({ cookie: request.headers.cookie, shopId: actor.shop.id });
+        if (resolved.user.id !== actor.user.id || resolved.sessionId !== actor.sessionId || resolved.shop.id !== actor.shop.id) {
+          throw new Error('Stream identity changed');
+        }
+      })().finally(() => {
+        clearTimeout(authorizationTimeout);
+        authorization = undefined;
+      });
+      return authorization;
+    };
     const send = async () => {
       if (closed || sending) return;
       sending = true;
       pending = false; // Hints arriving during authorization need a trailing send.
       try {
         // Recheck membership/session before forwarding any hint, including recovery.
-        await this.identity.resolve({
-          cookie: request.headers.cookie,
-          shopId: actor.shop.id,
-        });
+        await authorize();
         if (closed) return;
         if (!response.write('event: reconcile\ndata: {}\n\n')) stop(); // Bound slow-client buffering; reconnect will compare.
       } catch {
@@ -81,16 +95,16 @@ export class SyncEventsController {
       });
       pending = true;
       await send(); // Initial reconciliation starts only after LISTEN and subscription are active.
-      if (!closed)
+      if (!closed) {
         heartbeat = setInterval(() => {
-          // Keepalive bytes do not require identity/database work or consume hints.
           if (closed) return;
-          try {
+          // Quiet streams reauthorize too. Resolution never renews activity.
+          void authorize().then(() => {
+            if (closed) return;
             if (!response.write(': heartbeat\n\n')) stop();
-          } catch {
-            stop();
-          }
+          }).catch(stop);
         }, 15000);
+      }
     } catch {
       actor.log.error(
         { event: 'sync_listener_unavailable' },

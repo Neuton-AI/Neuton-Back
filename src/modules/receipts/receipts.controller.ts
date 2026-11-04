@@ -53,7 +53,7 @@ export class ReceiptsController {
   ) {
     const id = receiptIdSchema.parse(params).id;
     const read = () => this.receipts.detail(actor, id);
-    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'receipt', id, read) : read();
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'receipt', id, scope => this.receipts.inTransaction(scope, () => {}).detail(actor, id)) : read();
   }
   @Patch(':id') async edit(
     @CurrentActor() actor: ActorContext,

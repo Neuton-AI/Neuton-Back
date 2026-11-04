@@ -83,7 +83,7 @@ export class RecipeController {
   recipe(@CurrentActor() actor: ActorContext, @Param() params: unknown, @Req() request: HttpRequest) {
     const id = recipeIdSchema.parse(params).id;
     const read = () => this.recipeService.recipe(actor, id);
-    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'recipe', id, read) : read();
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'recipe', id, scope => this.recipeService.inTransaction(scope, () => {}).recipe(actor, id)) : read();
   }
 
   @Patch('recipes/:id')

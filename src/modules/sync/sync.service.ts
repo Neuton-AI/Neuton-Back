@@ -17,16 +17,20 @@ export class SyncService {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     return compareDocuments(
       documents,
-      await this.persistence.documents(actor.shop.id),
+      await this.persistence.documents(actor),
     );
   }
-  async snapshot<T extends object>(actor: ActorContext, kind: DocumentMeta['kind'], id: string, read: () => Promise<T>) {
+  async snapshot<T extends object>(actor: ActorContext, kind: DocumentMeta['kind'], id: string, read: (scope: ShopTransaction) => Promise<T>) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     for (let attempt = 0; attempt < 3; attempt++) {
-      const before = await this.persistence.version(actor.shop.id, kind, id);
-      const document = await read();
-      const after = await this.persistence.version(actor.shop.id, kind, id);
-      if (before !== undefined && before === after) return { ...document, syncVersion: after };
+      const result = await this.persistence.inShop(actor, async scope => {
+        const before = await this.persistence.version(scope, kind, id);
+        const document = await read(scope);
+        const after = await this.persistence.version(scope, kind, id);
+        if (before !== undefined && before === after) return { ...document, syncVersion: after };
+        return null;
+      });
+      if (result) return result;
     }
     throw new AppError(503, 'SYNC_SNAPSHOT_RETRY', 'Document changed during download; retry sync');
   }

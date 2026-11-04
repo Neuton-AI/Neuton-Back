@@ -17,20 +17,25 @@ export type SyncTransaction = Parameters<
 @Injectable()
 export class SyncPersistence {
   constructor(@Inject(SYNC_DATABASE) readonly database: Database) { }
-  async version(shopId: string, kind: DocumentMeta['kind'], id: string): Promise<number | undefined> {
-    const rows = await this.database.execute(sql`select updated_at from document_versions where shop_id=${shopId}::uuid and kind=${kind} and id=${id}::uuid`);
-    return rows[0] ? Number(rows[0].updated_at) : undefined;
+  inShop<T>(actor: ActorContext, read: (scope: ShopTransaction) => Promise<T>) {
+    return withShopTransaction(this.database, actor.session, actor.shop.id, async scope => {
+      requireActorRole({ ...actor, role: scope.role }, ['owner','admin','member']);
+      return read(scope);
+    });
   }
-  async documents(shopId: string): Promise<DocumentMeta[]> {
-    const rows = await this.database.execute(
-      sql`select kind,id,updated_at,deleted from document_versions where shop_id=${shopId}::uuid`,
-    );
-    return rows.map((row) => ({
-      kind: row.kind as DocumentMeta['kind'],
-      id: String(row.id),
-      updatedAt: Number(row.updated_at),
-      deleted: Boolean(row.deleted),
-    }));
+  async version(scope: ShopTransaction, kind: DocumentMeta['kind'], id: string): Promise<number | undefined> {
+    const rows = await queryRows(scope.database,
+      sql`select updated_at from document_versions where shop_id=${scope.shopId}::uuid and kind=${kind} and id=${id}::uuid and not deleted`,
+      z.object({ updated_at: z.coerce.number().int() }));
+    return rows[0]?.updated_at;
+  }
+  async documents(actor: ActorContext): Promise<DocumentMeta[]> {
+    return this.inShop(actor, async scope => {
+      const rows = await queryRows(scope.database,
+        sql`select kind,id,updated_at,deleted from document_versions where shop_id=${scope.shopId}::uuid`,
+        z.object({ kind: z.enum(['receipt','recipe','order']), id: z.string().uuid(), updated_at: z.coerce.number().int(), deleted: z.boolean() }));
+      return rows.map(row => ({ kind: row.kind, id: row.id, updatedAt: row.updated_at, deleted: row.deleted }));
+    });
   }
   async mutate(
     currentActor: ActorContext,
@@ -93,9 +98,10 @@ export class SyncPersistence {
         sql`select set_config('neuton.sync_document_id',${input.documentId ?? ''},true)`,
       );
       const body = await operation(scope);
-      await tx.execute(
-        sql`insert into document_mutations(shop_id,id,user_id,request,response,status) values (${actor.shopId}::uuid,${input.id}::uuid,${actor.userId}::uuid,${signature}::jsonb,${JSON.stringify(body)}::jsonb,${input.status})`,
-      );
+      const [inserted] = await queryRows(tx,
+        sql`insert into document_mutations(shop_id,id,user_id,request,response,status) values (${actor.shopId}::uuid,${input.id}::uuid,${actor.userId}::uuid,${signature}::jsonb,${JSON.stringify(body)}::jsonb,${input.status}) on conflict(shop_id,id) do nothing returning id`,
+        z.object({ id: z.string().uuid() }));
+      if (!inserted) throw conflict('Sync request ID was already used');
       return { status: input.status, body };
     });
   }

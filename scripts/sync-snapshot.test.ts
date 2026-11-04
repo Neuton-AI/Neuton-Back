@@ -5,7 +5,7 @@ import { SyncService } from '../src/modules/sync/sync.service.js';
 import type { SyncPersistence } from '../src/modules/sync/sync.persistence.js';
 import type { ActorContext } from '../src/modules/identity/contracts.js';
 const actor = { role: 'owner', shop: { id: 'fixture-shop' } } as ActorContext;
-const service = (versions: number[]) => new SyncService({ version: async () => versions.shift() } as unknown as SyncPersistence);
+const service = (versions: number[]) => new SyncService({ version: async () => versions.shift(), inShop: async (_actor: unknown, read: () => Promise<unknown>) => read() } as unknown as SyncPersistence);
 test('a download racing a commit is retried and labelled with the stable server revision', async () => {
   let reads = 0;
   const result = await service([1, 2, 2, 2]).snapshot(actor, 'recipe', 'id', async () => ({ recipe: { name: `Read ${++reads}` } }));

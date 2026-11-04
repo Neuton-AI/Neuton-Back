@@ -43,7 +43,7 @@ export class OrdersController {
   detail(@CurrentActor() actor: ActorContext, @Param() params: unknown, @Req() request: HttpRequest) {
     const id = orderIdSchema.parse(params).id;
     const read = () => this.orders.detail(actor, id);
-    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'order', id, read) : read();
+    return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'order', id, scope => this.orders.inTransaction(scope, () => {}).detail(actor, id)) : read();
   }
 
   @Post('quote')
