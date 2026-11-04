@@ -3,13 +3,19 @@
 Run `npm run db:provision` from `Neuton-Back`. Only the existing owner's
 `MIGRATION_DATABASE_URL` is needed. If it is not exported in the terminal, the
 command prompts for the owner connection string with hidden input. It never
-loads environment files, generates runtime passwords, prints connection strings,
-or writes credentials to a local file.
+loads environment files, prints connection strings/passwords, or writes
+credentials to a local file.
 
-Provisioning creates four restricted LOGIN roles without passwords and three
-NOLOGIN helper roles. In Neon, set/reset each LOGIN role's password, then copy
+Provisioning creates four restricted LOGIN roles with independent random
+bootstrap passwords and three passwordless NOLOGIN helper roles. The bootstrap
+passwords are never returned; they let Neon initialize its password-reset flow. In Neon, set/reset each LOGIN role's password, then copy
 its connection string into the matching runtime environment variable. No runtime
-URL is needed before its role exists. Existing role passwords are preserved.
+URL is needed before its role exists. Existing role passwords are preserved. Neon cannot reset a role whose password
+is NULL. For fresh roles created by the earlier passwordless setup, run
+`scripts/initialize-runtime-passwords.sql` once as the owner in Neon's SQL Editor,
+then reset the four LOGIN passwords in the Console. The SQL generates passwords
+inside PostgreSQL and returns none. It replaces these four roles' current
+passwords, so it is an initialization operation, not a routine provisioning step.
 
 The owner URL must target the fresh, empty application database. Copied URLs can retain `sslmode=require&channel_binding=require`. The v4 driver
 requires both verified TLS and channel-bound authentication, including during

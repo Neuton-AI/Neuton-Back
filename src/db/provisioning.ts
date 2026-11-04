@@ -1,4 +1,5 @@
 import postgres from 'postgres';
+import { randomBytes } from 'node:crypto';
 import type { EnvironmentSource } from '../config/database.js';
 import { createDatabaseConnection } from './connection.js';
 
@@ -70,7 +71,8 @@ export async function provisionRoleTransaction(tx: postgres.TransactionSql): Pro
     let statement: string;
     if (role.login) {
       const [row] = await tx<{ statement: string }[]>`
-        select format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT', ${role.name}::text) as statement`;
+        select format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT PASSWORD %L',
+          ${role.name}::text, ${randomBytes(32).toString('base64url')}::text) as statement`;
       statement = row!.statement;
     } else {
       const [row] = await tx<{ statement: string }[]>`

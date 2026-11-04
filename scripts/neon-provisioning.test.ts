@@ -5,6 +5,7 @@ import { provisionRoleTransaction } from '../src/db/provisioning.js';
 import { provisioningFailureMessage } from '../src/db/provisioning-cli.js';
 import { PGlite } from '@electric-sql/pglite';
 import type postgres from 'postgres';
+import { readFileSync } from 'node:fs';
 
 test('provisioning defines restricted roles without requiring future runtime credentials', () => {
   const roles = readProvisioningRoles();
@@ -28,7 +29,7 @@ test('existing runtime roles fail closed for privilege, membership or ownership 
   assert.throws(() => assertRestrictedRole('neuton_policy_reader', false, safe));
 });
 
-test('owner-only provisioning creates passwordless restricted roles and preserves later password resets', async () => {
+test('owner-only provisioning initializes restricted LOGIN passwords without returning credentials and preserves resets', async () => {
   const database = new PGlite();
   try {
     const provision = () => database.transaction(async native => {
@@ -56,7 +57,7 @@ test('owner-only provisioning creates passwordless restricted roles and preserve
       "select rolname,rolcanlogin,rolpassword,rolinherit,rolbypassrls from pg_authid where rolname like 'neuton_%' order by rolname")).rows;
     assert.equal(roles.length, 7);
     for (const role of roles) {
-      assert.equal(role.rolpassword, null);
+      assert.equal(role.rolpassword !== null, role.rolcanlogin);
       assert.equal(role.rolinherit, false);
       assert.equal(role.rolbypassrls, false);
       assert.equal(role.rolcanlogin, ['neuton_app', 'neuton_auth', 'neuton_worker', 'neuton_cleanup'].includes(role.rolname));
@@ -66,6 +67,12 @@ test('owner-only provisioning creates passwordless restricted roles and preserve
     const before = await password();
     await provision();
     assert.equal(await password(), before);
+    for (const role of roles.filter(role => role.rolcanlogin)) {
+      await database.exec(`alter role ${role.rolname} password null`);
+    }
+    await database.exec(readFileSync(new URL('./initialize-runtime-passwords.sql', import.meta.url), 'utf8'));
+    assert.equal((await database.query<{ count: number }>(
+      "select count(*)::integer as count from pg_authid where rolname in ('neuton_app','neuton_auth','neuton_worker','neuton_cleanup') and rolpassword is not null")).rows[0]!.count, 4);
     await database.exec('create table public.existing_application(id integer)');
     await assert.rejects(provision, /requires an empty application database/);
   } finally { await database.close(); }
