@@ -14,6 +14,14 @@ const profileSchema = z.object({ id: z.string().uuid(), fullName: z.string().nul
 export class AccountRepository {
   constructor(private readonly auth: AuthRepository) {}
 
+  findIdByEmail(normalizedEmail: string): Promise<string | null> {
+    return this.auth.transaction(async transaction => {
+      const [user] = await authRows(transaction, sql`select id from auth_private.users where normalized_email=${normalizedEmail}`,
+        z.object({ id: z.string().uuid() }));
+      return user?.id ?? null;
+    });
+  }
+
   async createPending(transaction: AuthTransaction, input: {
     email: string; fullName?: string; avatarUrl?: string; encodedHash?: string;
   }): Promise<LockedAuthAccount | null> {
