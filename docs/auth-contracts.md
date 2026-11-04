@@ -111,7 +111,7 @@ Every browser mutation requires the exact configured `APP_ORIGIN`, supported con
 
 HTTPS uses `__Host-neuton-session`, Secure, HttpOnly, SameSite=Lax, Path=/, no Domain. Local HTTP uses a distinct development name and is allowed only for development/test localhost. Local browser origin is `http://localhost:5173`, with `/api` proxied to the API. Hosted frontend/API share one HTTPS origin.
 
-Return paths are exact local routes from the configured allowlist, initially `/`, `/dashboard`, `/profile`; reject external URLs, protocol-relative paths, backslashes, fragments and unapproved queries. The flow stores the approved path server-side. Completion always redirects to `/auth/google/complete`; email confirmation, reset and change use fixed `/auth/confirm`, `/auth/reset-password` and `/auth/email-change` pages. Transient fragments are stripped before ordinary app/telemetry startup. GET never consumes an action secret.
+Return paths are approved local application routes: `/`, `/dashboard`, `/profile`, `/catalog`, `/capture`, `/orders`, and recognized order/recipe/receipt detail routes with a bounded identifier. Reject external URLs, protocol-relative paths, backslashes, fragments and unapproved queries. The flow stores the approved path server-side. Completion always redirects to `/auth/google/complete`; email confirmation, reset and change use fixed `/auth/confirm`, `/auth/reset-password` and `/auth/email-change` pages. Transient fragments are stripped before ordinary app/telemetry startup. GET never consumes an action secret.
 
 ## Internal transaction capabilities
 
@@ -126,3 +126,23 @@ No lock or transaction spans Google, SMTP, R2 or model calls. Read authorized in
 OAuth completion records reference an existing target user or reserve a server-generated candidate UUID for a new account, exclusively. The latter has no user FK until the completion POST creates the account; callback GET does not have to create an account to satisfy a premature FK. Store only the validated identity claim allowlist, never Google tokens. Completion rechecks email collisions, initiating session and security version under locks before applying the mapping.
 
 One provider exposes loading, anonymous, pending-email, authenticated and unavailable. Unavailable is not confirmed logout or fresh authority. Cold offline startup remains locked. Partitions are environment + verified user UUID + shop UUID and survive ordinary session replacement. Legacy partitions are quarantined; never infer new ownership from email. Stop requests/subscriptions and clear transient caches before showing a different account. Preserve unsent edits in their original partition; never replay them under another user.
+
+## Browser account preconditions
+
+Cookie-authenticated browser business requests also carry `x-client-user-id`
+from the session projection. This optional restriction never grants access:
+SessionGuard/ShopGuard resolve the cookie and current membership first, then
+reject a different expected account with `409 ACCOUNT_CHANGED`. Session renewal
+and logout check the same restriction under their auth transaction. It prevents
+an old tab's prepared request from acting under a replacement cookie belonging
+to another account. The browser stops that context and reloads session authority;
+it does not replay a rejected mutation.
+
+The browser API uses the application origin with credentials included. Local
+Vite routing is `http://localhost:5173/api` to `http://localhost:4000/api`, without
+rewriting the Origin header. A single provider owns restoration, membership
+selection, bounded foreground renewal and cross-tab reload hints. Authentication
+outages are unavailable states, never confirmed logout. Signup, deliberate
+contact confirmation, password sign-in, first-shop bootstrap, scoped settings and
+failure-aware logout are connected to the existing screens. Google and recovery
+journeys remain in their later migration phases.
