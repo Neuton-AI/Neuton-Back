@@ -1,4 +1,4 @@
-import { db } from '../db/client.js';
+import type { ShopTransaction } from '../db/types.js';
 import { auditLogs } from '../db/schema/index.js';
 
 export type AuditEvent =
@@ -28,10 +28,10 @@ export interface AuditInput {
 }
 
 /** Structured security/event trail written to `audit_logs` (and mirrored to Pino). */
-export async function recordAudit(input: AuditInput): Promise<void> {
-  await db.insert(auditLogs).values({
-    shopId: input.shopId,
-    userId: input.userId,
+export async function recordAudit(input: AuditInput, scope: ShopTransaction): Promise<void> {
+  await scope.database.insert(auditLogs).values({
+    shopId: scope.shopId,
+    userId: scope.userId,
     eventType: input.eventType,
     resourceId: input.resourceId ?? null,
     ipAddress: input.ipAddress ?? null,

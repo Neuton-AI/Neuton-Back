@@ -1,4 +1,5 @@
 import './support/testEnv.js';
+import { businessActor, fixtureScope } from './support/businessActor.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -44,9 +45,11 @@ test('stock batches rollback, serialize retries, reject payload reuse and foreig
     assert.equal((await connection`SELECT user_id FROM inventory_adjustment_batches`)[0]?.user_id, USER_ID);
     assert.equal((await send([{ inventoryItemId: first, deltaQuantity: 4 }], key)).statusCode, 409);
     assert.equal((await amounts())[first], 12);
-    await assert.rejects(adjustInventory(database, { shopId: SHOP_ID, userId: randomUUID(), key, adjustments: batch }), { statusCode: 409 });
+    const adjust = (input: Parameters<typeof adjustInventory>[1]) => database.transaction(tx =>
+      adjustInventory(fixtureScope(tx, businessActor(input.shopId, input.userId)), input));
+    await assert.rejects(adjust({ shopId: SHOP_ID, userId: randomUUID(), key, adjustments: batch }), { statusCode: 409 });
     assert.equal((await amounts())[first], 12, 'another user cannot replay a saved result');
-    assert.deepEqual(await adjustInventory(database, { shopId: otherShop, userId: USER_ID, key, adjustments: [{ inventoryItemId: other, deltaQuantity: 2 }] }), { adjusted: 1, ids: [other] });
+    assert.deepEqual(await adjust({ shopId: otherShop, userId: USER_ID, key, adjustments: [{ inventoryItemId: other, deltaQuantity: 2 }] }), { adjusted: 1, ids: [other] });
     assert.equal((await amounts())[other], 12, 'another shop has an independent retry namespace');
     assert.equal((await send([{ inventoryItemId: first, deltaQuantity: 1 }, { inventoryItemId: other, deltaQuantity: 1 }])).statusCode, 403);
     assert.equal((await amounts())[first], 12, 'foreign item rejects entire batch');

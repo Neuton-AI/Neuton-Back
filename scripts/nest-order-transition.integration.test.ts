@@ -1,3 +1,4 @@
+import { fixtureScope } from './support/businessActor.js';
 import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
@@ -61,10 +62,12 @@ test('Nest order verification preserves concurrent outcomes and defers effects u
       await connection`INSERT INTO orders(id,order_number,shop_id) VALUES (${ORDER_ID},1,${SHOP_ID})`;
       const selected = deferred();
       const resume = deferred();
-      app.use({ db: {
+      app.use({
+        db: {
           select: (...args: Parameters<typeof database.select>) => pauseAfterSelect(database.select(...args), selected, resume),
           update: database.update.bind(database),
-        } as unknown as Database });
+        } as unknown as Database
+      });
       const verifying = request(app.app.getHttpServer()).post(`/api/v1/orders/${ORDER_ID}/verify`).set({ cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID });
       // Supertest starts the request when its promise is consumed.
       const result = Promise.resolve(verifying);
@@ -98,7 +101,7 @@ test('Nest order verification preserves concurrent outcomes and defers effects u
     const successLogs: unknown[] = [];
     actor.log = { ...actor.log, info: (...args: unknown[]) => { successLogs.push(args); } };
     await assert.rejects(database.transaction(async (tx) => {
-      await service.inTransaction(tx, effect => effects.push(effect)).verify(actor, ORDER_ID);
+      await service.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).verify(actor, ORDER_ID);
       assert.equal(app.audits.length, auditCount);
       assert.equal(successLogs.length, 0);
       throw new Error('rollback outer sync');
@@ -110,7 +113,7 @@ test('Nest order verification preserves concurrent outcomes and defers effects u
     assert.equal(effects.length, 1);
     effects.length = 0; // Outer rollback discards deferred effects.
     await database.transaction(async (tx) => {
-      await service.inTransaction(tx, effect => effects.push(effect)).verify(actor, ORDER_ID);
+      await service.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).verify(actor, ORDER_ID);
       assert.equal(app.audits.length, auditCount);
       assert.equal(successLogs.length, 0);
     });

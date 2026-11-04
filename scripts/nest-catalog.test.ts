@@ -125,10 +125,12 @@ test('Nest recipe list/detail preserve reviewed values with explicit nested DTOs
       assert.equal(costing.inStock, false);
       assert.equal(costing.unitCost, 0.1);
       assert.equal(JSON.stringify(next.body).includes('hidden'), false);
-      if (sources) assert.deepEqual(sources, [{
+      if (sources) {
+        assert.deepEqual(sources, [{
         sourceId: source.sourceId, storagePath: source.storagePath, contentType: source.contentType,
         originalFilename: source.originalFilename, byteSize: source.byteSize,
       }]);
+    }
     }
   } finally {
     await nest.close();
@@ -145,10 +147,12 @@ test('static orderable route includes costed out-of-stock recipes and excludes u
   try {
     const response = await request(nest.app.getHttpServer()).get('/api/v1/recipes/orderable').set(headers);
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { recipes: [{
+    assert.deepEqual(response.body, {
+      recipes: [{
       id: recipe.id, name: recipe.name, imageUrl: null, yieldQuantity: '2.000', yieldUnit: 'portion',
       costComplete: true, unitCost: 0.1, retailPrice: 0.13,
-    }] });
+      }]
+    });
     assert.equal((await request(nest.app.getHttpServer()).get('/api/v1/recipes/not-a-uuid').set(headers)).status, 400);
     assert.equal((await request(nest.app.getHttpServer()).get(`/api/v1/recipes/${recipe.id}`).set(headers)).status, 404);
   } finally {
@@ -188,8 +192,10 @@ test('recipe creation stays pending, preserves supplied ingredient values, and c
   const member = await buildNestCatalogApp(memberDb as unknown as Database, 'member');
   const payload = {
     name: recipe.name, status: 'verified', steps: recipe.steps,
-    ingredients: [{ rawName: 'User corrected flour', rawMaterialName: 'corrected flour', quantity: 1,
-      rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 1000 }],
+    ingredients: [{
+      rawName: 'User corrected flour', rawMaterialName: 'corrected flour', quantity: 1,
+      rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 1000
+    }],
   };
   try {
     assert.equal((await request(nest.app.getHttpServer()).post('/api/v1/recipes').set(headers)
@@ -208,10 +214,12 @@ test('recipe creation stays pending, preserves supplied ingredient values, and c
     assert.equal(stored.name, recipe.name);
     assert.equal(stored.shopId, SHOP_ID);
     const lines = database.onlyCallTo('insert', 'recipeIngredients').values;
-    assert.deepEqual(lines, [{ shopId: SHOP_ID, recipeId: recipe.id, inventoryItemId: null, generalPriceId: null,
+    assert.deepEqual(lines, [{
+      shopId: SHOP_ID, recipeId: recipe.id, inventoryItemId: null, generalPriceId: null,
       rawName: 'User corrected flour', rawMaterialName: 'corrected flour', quantity: '1.000', rawSrcUnit: 'kg',
-      baseUnit: 'g', baseUnitAmount: '1000.000' }]);
-    assert.equal(database.transactionCount, 2, 'foreign-link attempt rolls back before successful create');
+      baseUnit: 'g', baseUnitAmount: '1000.000'
+    }]);
+    assert.equal(database.transactionCount, 2, 'each attempted create has one authorized transaction boundary');
     assert.equal(database.calls.filter(call => call.op === 'insert').every(call => call.inTransaction), true);
     assert.deepEqual(nest.audits.map(audit => audit.eventType), ['RECIPE_CREATED']);
   } finally {
@@ -237,9 +245,11 @@ test('recipe edits retain ingredients for metadata-only changes and convert revi
     assert.equal(edited.status, 200);
     const lines = database.onlyCallTo('insert', 'recipeIngredients');
     assert.equal(lines.inTransaction, true);
-    assert.deepEqual(lines.values, [{ shopId: SHOP_ID, recipeId: recipe.id,
+    assert.deepEqual(lines.values, [{
+      shopId: SHOP_ID, recipeId: recipe.id,
       inventoryItemId: null, generalPriceId: null, rawName: 'User corrected flour', rawMaterialName: 'User corrected flour',
-      quantity: '1.000', rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: '1000.000' }]);
+      quantity: '1.000', rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: '1000.000'
+    }]);
     assert.deepEqual(nest.audits.map(audit => audit.eventType), ['RECIPE_UPDATED', 'RECIPE_UPDATED']);
     assert.equal((await request(nest.app.getHttpServer()).patch(`/api/v1/recipes/${recipe.id}`)
       .set(headers).send({ name: 'Missing' })).status, 404);

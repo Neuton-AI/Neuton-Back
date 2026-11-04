@@ -8,6 +8,11 @@ import { htmlFree } from './safeText.js';
 import { assertContentType, buildStoragePath, createPresignedUploadUrl, getObjectMetadata } from './storage.js';
 import { enqueueMediaJob } from './queue.js';
 import { env } from '../env.js';
+import type { DatabaseTransaction, ShopTransaction } from '../db/types.js';
+import type { ActorContext } from '../modules/identity/contracts.js';
+import { ShopOperation } from '../db/shop-operation.js';
+import { requireActorRole } from '../modules/identity/authorization.js';
+import { sql } from 'drizzle-orm';
 
 export const MAX_DOCUMENT_SOURCES = 4;
 export const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
@@ -50,7 +55,7 @@ export function validateSourceLimits(sources: z.infer<typeof sourceSchema>[]) {
 }
 
 type Upload = typeof mediaUploads.$inferSelect;
-export async function findUpload(db: Database, shopId: string, uploadId: string): Promise<Upload> {
+export async function findUpload(db: Pick<DatabaseTransaction, 'select'>, shopId: string, uploadId: string): Promise<Upload> {
   const [upload] = await db.select().from(mediaUploads)
     .where(and(eq(mediaUploads.id, uploadId), eq(mediaUploads.shopId, shopId))).limit(1);
   if (!upload) throw notFound('Upload not found');
@@ -76,24 +81,63 @@ function assertSourceOwnership(upload: Upload) {
     throw notFound('Upload source not found');
   }
 }
+function uploadIdentity(upload: Upload): string {
+  return JSON.stringify([upload.id, upload.shopId, upload.uploadedBy, upload.kind,
+  upload.receiptId, upload.recipeId, upload.orderId, upload.sources]);
+}
+async function authorizedUpload(scope: ShopTransaction, id: string, lock = false, known?: Upload): Promise<Upload> {
+  const query = scope.database.select().from(mediaUploads)
+    .where(and(eq(mediaUploads.id, id), eq(mediaUploads.shopId, scope.shopId))).limit(1);
+  const [upload] = known ? [known] : await query;
+  if (!upload) throw notFound('Upload not found');
+  assertSourceOwnership(upload);
+  const associations = [upload.receiptId, upload.recipeId, upload.orderId].filter(Boolean);
+  const validKind = (upload.kind === 'receipt' && upload.receiptId) ||
+    ((upload.kind === 'recipe' || upload.kind === 'product') && upload.recipeId) ||
+    (upload.kind === 'order' && upload.orderId);
+  if (associations.length !== 1 || !validKind) throw notFound('Upload resource not found');
+  if (upload.receiptId) {
+    const [resource] = await scope.database.select({ id: receipts.id }).from(receipts)
+      .where(and(eq(receipts.id, upload.receiptId), eq(receipts.shopId, scope.shopId))).limit(1).for('key share');
+    if (!resource) throw notFound('Receipt not found');
+  } else if (upload.recipeId) {
+    const [resource] = await scope.database.select({ id: recipes.id }).from(recipes)
+      .where(and(eq(recipes.id, upload.recipeId), eq(recipes.shopId, scope.shopId), eq(recipes.isActive, true)))
+      .limit(1).for('key share');
+    if (!resource) throw notFound('Recipe not found');
+  } else if (upload.orderId) {
+    const [resource] = await scope.database.select({ id: orders.id }).from(orders)
+      .where(and(eq(orders.id, upload.orderId), eq(orders.shopId, scope.shopId), isNull(orders.deletedAt)))
+      .limit(1).for('key share');
+    if (!resource) throw notFound('Order not found');
+  }
+  if (lock) {
+    const [locked] = await scope.database.select().from(mediaUploads)
+      .where(and(eq(mediaUploads.id, id), eq(mediaUploads.shopId, scope.shopId))).limit(1).for('update');
+    if (!locked) throw notFound('Upload not found');
+    if (uploadIdentity(locked) !== uploadIdentity(upload)) throw conflict('Upload association changed');
+    return locked;
+  }
+  return upload;
+}
 
 export async function presignDocument(deps: MediaUploadDeps, input: {
-  body: unknown; shopId: string; userId: string; currency: string;
+  body: unknown; actor: ActorContext; shopId: string; userId: string; currency: string;
 }) {
+  input = { ...input, shopId: input.actor.shop.id, userId: input.actor.user.id, currency: input.actor.shop.currency };
   if (typeof input.body === 'object' && input.body && 'uploadId' in input.body) {
     const body = renewSchema.parse(input.body);
-    const upload = await findUpload(deps.db, input.shopId, body.uploadId);
+    const upload = await new ShopOperation(deps.db).run(input.actor, async (scope, actor) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      return authorizedUpload(scope, body.uploadId);
+    });
     if (upload.queuedAt) throw conflict('This document has already been submitted');
     return signedUpload(deps, upload, body.sourceIds);
   }
   const body = groupedPresignSchema.parse(input.body);
   validateSourceLimits(body.sources);
   if (body.kind === 'order' && !body.orderId) throw badRequest('Select an order before uploading its document');
-  if (body.orderId) {
-    const [order] = await deps.db.select({ id: orders.id }).from(orders)
-      .where(and(eq(orders.id, body.orderId), eq(orders.shopId, input.shopId), isNull(orders.deletedAt))).limit(1);
-    if (!order) throw notFound('Order not found');
-  }
+  if (body.kind !== 'order' && body.orderId) throw badRequest('Only order documents may select an order');
   const id = body.clientRequestId ?? randomUUID();
   const storageKinds = { receipt: 'receipts', recipe: 'recipes', product: 'products', order: 'orders' } as const;
   const sources: UploadSource[] = body.sources.map((source) => ({
@@ -102,13 +146,13 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
     storagePath: buildStoragePath({ shopId: input.shopId, kind: storageKinds[body.kind], contentType: source.contentType }),
   }));
   const first = sources[0]!;
-  const upload = await deps.db.transaction(async (tx) => {
-    const [claimed] = await tx.insert(mediaUploads).values({
-      id, shopId: input.shopId, uploadedBy: input.userId, kind: body.kind,
-      sources, orderId: body.orderId ?? null,
-    }).onConflictDoNothing().returning();
-    if (!claimed) {
-      const existing = await findUpload(tx as unknown as Database, input.shopId, id);
+  const upload = await new ShopOperation(deps.db).run(input.actor, async (scope, actor) => {
+    requireActorRole(actor, ['owner', 'admin']);
+    const tx = scope.database;
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${id},149))`);
+    const [existing] = await tx.select().from(mediaUploads)
+      .where(and(eq(mediaUploads.id, id), eq(mediaUploads.shopId, scope.shopId))).limit(1);
+    if (existing) {
       const sameSources = existing.sources.length === sources.length && existing.sources.every((source, index) => {
         const requested = sources[index]!;
         return source.contentType === requested.contentType && source.byteSize === requested.byteSize &&
@@ -117,7 +161,13 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
       if (existing.kind !== body.kind || existing.orderId !== (body.orderId ?? null) || !sameSources) {
         throw conflict('This upload request ID belongs to a different document');
       }
-      return existing;
+      return authorizedUpload(scope, existing.id, false, existing);
+    }
+    if (body.orderId) {
+      const [order] = await tx.select({ id: orders.id }).from(orders)
+        .where(and(eq(orders.id, body.orderId), eq(orders.shopId, scope.shopId), isNull(orders.deletedAt)))
+        .limit(1).for('key share');
+      if (!order) throw notFound('Order not found');
     }
     let receiptId: string | null = null;
     let recipeId: string | null = null;
@@ -125,7 +175,7 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
       const [receipt] = await tx.insert(receipts).values({
         // The offline placeholder and the server row share one stable identity.
         id,
-        shopId: input.shopId, uploadedBy: input.userId, storagePath: first.storagePath,
+        shopId: scope.shopId, uploadedBy: scope.userId, storagePath: first.storagePath,
         contentType: first.contentType, originalFilename: first.originalFilename,
         currency: input.currency, status: 'pending', progressMessage: 'Uploading document',
       }).returning({ id: receipts.id });
@@ -134,28 +184,31 @@ export async function presignDocument(deps: MediaUploadDeps, input: {
     } else if (body.kind === 'recipe' || body.kind === 'product') {
       const [recipe] = await tx.insert(recipes).values({
         id,
-        shopId: input.shopId, name: `${(first.originalFilename ?? 'Document').slice(0, 160)} (${id})`,
+        shopId: scope.shopId, name: `${(first.originalFilename ?? 'Document').slice(0, 160)} (${id})`,
         storagePath: first.storagePath, status: 'pending', yieldQuantity: '1', yieldUnit: 'portion', allergens: [],
       }).returning({ id: recipes.id });
       if (!recipe) throw new Error('Recipe insert returned no row');
       recipeId = recipe.id;
     }
-    await tx.update(mediaUploads).set({ receiptId, recipeId }).where(eq(mediaUploads.id, id));
-    return { ...claimed, receiptId, recipeId };
+    const [created] = await tx.insert(mediaUploads).values({
+      id, shopId: scope.shopId, uploadedBy: scope.userId, kind: body.kind,
+      sources, receiptId, recipeId, orderId: body.orderId ?? null,
+    }).returning();
+    if (!created) throw new Error('Upload insert returned no row');
+    return created;
   });
   return signedUpload(deps, upload);
 }
-
-export async function completeDocument(deps: MediaUploadDeps, input: { body: unknown; shopId: string; traceId?: string }) {
+export async function completeDocument(deps: MediaUploadDeps, input: { body: unknown; actor: ActorContext; shopId: string; traceId?: string }) {
   const body = completeSchema.parse(input.body);
-  const upload = await deps.db.transaction(async (tx) => {
-    const [upload] = await tx.select().from(mediaUploads)
-      .where(and(eq(mediaUploads.id, body.uploadId), eq(mediaUploads.shopId, input.shopId))).limit(1).for('update');
-    if (!upload) throw notFound('Upload not found');
-    assertSourceOwnership(upload);
-    if (upload.queuedAt) return upload;
-    validateSourceLimits(upload.sources);
-    for (const source of upload.sources) {
+  const access = new ShopOperation(deps.db);
+  const prepared = await access.run(input.actor, async (scope, actor) => {
+    requireActorRole(actor, ['owner', 'admin']);
+    return authorizedUpload(scope, body.uploadId);
+  });
+  if (!prepared.queuedAt) {
+    validateSourceLimits(prepared.sources);
+    for (const source of prepared.sources) {
       let actual: Awaited<ReturnType<typeof getObjectMetadata>>;
       try { actual = await deps.getObjectMetadata(source.storagePath); }
       catch { throw badRequest('A source has not finished uploading', { sourceId: source.sourceId }); }
@@ -163,16 +216,22 @@ export async function completeDocument(deps: MediaUploadDeps, input: { body: unk
         throw badRequest('Uploaded source does not match its declared size or type', { sourceId: source.sourceId });
       }
     }
+  }
+  const upload = await access.run(input.actor, async (scope, actor) => {
+    requireActorRole(actor, ['owner', 'admin']);
+    const upload = await authorizedUpload(scope, body.uploadId, true);
+    if (uploadIdentity(upload) !== uploadIdentity(prepared)) throw conflict('Upload association changed');
+    if (upload.queuedAt) return upload;
     // Commit readiness before touching Redis. If dispatch fails or the API crashes,
     // completion retries safely redispatch this same durable intent and stable job ID.
-    await tx.update(mediaUploads).set({ queuedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
+    await scope.database.update(mediaUploads).set({ queuedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
     return upload;
   });
   const identity = { uploadId: upload.id, receiptId: upload.receiptId, recipeId: upload.recipeId };
   if (upload.processedAt) return { ...identity, queued: true, jobId: `upload-${upload.id}` };
   const first = upload.sources[0]!;
   const enqueued = await deps.enqueueMediaJob({
-    uploadId: upload.id, shopId: input.shopId, uploadedBy: upload.uploadedBy,
+    uploadId: upload.id, shopId: upload.shopId, uploadedBy: upload.uploadedBy,
     kind: upload.kind, sources: upload.sources, storagePath: first.storagePath,
     contentType: first.contentType, originalFilename: first.originalFilename,
     ...(upload.orderId ? { orderId: upload.orderId } : {}), traceId: input.traceId,

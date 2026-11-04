@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { db, type Database } from '../../db/client.js';
+import type { Database } from '../../db/client.js';
+import type { ShopTransaction } from '../../db/types.js';
+import type { ActorContext } from '../identity/contracts.js';
+import { ShopOperation, type AfterShopCommit } from '../../db/shop-operation.js';
 import { receipts, receiptItems, mediaUploads } from '../../db/schema/index.js';
 import type { Receipt, ReceiptItem } from '../../db/schema/receipts.js';
 import { conflict, notFound } from '../../lib/errors.js';
@@ -75,19 +78,24 @@ export function mapReceiptItem(row: ReceiptItem): ReceiptItemDto {
 
 @Injectable()
 export class ReceiptsPersistence {
-  constructor(
-    @Inject(RECEIPTS_DATABASE) readonly database: ReceiptDatabase = db,
-  ) {}
+  constructor(@Inject(RECEIPTS_DATABASE) source: Database | ShopTransaction) { this.access = new ShopOperation(source); }
+  private readonly access: ShopOperation;
+  get database() { return this.access.database; }
+  get scope() { return this.access.scope; }
+  inShop<T>(actor: ActorContext, work: (persistence: ReceiptsPersistence, actor: ActorContext, afterCommit?: AfterShopCommit) => Promise<T>): Promise<T> {
+    return this.access.run(actor, (scope, currentActor, afterCommit) => work(new ReceiptsPersistence(scope), currentActor, afterCommit));
+  }
   async list(shopId: string, query: ReceiptQuery): Promise<ReceiptDto[]> {
     const conditions = [eq(receipts.shopId, shopId)];
     if (query.status) conditions.push(eq(receipts.status, query.status));
-    if (query.search)
+    if (query.search) {
       conditions.push(
         or(
           ilike(receipts.merchantName, '%' + query.search + '%'),
           ilike(receipts.originalFilename, '%' + query.search + '%'),
         )!,
       );
+    }
     const rows = await this.database
       .select()
       .from(receipts)
@@ -170,19 +178,19 @@ export class ReceiptsPersistence {
       );
     return row?.count ?? 0;
   }
-  edit(shopId: string, id: string, input: ReceiptPatchInput): Promise<ReceiptDto> {
-    return this.database.transaction(async (tx) => {
-      const [existing] = await tx.select({ status: receipts.status })
-        .from(receipts).where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)))
-        .limit(1).for('update');
-      if (!existing) throw notFound('Receipt not found');
-      if (existing.status !== 'unverified' && existing.status !== 'verified')
-        throw conflict('Receipt must finish extraction before editing');
-      const [row] = await tx.update(receipts)
-        .set({ merchantName: input.merchantName, updatedAt: new Date() })
-        .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId))).returning();
-      return mapReceipt(row!);
-    });
+  async edit(shopId: string, id: string, input: ReceiptPatchInput): Promise<ReceiptDto> {
+    const tx = this.database;
+    const [existing] = await tx.select({ status: receipts.status })
+      .from(receipts).where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)))
+      .limit(1).for('update');
+    if (!existing) throw notFound('Receipt not found');
+    if (existing.status !== 'unverified' && existing.status !== 'verified') {
+      throw conflict('Receipt must finish extraction before editing');
+    }
+    const [row] = await tx.update(receipts)
+      .set({ merchantName: input.merchantName, updatedAt: new Date() })
+      .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId))).returning();
+    return mapReceipt(row!);
   }
   verify(
     shopId: string,
@@ -191,45 +199,43 @@ export class ReceiptsPersistence {
     input: VerifyReceiptInput,
   ) {
     return verifyReceipt({
-      db: this.database as Database,
-      shopId,
-      userId,
+      scope: this.scope,
       receiptId: id,
       items: input.items,
     });
   }
-  delete(shopId: string, id: string, traceId: string) {
-    return this.database.transaction(async (tx) => {
-      const [receipt] = await tx
-        .select({ status: receipts.status, storagePath: receipts.storagePath })
-        .from(receipts)
-        .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)))
-        .limit(1)
-        .for('update');
-      if (!receipt) throw notFound('Receipt not found');
-      if (receipt.status === 'verified')
-        throw conflict(
-          'A verified receipt already moved stock and counted as spend; it cannot be deleted',
-        );
-      const uploads = await tx
-        .select({ sources: mediaUploads.sources })
-        .from(mediaUploads)
-        .where(
-          and(eq(mediaUploads.receiptId, id), eq(mediaUploads.shopId, shopId)),
-        );
-      await scheduleObjectDeletions(tx, {
-        shopId,
-        traceId,
-        paths: [
-          receipt.storagePath,
-          ...uploads.flatMap((upload) =>
-            upload.sources.flatMap(sourceStoragePaths),
-          ),
-        ],
-      });
-      await tx
-        .delete(receipts)
-        .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)));
+  async delete(shopId: string, id: string, traceId: string) {
+    const tx = this.database;
+    const [receipt] = await tx
+      .select({ status: receipts.status, storagePath: receipts.storagePath })
+      .from(receipts)
+      .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)))
+      .limit(1)
+      .for('update');
+    if (!receipt) throw notFound('Receipt not found');
+    if (receipt.status === 'verified') {
+      throw conflict(
+        'A verified receipt already moved stock and counted as spend; it cannot be deleted',
+      );
+    }
+    const uploads = await tx
+      .select({ sources: mediaUploads.sources })
+      .from(mediaUploads)
+      .where(
+        and(eq(mediaUploads.receiptId, id), eq(mediaUploads.shopId, shopId)),
+      );
+    await scheduleObjectDeletions(tx, {
+      shopId,
+      traceId,
+      paths: [
+        receipt.storagePath,
+        ...uploads.flatMap((upload) =>
+          upload.sources.flatMap(sourceStoragePaths),
+        ),
+      ],
     });
+    await tx
+      .delete(receipts)
+      .where(and(eq(receipts.id, id), eq(receipts.shopId, shopId)));
   }
 }

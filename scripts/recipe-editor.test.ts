@@ -70,7 +70,7 @@ async function harness(responses: Record<string, unknown[]> = {}, search: typeof
 
 test('barcode pricing stores product identity and normalized price without changing the saved recipe', async () => {
   const h = await harness({
-    'select:recipes': [[{ id: ID }]],
+    'select:recipes': [[{ id: ID }], [{ id: ID }]],
     'insert:generalPrices': [[{ id: PRICE_ID }]],
   }, async (query) => {
     assert.equal(query, BARCODE);
@@ -87,8 +87,8 @@ test('barcode pricing stores product identity and normalized price without chang
       rawSrcUnit: 'l', srcUnit: 'l', quantity: 1,
       baseUnit: 'ml', baseUnitAmount: '1000.000', baseUnitCost: '0.006000',
     });
-    assert.deepEqual(h.db.callSequence(), ['select:recipes', 'insert:generalPrices']);
-    assert.equal(h.db.transactionCount, 0);
+    assert.deepEqual(h.db.callSequence(), ['select:recipes', 'select:recipes', 'insert:generalPrices']);
+    assert.equal(h.db.transactionCount, 2, 'lookup inputs and write commit have separate authorization boundaries');
   } finally { await h.close(); }
 });
 
@@ -116,8 +116,10 @@ test('barcode API unavailability returns 503 rather than product-not-found and p
     throw new ScrapyApiError('http', 429, 7);
   });
   try {
-    const response = await h.app.inject({ method: 'POST', url: `/api/v1/recipes/${ID}/barcode-price`,
-      payload: { barcode: BARCODE, ...ingredient } });
+    const response = await h.app.inject({
+      method: 'POST', url: `/api/v1/recipes/${ID}/barcode-price`,
+      payload: { barcode: BARCODE, ...ingredient }
+    });
     assert.equal(response.statusCode, 503, response.body);
     assert.equal(response.json().error.code, 'SUPERMARKET_UNAVAILABLE');
     assert.equal(h.db.callsTo('insert', 'generalPrices').length, 0);
@@ -127,7 +129,7 @@ test('barcode API unavailability returns 503 rather than product-not-found and p
 test('scanned product normalization ignores the previous ingredient identity and incompatible or unresolved units', async () => {
   for (const unit of ['kg', 'pack', 'unknown']) {
     const h = await harness({
-      'select:recipes': [[{ id: ID }]],
+      'select:recipes': [[{ id: ID }], [{ id: ID }]],
       'insert:generalPrices': [[{ id: PRICE_ID }]],
     });
     try {
@@ -148,7 +150,7 @@ test('scanned product normalization ignores the previous ingredient identity and
         rawSrcUnit: 'l', srcUnit: 'l', baseUnit: 'ml',
         baseUnitAmount: '1000.000', baseUnitCost: '0.006000',
       });
-      assert.deepEqual(h.db.callSequence(), ['select:recipes', 'insert:generalPrices']);
+      assert.deepEqual(h.db.callSequence(), ['select:recipes', 'select:recipes', 'insert:generalPrices']);
     } finally { await h.close(); }
   }
 });
@@ -173,9 +175,11 @@ test('recipe edits atomically persist metadata and original ingredient fields wi
   try {
     const response = await h.app.inject({
       method: 'PATCH', url: `/api/v1/recipes/${ID}`,
-      payload: { name: 'Edited recipe', ingredients: [{
+      payload: {
+        name: 'Edited recipe', ingredients: [{
         ...ingredient, generalPriceId: PRICE_ID, baseUnit: 'g', baseUnitAmount: 999,
-      }] },
+        }]
+      },
     });
     assert.equal(response.statusCode, 200, response.body);
     assert.equal(h.db.transactionCount, 1);
@@ -247,7 +251,7 @@ test('recipe ingredient save failure stays inside the metadata transaction', asy
 
 test('scanned package pricing costs only the recipe amount and feeds recipe totals', async () => {
   const h = await harness({
-    'select:recipes': [[{ id: ID }], [{ id: ID }]],
+    'select:recipes': [[{ id: ID }], [{ id: ID }], [{ id: ID }]],
     'insert:generalPrices': [[{ id: PRICE_ID }]],
     'update:recipes': [[recipeRow({ id: ID })]],
   });

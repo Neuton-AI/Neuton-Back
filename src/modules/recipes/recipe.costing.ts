@@ -10,7 +10,7 @@ export async function costRecipe(
   recipe: RecipeCostingInput,
   shopMargin: string,
   hourlyLaborCost: string,
-  database?: ReadDatabase,
+  database: ReadDatabase,
 ): Promise<RecipeCostingDto> {
   const ingredientRows = await readRecipeCostIngredients(shopId, recipe.id, database);
   const lineCosts = ingredientRows.map((i) => ingredientLineCost({

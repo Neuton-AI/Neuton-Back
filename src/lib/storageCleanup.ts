@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { storageObjectDeletions } from "../db/schema/storage-cleanup.js";
 import type { Logger } from "./logger/types.js";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -16,19 +15,13 @@ export async function scheduleObjectDeletions(
   const paths = [
     ...new Set(input.paths.filter((path): path is string => Boolean(path))),
   ];
-  if (paths.some((path) => !path.startsWith(`${input.shopId}/`)))
+  if (paths.some((path) => !path.startsWith(`${input.shopId}/`))) {
     throw new Error("Storage cleanup path is outside its shop");
-  if (paths.length)
-    await database
-      .insert(storageObjectDeletions)
-      .values(
-        paths.map((storagePath) => ({
-          shopId: input.shopId,
-          traceId: input.traceId,
-          storagePath,
-        })),
-      )
-      .onConflictDoNothing();
+  }
+  if (paths.length) {
+    await database.execute(sql`select app_private.enqueue_storage_deletions(
+      ${sql`ARRAY[${sql.join(paths.map(path => sql`${path}::text`), sql`, `)}]::text[]`},${input.traceId}::text)`);
+  }
 }
 
 interface CleanupRow {
@@ -58,10 +51,11 @@ export class StorageCleanupDispatcher {
 
   drain(): Promise<number> {
     if (this.stopped) return Promise.resolve(0);
-    if (!this.running)
+    if (!this.running) {
       this.running = this.run().finally(() => {
         this.running = undefined;
       });
+    }
     return this.running;
   }
   start(intervalMs = 5000) {
@@ -131,15 +125,16 @@ export class StorageCleanupDispatcher {
           const acknowledged = await db.execute(
             sql`delete from storage_object_deletions where id=${row.id}::uuid and lease_token=${token}::uuid returning id`,
           );
-          if (acknowledged.length)
+          if (acknowledged.length) {
             context.info(
               { event: "storage_cleanup_deleted", attempt: row.attempts },
               "storage object deleted",
             );
+          }
         } catch {
           const retryAt = new Date(
             (this.options.now ?? (() => new Date()))().getTime() +
-              Math.min(3600000, 1000 * 2 ** Math.min(row.attempts, 12)),
+            Math.min(3600000, 1000 * 2 ** Math.min(row.attempts, 12)),
           );
           await db.execute(sql`update storage_object_deletions set lease_token=null,lease_until=null,next_attempt_at=${retryAt.toISOString()}::timestamptz
           where id=${row.id}::uuid and lease_token=${token}::uuid`);

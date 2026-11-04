@@ -12,6 +12,8 @@
  * was used.
  */
 import * as schema from '../../src/db/schema/index.js';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
 
 export type DbOperation = 'select' | 'insert' | 'update' | 'delete';
 
@@ -156,6 +158,8 @@ export class FakeQuery<T = unknown> implements PromiseLike<T> {
 }
 
 export class FakeDb {
+  role = 'owner';
+  readonly routineCalls: string[] = [];
   readonly calls: RecordedCall[] = [];
   /** Number of times `transaction` was entered. */
   transactionCount = 0;
@@ -204,6 +208,40 @@ export class FakeDb {
 
   delete(table: unknown): FakeQuery {
     return new FakeQuery(this, 'delete', tableName(table));
+  }
+  /** Protocol fixtures for scoped boundaries and narrow database routines. */
+  async execute(statement: SQL): Promise<unknown[]> {
+    const query = new PgDialect().sqlToQuery(statement);
+    this.routineCalls.push(query.sql);
+    if (query.sql.includes('set_config')) return [];
+    if (query.sql.includes('lock_shop_context')) return [{ role: this.role }];
+    if (query.sql.includes('pg_advisory_xact_lock')) return [];
+    if (query.sql.includes('upsert_general_price')) {
+      const [rawName, sku, rawMaterialName, rawSrcUnit, srcUnit, baseUnit, baseUnitAmount, baseUnitCost] = query.params;
+      return this.settle({
+        op: 'insert', table: 'generalPrices', values: {
+          rawName, sku, rawMaterialName, rawSrcUnit, srcUnit, baseUnit, baseUnitAmount, baseUnitCost,
+        }
+      }) as unknown[];
+    }
+    if (query.sql.includes('next_order_number')) {
+      const rows = this.settle({ op: 'update', table: 'shops', set: { lastOrderNumber: statement } }) as { lastOrderNumber: number }[];
+      return rows.map(row => ({ value: row.lastOrderNumber }));
+    }
+    if (query.sql.includes('mark_order_delivered')) {
+      const rows = this.settle({ op: 'update', table: 'orders', set: { status: 'delivered' } }) as unknown[];
+      return [{ changed: rows.length > 0 }];
+    }
+    if (query.sql.includes('enqueue_storage_deletions')) {
+      const paths = query.params.slice(0, -1) as string[];
+      this.settle({
+        op: 'insert', table: 'storageObjectDeletions', values: paths.map(storagePath => ({
+          storagePath, shopId: storagePath.split('/')[0], traceId: query.params.at(-1),
+        }))
+      });
+      return [];
+    }
+    throw new Error('FakeDb needs an explicit SQL fixture');
   }
 
   async transaction<T>(run: (tx: FakeDb) => Promise<T>): Promise<T> {

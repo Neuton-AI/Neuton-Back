@@ -11,6 +11,7 @@ import {
 } from "../src/lib/storageCleanup.js";
 import { RecipeDeletionPersistence } from "../src/modules/recipes/recipe-deletion.persistence.js";
 import { LoggerImpl } from "../src/lib/logger/index.js";
+import { businessActor, fixtureScope } from './support/businessActor.js';
 
 const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 test(
@@ -84,10 +85,14 @@ test(
       const recipeId = randomUUID();
       await connection`insert into recipes(id,shop_id,name,storage_path) values (${recipeId},${shopId},'Referenced',${path})`;
       await connection`insert into recipe_refs values (${recipeId})`;
-      const deletion = new RecipeDeletionPersistence(db);
+      const actor = businessActor(shopId, randomUUID());
+      const deletion = {
+        delete: (...args: Parameters<RecipeDeletionPersistence['delete']>) => db.transaction(tx =>
+          new RecipeDeletionPersistence(fixtureScope(tx, actor)).delete(...args))
+      };
       await assert.rejects(
         db.transaction(async (tx) => {
-          await new RecipeDeletionPersistence(tx).delete(
+          await new RecipeDeletionPersistence(fixtureScope(tx, actor)).delete(
             shopId,
             recipeId,
             "rollback-delete",

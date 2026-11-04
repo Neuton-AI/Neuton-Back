@@ -2,7 +2,10 @@ import type {DashboardSummary} from './contracts.js';
 import { and, desc, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
 import { mapOrder } from '../orders/orders.persistence.js';
-import { db, type Database } from '../../db/client.js';
+import type { Database } from '../../db/client.js';
+import type { ShopTransaction, TransactionalDatabase } from '../../db/types.js';
+import type { ActorContext } from '../identity/contracts.js';
+import { ShopOperation } from '../../db/shop-operation.js';
 import {
   inventoryItems,
   orderItems,
@@ -27,19 +30,13 @@ export const PERIOD_DAYS: Record<Period, number> = {
 /**
  * Collaborators the reporting queries run against. Injected so the aggregations
  * can be tested against scripted rows instead of a live database; production
- * always uses `defaultAnalyticsDeps`.
+ * supplies its application connection through the module provider.
  */
 export interface AnalyticsDeps {
-  db: Database;
+  db: TransactionalDatabase;
   /** Injected so a test can pin "now" instead of depending on the wall clock. */
   now: () => Date;
 }
-
-
-export const defaultAnalyticsDeps: AnalyticsDeps = {
-  db,
-  now: () => new Date(),
-};
 
 export function periodStart(period: Period, now: Date = new Date()): Date {
   const days = PERIOD_DAYS[period];
@@ -153,8 +150,14 @@ export const ANALYTICS_DEPS = Symbol('ANALYTICS_DEPS');
 export class AnalyticsPersistence {
   constructor(
     @Inject(ANALYTICS_DEPS)
-    private readonly deps: AnalyticsDeps = defaultAnalyticsDeps,
-  ) {}
+    source: { db: Database | ShopTransaction; now: () => Date },
+  ) { this.access = new ShopOperation(source.db); this.now = source.now; }
+  private readonly access: ShopOperation;
+  private readonly now: () => Date;
+  private get deps(): AnalyticsDeps { return { db: this.access.database, now: this.now }; }
+  inShop<T>(actor: ActorContext, work: (persistence: AnalyticsPersistence, actor: ActorContext) => Promise<T>): Promise<T> {
+    return this.access.run(actor, (scope, currentActor) => work(new AnalyticsPersistence({ db: scope, now: this.now }), currentActor));
+  }
   async dashboard(shopId: string, period: Period):Promise<DashboardSummary> {
     const deps = this.deps,
       shop = { id: shopId };
@@ -488,7 +491,11 @@ async function profitGraph(
   }
 
   return [...byDay.entries()]
-    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .sort(([left], [right]) => {
+      if (left < right) return -1;
+      if (left > right) return 1;
+      return 0;
+    })
     .map(([date, day]) => ({
       date,
       revenue: day.revenue,

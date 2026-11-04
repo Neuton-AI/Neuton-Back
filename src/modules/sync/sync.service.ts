@@ -3,9 +3,10 @@ import { z } from 'zod';
 import { compareDocuments, type DocumentMeta } from '../../lib/documentSync.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
-import { SyncPersistence, type SyncTransaction } from './sync.persistence.js';
+import { SyncPersistence } from './sync.persistence.js';
 import { syncVersionSchema, type SyncMutation } from './contracts.js';
 import { AppError } from '../../lib/errors.js';
+import type { ShopTransaction } from '../../db/types.js';
 export type CommitEffect = (effect: () => Promise<void>) => void;
 @Injectable()
 export class SyncService {
@@ -32,17 +33,18 @@ export class SyncService {
   async mutate<T>(
     actor: ActorContext,
     input: SyncMutation,
-    operation: (tx?: SyncTransaction, afterCommit?: CommitEffect) => Promise<T>,
+    operation: (tx?: ShopTransaction, afterCommit?: CommitEffect) => Promise<T>,
   ): Promise<{ status: number; body: unknown }> {
     requireActorRole(actor, input.allowedRoles ?? ['owner', 'admin']);
-    if (input.mutationId === undefined)
+    if (input.mutationId === undefined) {
       return { status: input.status, body: await operation() };
+    }
     const id = z.string().uuid().parse(input.mutationId),
       parsedVersion = syncVersionSchema.parse(input.version);
     const baseVersion = input.baseVersion === undefined ? undefined : syncVersionSchema.parse(input.baseVersion);
     const effects: Array<() => Promise<void>> = [];
     const result = await this.persistence.mutate(
-      { shopId: actor.shop.id, userId: actor.user.id },
+      actor,
       { ...input, baseVersion, id, parsedVersion },
       (tx) =>
         operation(tx, (effect) => {

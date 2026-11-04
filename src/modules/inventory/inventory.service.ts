@@ -1,3 +1,4 @@
+import type { AfterShopCommit } from '../../db/shop-operation.js';
 import { Inject, Injectable } from '@nestjs/common';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
@@ -7,6 +8,7 @@ import { InventoryPersistence } from './inventory.persistence.js';
 import type { InventoryInput, InventoryPatchInput, InventoryQuery, InventoryDto } from './contracts.js';
 import type { inventoryAdjustmentSchema } from '../../lib/inventoryAdjustments.js';
 import type { z } from 'zod';
+import type { ShopTransaction } from '../../db/types.js';
 @Injectable()
 export class InventoryService {
   constructor(
@@ -16,12 +18,15 @@ export class InventoryService {
 
   async createInventory(actor: ActorContext, input: InventoryInput) {
     requireActorRole(actor, ['owner', 'admin']);
-    const item = await this.persistence.create(actor.shop.id, input);
-    await this.inventoryAudit(actor, item.id, {
-      action: 'create',
-      name: input.name,
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      const item = await persistence.create(actor.shop.id, input);
+      await this.inventoryAudit(actor, persistence.scope, item.id, {
+        action: 'create',
+        name: input.name,
+      }, operationAfterCommit);
+      return { item };
     });
-    return { item };
   }
   async editInventory(
     actor: ActorContext,
@@ -29,22 +34,30 @@ export class InventoryService {
     input: InventoryPatchInput,
   ) {
     requireActorRole(actor, ['owner', 'admin']);
-    const item = await this.persistence.edit(actor.shop.id, id, input);
-    await this.inventoryAudit(actor, id);
-    return { item };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      const item = await persistence.edit(actor.shop.id, id, input);
+      await this.inventoryAudit(actor, persistence.scope, id, undefined, operationAfterCommit);
+      return { item };
+    });
   }
   async deactivateInventory(
     actor: ActorContext,
     id: string,
   ): Promise<{ ok: true }> {
     requireActorRole(actor, ['owner', 'admin']);
-    await this.persistence.deactivate(actor.shop.id, id);
-    return { ok: true };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      await persistence.deactivate(actor.shop.id, id);
+      return { ok: true };
+    });
   }
   private async inventoryAudit(
     actor: ActorContext,
+    scope: ShopTransaction,
     id: string,
-    metadata?: Record<string, unknown>,
+    metadata: Record<string, unknown> | undefined,
+    operationAfterCommit?: AfterShopCommit,
   ) {
     await this.audit.record(actor, {
       shopId: actor.shop.id,
@@ -53,11 +66,15 @@ export class InventoryService {
       resourceId: id,
       ipAddress: actor.ipAddress,
       metadata,
-    });
-    actor.log.info(
-      { event: 'inventory_updated', inventoryItemId: id },
-      'inventory updated',
-    );
+    }, scope);
+    const effect = async () => {
+      actor.log.info(
+        { event: 'inventory_updated', inventoryItemId: id },
+        'inventory updated',
+      );
+    };
+    if (operationAfterCommit) operationAfterCommit(effect);
+    else await effect();
   }
   async adjustInventory(
     actor: ActorContext,
@@ -65,11 +82,14 @@ export class InventoryService {
     key: string,
   ): Promise<{ adjusted: number; ids: string[] }> {
     requireActorRole(actor, ['owner', 'admin']);
-    return this.persistence.adjust({
-      shopId: actor.shop.id,
-      userId: actor.user.id,
-      key,
-      adjustments: input.adjustments,
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      return persistence.adjust({
+        shopId: actor.shop.id,
+        userId: actor.user.id,
+        key,
+        adjustments: input.adjustments,
+      });
     });
   }
 
@@ -78,14 +98,17 @@ export class InventoryService {
     query: InventoryQuery,
   ): Promise<{ items: InventoryDto[] }> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    const items = await this.persistence.listInventory(actor.shop.id, query);
-    return {
-      items: items.map((item) => ({
-        ...item,
-        isLowStock:
-          item.reorderLevel !== null &&
-          toNumber(item.currentQuantity) <= toNumber(item.reorderLevel),
-      })),
-    };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin', 'member']);
+      const items = await persistence.listInventory(actor.shop.id, query);
+      return {
+        items: items.map((item) => ({
+          ...item,
+          isLowStock:
+            item.reorderLevel !== null &&
+            toNumber(item.currentQuantity) <= toNumber(item.reorderLevel),
+        })),
+      };
+    });
   }
 }

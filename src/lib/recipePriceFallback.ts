@@ -3,6 +3,7 @@ import type { Database } from '../db/client.js';
 import { generalPrices, recipeIngredients } from '../db/schema/index.js';
 import { searchProduct, type PriceResult } from './supermarket/product-search.js';
 import { normalizeProductPrice } from './supermarket/productConversion.js';
+import { upsertReferencePrice } from './referencePrices.js';
 
 export function normalizePriceName(name: string): string {
   return name.trim().toLowerCase().replace(/[׳״'"’]/g, '').replace(/\s+/g, ' ');
@@ -12,7 +13,7 @@ export function normalizePriceName(name: string): string {
 // every conversion field so conflicting copies of a SKU also have a stable tie.
 function tieKey(product: PriceResult): string {
   return JSON.stringify([product.itemCode, product.chainId, product.itemName,
-    product.unitQty, product.quantity, product.itemPrice]);
+  product.unitQty, product.quantity, product.itemPrice]);
 }
 
 export function selectFallbackProduct(results: PriceResult[]): PriceResult | null {
@@ -20,7 +21,9 @@ export function selectFallbackProduct(results: PriceResult[]): PriceResult | nul
     if (a.score !== b.score) return b.score - a.score;
     const left = tieKey(a);
     const right = tieKey(b);
-    return left < right ? -1 : left > right ? 1 : 0;
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
   })[0] ?? null;
 }
 
@@ -54,7 +57,7 @@ export async function prepareRecipeFallbackPrices(
 
 /** Persist prepared results in the caller's short recipe transaction. No feed I/O. */
 export async function persistRecipeFallbackPrices(
-  database: Pick<Database, 'select' | 'insert' | 'update'>,
+  database: Pick<Database, 'select' | 'execute' | 'update'>,
   shopId: string,
   recipeId: string,
   matches: PreparedPrices,
@@ -71,11 +74,7 @@ export async function persistRecipeFallbackPrices(
     if (!price) continue;
     let id = savedIds.get(query);
     if (!id) {
-      const [saved] = await database.insert(generalPrices).values(price)
-        .onConflictDoUpdate({ target: [generalPrices.rawMaterialName, generalPrices.sku], set: price })
-        .returning({ id: generalPrices.id });
-      if (!saved) throw new Error('general price upsert returned no row');
-      id = saved.id;
+      id = await upsertReferencePrice(database, price);
       savedIds.set(query, id);
     }
     await database.update(recipeIngredients).set({ generalPriceId: id }).where(and(

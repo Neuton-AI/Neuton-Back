@@ -1,10 +1,11 @@
+import type { AfterShopCommit } from '../../db/shop-operation.js';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { recordAudit, type AuditInput } from '../../lib/audit.js';
+import type { ShopTransaction } from '../../db/types.js';
 import {
   ReceiptsPersistence,
-  type ReceiptTransaction,
 } from './receipts.persistence.js';
 import type {
   ReceiptQuery,
@@ -27,76 +28,93 @@ export class ReceiptsService {
     @Optional() @Inject(RECEIPTS_AUDIT)
     private readonly record: typeof recordAudit = recordAudit,
   ) {}
-  inTransaction(tx: ReceiptTransaction, afterCommit: ReceiptAfterCommit) {
+  inTransaction(tx: ShopTransaction, afterCommit: ReceiptAfterCommit) {
     return new ReceiptsService(new ReceiptsPersistence(tx), afterCommit, this.record);
   }
   private async audit(
     actor: ActorContext,
+    scope: ShopTransaction,
     input: Omit<AuditInput, 'shopId' | 'userId' | 'ipAddress'>,
+    operationAfterCommit?: AfterShopCommit,
   ) {
+    await this.record({
+      ...input,
+      shopId: actor.shop.id,
+      userId: actor.user.id,
+      ipAddress: actor.ipAddress,
+    }, scope);
     const effect = async () => {
-      try {
-        await this.record({
-          ...input,
-          shopId: actor.shop.id,
-          userId: actor.user.id,
-          ipAddress: actor.ipAddress,
-        });
-      } catch {
-        actor.log.error(
-          { event: 'receipt_audit_failed', eventType: input.eventType },
-          'audit write failed',
-        );
-      }
       actor.log.info(
         { event: input.eventType.toLowerCase(), receiptId: input.resourceId },
         'receipt operation committed',
       );
     };
-    if (this.afterCommit) this.afterCommit(effect);
+    const defer = operationAfterCommit ?? this.afterCommit;
+    if (defer) defer(effect);
     else await effect();
   }
   async list(actor: ActorContext, query: ReceiptQuery) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return { receipts: await this.persistence.list(actor.shop.id, query) };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin', 'member']);
+      return { receipts: await persistence.list(actor.shop.id, query) };
+    });
   }
   async detail(actor: ActorContext, id: string) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return { receipt: await this.persistence.detail(actor.shop.id, id) };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin', 'member']);
+      return { receipt: await persistence.detail(actor.shop.id, id) };
+    });
   }
   async status(actor: ActorContext, id: string): Promise<ReceiptStatusDto> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return this.persistence.status(actor.shop.id, id);
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin', 'member']);
+      return persistence.status(actor.shop.id, id);
+    });
   }
   async pending(actor: ActorContext) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return { pending: await this.persistence.pending(actor.shop.id) };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin', 'member']);
+      return { pending: await persistence.pending(actor.shop.id) };
+    });
   }
   async edit(actor: ActorContext, id: string, input: ReceiptPatchInput) {
     requireActorRole(actor, ['owner', 'admin']);
-    const receipt = await this.persistence.edit(actor.shop.id, id, input);
-    await this.audit(actor, { eventType: 'RECEIPT_UPDATED', resourceId: id });
-    return { receipt };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      const receipt = await persistence.edit(actor.shop.id, id, input);
+      await this.audit(actor, persistence.scope, { eventType: 'RECEIPT_UPDATED', resourceId: id }, operationAfterCommit);
+      return { receipt };
+    });
   }
   async verify(actor: ActorContext, id: string, input: VerifyReceiptInput) {
     requireActorRole(actor, ['owner', 'admin']);
-    const outcome = await this.persistence.verify(
-      actor.shop.id,
-      actor.user.id,
-      id,
-      input,
-    );
-    await this.audit(actor, {
-      eventType: 'RECEIPT_PROCESSED',
-      resourceId: id,
-      metadata: { accepted: outcome.accepted, rejected: outcome.rejected },
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      const outcome = await persistence.verify(
+        actor.shop.id,
+        actor.user.id,
+        id,
+        input,
+      );
+      await this.audit(actor, persistence.scope, {
+        eventType: 'RECEIPT_PROCESSED',
+        resourceId: id,
+        metadata: { accepted: outcome.accepted, rejected: outcome.rejected },
+      }, operationAfterCommit);
+      return outcome;
     });
-    return outcome;
   }
   async delete(actor: ActorContext, id: string): Promise<{ ok: true }> {
     requireActorRole(actor, ['owner', 'admin']);
-    await this.persistence.delete(actor.shop.id, id, actor.traceId);
-    await this.audit(actor, { eventType: 'RECEIPT_DELETED', resourceId: id });
-    return { ok: true };
+    return this.persistence.inShop(actor, async (persistence, actor, operationAfterCommit) => {
+      requireActorRole(actor, ['owner', 'admin']);
+      await persistence.delete(actor.shop.id, id, actor.traceId);
+      await this.audit(actor, persistence.scope, { eventType: 'RECEIPT_DELETED', resourceId: id }, operationAfterCommit);
+      return { ok: true };
+    });
   }
 }

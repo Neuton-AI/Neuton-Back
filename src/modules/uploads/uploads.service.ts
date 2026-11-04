@@ -19,6 +19,7 @@ export class UploadsService {
   ): Promise<PresignedDocumentDto> {
     requireActorRole(actor, ['owner', 'admin']);
     const result = await this.persistence.presign({
+      actor,
       body,
       shopId: actor.shop.id,
       userId: actor.user.id,
@@ -46,6 +47,7 @@ export class UploadsService {
   ): Promise<CompletedDocumentDto> {
     requireActorRole(actor, ['owner', 'admin']);
     const result = await this.persistence.complete({
+      actor,
       body,
       shopId: actor.shop.id,
       traceId: actor.traceId,
@@ -72,10 +74,11 @@ export class UploadsService {
     path: string,
   ): Promise<{ url: string; expiresIn: number }> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    if (!path.startsWith(`${actor.shop.id}/`))
+    if (!path.startsWith(`${actor.shop.id}/`)) {
       throw forbidden('That file does not belong to this shop');
+    }
     return {
-      url: await this.persistence.download(actor.shop.id, path),
+      url: await this.persistence.download(actor, path),
       expiresIn: 3600,
     };
   }

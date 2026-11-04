@@ -1,7 +1,9 @@
 import { asc, eq } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
-import { db } from '../../db/client.js';
-import type { TransactionalDatabase } from '../../db/types.js';
+import type { Database } from '../../db/client.js';
+import type { ShopTransaction } from '../../db/types.js';
+import type { ActorContext } from '../identity/contracts.js';
+import { ShopOperation, type AfterShopCommit } from '../../db/shop-operation.js';
 import { categories } from '../../db/schema/index.js';
 import type { Category } from '../../db/schema/catalog.js';
 import type { CategoryDto } from './contracts.js';
@@ -15,7 +17,13 @@ function mapCategory(category: Category): CategoryDto {
 }
 @Injectable()
 export class CategoriesPersistence {
-  constructor(@Inject(CATEGORIES_DATABASE) readonly database: TransactionalDatabase = db) {}
+  constructor(@Inject(CATEGORIES_DATABASE) source: Database | ShopTransaction) { this.access = new ShopOperation(source); }
+  private readonly access: ShopOperation;
+  get database() { return this.access.database; }
+  get scope() { return this.access.scope; }
+  inShop<T>(actor: ActorContext, work: (persistence: CategoriesPersistence, actor: ActorContext, afterCommit?: AfterShopCommit) => Promise<T>): Promise<T> {
+    return this.access.run(actor, (scope, currentActor, afterCommit) => work(new CategoriesPersistence(scope), currentActor, afterCommit));
+  }
 
   async listCategories(shopId: string): Promise<CategoryDto[]> {
     const rows = await this.database.select().from(categories)

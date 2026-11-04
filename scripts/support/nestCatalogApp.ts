@@ -15,10 +15,12 @@ import type { AuditInput } from '../../src/lib/audit.js';
 import { IdentityRepository, SessionVerifier } from '../../src/modules/identity/identity.ports.js';
 import { testApplication } from './httpClient.js';
 import { SHOP_ID, USER_ID, TEST_SHOP } from './catalogApp.js';
+import { FakeDb } from './fakeDb.js';
 
 export { SHOP_ID };
 
 export async function buildNestCatalogApp(database: TransactionalDatabase, role: ShopRole = 'owner') {
+  if (database instanceof FakeDb) database.role = role;
   const audits: AuditInput[] = [];
   @Module({
     imports: [InventoryModule, RecipeModule, CategoriesModule, SyncModule],

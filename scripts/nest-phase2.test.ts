@@ -163,7 +163,12 @@ test('Nest grouped uploads reject old payloads and redispatch stable identities 
       [upload],
       [{ ...upload, queuedAt: date }],
       [{ ...upload, queuedAt: date }],
+      [{ ...upload, queuedAt: date }],
+      [{ ...upload, queuedAt: date }],
+      [{ ...upload, queuedAt: date }],
+      [{ ...upload, queuedAt: date }],
     ],
+    'select:receipts': [[{ id: ID }], [{ id: ID }], [{ id: ID }], [{ id: ID }], [{ id: ID }]],
   });
   const h = await buildNestPhase2App(db as unknown as Database);
   try {

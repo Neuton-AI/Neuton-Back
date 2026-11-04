@@ -1,6 +1,10 @@
+import { nextOrderNumber, markOrderDelivered } from '../../db/shop-routines.js';
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { db, type Database } from '../../db/client.js';
+import type { Database } from '../../db/client.js';
+import type { ShopTransaction } from '../../db/types.js';
+import type { ActorContext } from '../identity/contracts.js';
+import { ShopOperation, type AfterShopCommit } from '../../db/shop-operation.js';
 import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
@@ -31,7 +35,13 @@ export function mapOrder(order: Order): OrderDto {
 }
 @Injectable()
 export class OrdersPersistence {
-  constructor(@Inject(ORDERS_DATABASE) readonly database: Database | OrdersTransaction = db) {}
+  constructor(@Inject(ORDERS_DATABASE) source: Database | ShopTransaction) { this.access = new ShopOperation(source); }
+  private readonly access: ShopOperation;
+  get database() { return this.access.database; }
+  get scope() { return this.access.scope; }
+  inShop<T>(actor: ActorContext, work: (persistence: OrdersPersistence, actor: ActorContext, afterCommit?: AfterShopCommit) => Promise<T>): Promise<T> {
+    return this.access.run(actor, (scope, currentActor, afterCommit) => work(new OrdersPersistence(scope), currentActor, afterCommit));
+  }
   async pricingInputs(shopId: string, recipeIds: string[]) {
     const recipeRows = await this.database
       .select()
@@ -51,15 +61,18 @@ export class OrdersPersistence {
   }
   async list(shopId: string, query: ListOrdersInput) {
     const conditions = [eq(orders.shopId, shopId), isNull(orders.deletedAt)];
-    if (query.from)
+    if (query.from) {
       conditions.push(sql`${orders.orderDate} >= ${query.from}`);
-    if (query.to)
+    }
+    if (query.to) {
       conditions.push(sql`${orders.orderDate} <= ${query.to}`);
+    }
     if (query.search) {
       conditions.push(sql`${orders.customerName} ilike ${`%${query.search}%`}`);
     }
-    if (query.status)
+    if (query.status) {
       conditions.push(eq(orders.status, query.status));
+    }
     const rows = await this.database
       .select()
       .from(orders)
@@ -79,8 +92,9 @@ export class OrdersPersistence {
   async find(shopId: string, id: string) {
     const [order] = await this.database.select().from(orders)
       .where(and(eq(orders.id, id), eq(orders.shopId, shopId), isNull(orders.deletedAt))).limit(1);
-    if (!order)
+    if (!order) {
       throw notFound('Order not found');
+    }
     return order;
   }
   async detailLines(shopId: string, id: string) {
@@ -115,24 +129,18 @@ export class OrdersPersistence {
       }))),
     };
   }
-  async create(shopId: string, userId: string, body: CreateOrderInput, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
+  async create(shopId: string, userId: string, body: CreateOrderInput, priced: PricedOrderItem[], totals: OrderTotals) {
     const write = async (tx: OrdersTransaction) => {
       // One `UPDATE … RETURNING` both claims the next number and locks the
       // shop row until this transaction ends (N-105): concurrent creates queue
       // behind it, so they read the row the previous one wrote and can neither
       // duplicate nor skip a number. A create that rolls back takes its number
       // back with it, and nothing ever reuses a number that was issued.
-      const [counter] = await tx
-        .update(shops)
-        .set({ lastOrderNumber: sql`${shops.lastOrderNumber} + 1` })
-        .where(eq(shops.id, shopId))
-        .returning({ lastOrderNumber: shops.lastOrderNumber });
-      if (!counter)
-        throw new Error('Shop row missing while allocating order number');
+      const orderNumber = await nextOrderNumber({ ...this.scope, database: tx });
       const inserted = await tx
         .insert(orders)
         .values({
-          orderNumber: counter.lastOrderNumber,
+          orderNumber,
           shopId: shopId,
           userId: userId,
           customerName: body.customerName ?? null,
@@ -152,8 +160,9 @@ export class OrdersPersistence {
         })
         .returning();
       const order = inserted[0];
-      if (!order)
+      if (!order) {
         throw new Error('Order insert returned no row');
+      }
       await tx.insert(orderItems).values(priced.map((item) => ({
         shopId: shopId,
         orderId: order.id,
@@ -167,21 +176,12 @@ export class OrdersPersistence {
       })));
       return order;
     };
-    return transaction ? write(transaction) : this.database.transaction(write);
+    return write(this.database);
   }
   async verify(shopId: string, id: string) {
-    const [updated] = await this.database.update(orders)
-      .set({ status: 'delivered' })
-      .where(and(
-        eq(orders.id, id),
-        eq(orders.shopId, shopId),
-        eq(orders.status, 'processing'),
-        isNull(orders.deletedAt),
-      ))
-      .returning();
-    return updated;
+    return markOrderDelivered(this.scope, id);
   }
-  async cancel(shopId: string, id: string, transaction?: OrdersTransaction) {
+  async cancel(shopId: string, id: string) {
     const write = async (tx: OrdersTransaction) => {
       const rows = await tx
         .select({ id: orders.id, status: orders.status })
@@ -190,19 +190,22 @@ export class OrdersPersistence {
         .limit(1)
         .for('update');
       const order = rows[0];
-      if (!order)
+      if (!order) {
         throw notFound('Order not found');
-      if (order.status === 'cancelled')
+      }
+      if (order.status === 'cancelled') {
         return null;
+      }
       const updated = await tx
         .update(orders)
         .set({ status: 'cancelled' })
         .where(and(eq(orders.id, id), eq(orders.shopId, shopId)))
         .returning({ id: orders.id });
-      if (!updated[0])
+      if (!updated[0]) {
         throw notFound('Order not found');
+      }
       return order.status;
     };
-    return transaction ? write(transaction) : this.database.transaction(write);
+    return write(this.database);
   }
 }

@@ -8,6 +8,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from '../src/db/schema/index.js';
 import { verifyReceipt } from '../src/lib/verifyReceipt.js';
+import { businessActor, fixtureScope } from './support/businessActor.js';
 
 // Opt in with a disposable database; never repoint the normal developer database.
 const databaseUrl = process.env.RECEIPT_INVENTORY_TEST_DATABASE_URL;
@@ -77,21 +78,23 @@ test('verified purchases accumulate total base units and serialize concurrent SM
       assert.ok(line);
       return { db, shopId, userId, receiptId: receipt.id, items: [{ id: line.id, accepted }] };
     }
+    const applyReceipt = (input: Awaited<ReturnType<typeof purchase>>) => db.transaction(tx =>
+      verifyReceipt({ scope: fixtureScope(tx, businessActor(shopId, userId)), receiptId: input.receiptId, items: input.items }));
 
     let lastPurchase;
     for (let cost = 1; cost <= 21; cost++) {
       lastPurchase = await purchase(cost, cost);
-      await verifyReceipt(lastPurchase);
+      await applyReceipt(lastPurchase);
     }
     const [before] = await db.select().from(schema.inventoryItems).where(eq(schema.inventoryItems.shopId, shopId));
     assert.ok(before);
     assert.equal(before?.baseUnitAmount, '115500.000');
     assert.equal(before?.baseUnitAverageCost, '11.500000');
-    await assert.rejects(verifyReceipt(lastPurchase!), /already verified/);
+    await assert.rejects(applyReceipt(lastPurchase!), /already verified/);
 
     const concurrent = await Promise.all([purchase(22, 2), purchase(23, 3)]);
-    await Promise.all(concurrent.map(verifyReceipt));
-    await verifyReceipt(await purchase(999, 100, false));
+    await Promise.all(concurrent.map(applyReceipt));
+    await applyReceipt(await purchase(999, 100, false));
     const [after] = await db.select().from(schema.inventoryItems).where(eq(schema.inventoryItems.id, before.id));
     assert.equal(after?.baseUnitAmount, '118000.000');
     assert.equal(after?.baseUnitAverageCost, '13.500000');

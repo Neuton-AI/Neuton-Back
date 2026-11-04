@@ -24,13 +24,13 @@ export async function changeShopMembership(scope: UserTransaction, shopId: strin
 }
 
 export async function nextOrderNumber(scope: ShopTransaction): Promise<number> {
-  const rows = await scope.database.execute<{ value: number }>(sql`select app_private.next_order_number() as value`);
+  const rows = await queryRows(scope.database, sql`select app_private.next_order_number() as value`, z.object({ value: z.number().int().positive() }));
   const value = rows[0]?.value;
   if (!value || !Number.isSafeInteger(value)) throw new AppError(503, 'ORDER_NUMBER_UNAVAILABLE', 'Unable to allocate an order number');
   return value;
 }
 
 export async function markOrderDelivered(scope: ShopTransaction, orderId: string): Promise<boolean> {
-  const rows = await scope.database.execute<{ changed: boolean }>(sql`select app_private.mark_order_delivered(${orderId}::uuid) as changed`);
+  const rows = await queryRows(scope.database, sql`select app_private.mark_order_delivered(${orderId}::uuid) as changed`, z.object({ changed: z.boolean() }));
   return rows[0]?.changed === true;
 }

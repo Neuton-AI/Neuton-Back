@@ -10,14 +10,17 @@ export class AnalyticsService {
   ) {}
   dashboard(actor: ActorContext, period: Period) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return this.persistence.dashboard(actor.shop.id, period);
+    return this.persistence.inShop(actor, (persistence, currentActor) => {
+      requireActorRole(currentActor, ['owner', 'admin', 'member']);
+      return persistence.dashboard(currentActor.shop.id, period);
+    });
   }
   recent(actor: ActorContext, limit: number) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return this.persistence.recent(actor.shop.id, limit);
+    return this.persistence.inShop(actor, (persistence, currentActor) => persistence.recent(currentActor.shop.id, limit));
   }
   inventoryValue(actor: ActorContext) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    return this.persistence.inventoryValue(actor.shop.id);
+    return this.persistence.inShop(actor, (persistence, currentActor) => persistence.inventoryValue(currentActor.shop.id));
   }
 }

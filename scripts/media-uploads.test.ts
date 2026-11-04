@@ -1,3 +1,4 @@
+import { businessActor } from './support/businessActor.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -12,17 +13,20 @@ import { enqueueMediaJobOn } from '../src/lib/queue.js';
 const SHOP = '11111111-1111-1111-1111-111111111111';
 const UPLOAD = '22222222-2222-2222-2222-222222222222';
 const USER = '33333333-3333-3333-3333-333333333333';
+const actor = businessActor(SHOP, USER);
 const sources = [0, 1, 2, 3].map((index) => ({
   sourceId: `${index + 4}4444444-4444-4444-4444-444444444444`,
   storagePath: `${SHOP}/receipts/${index}.jpg`, contentType: index === 2 ? 'application/pdf' : 'image/jpeg',
   originalFilename: `${index}.jpg`, byteSize: 2,
 }));
 function upload(overrides = {}) {
-  return { id: UPLOAD, shopId: SHOP, uploadedBy: USER, kind: 'receipt' as const, sources,
-    receiptId: 'receipt-id', recipeId: null, orderId: null, queuedAt: null, processedAt: null, ...overrides };
+  return {
+    id: UPLOAD, shopId: SHOP, uploadedBy: USER, kind: 'receipt' as const, sources,
+    receiptId: 'receipt-id', recipeId: null, orderId: null, queuedAt: null, processedAt: null, ...overrides
+  };
 }
-function harness(row = upload()) {
-  const db = new FakeDb({ 'select:mediaUploads': [[row]] });
+function harness(row: ReturnType<typeof upload> | null = upload()) {
+  const db = new FakeDb({ 'select:mediaUploads': row ? [[row], [row], [row]] : [[]], 'select:receipts': [[{ id: 'receipt-id' }], [{ id: 'receipt-id' }]] });
   const enqueued: MediaJobData[] = [];
   const deps: MediaUploadDeps = {
     db: db as unknown as MediaUploadDeps['db'],
@@ -42,7 +46,7 @@ test('document limits allow four sources and reject a fifth, invalid type, or ov
 
 test('completion verifies every source then enqueues one ordered document', async () => {
   const h = harness();
-  const result = await completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP });
+  const result = await completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP });
   assert.equal(result.receiptId, 'receipt-id');
   assert.equal(h.enqueued.length, 1);
   assert.deepEqual(h.enqueued[0]?.sources, sources);
@@ -55,7 +59,7 @@ test('missing later source prevents extraction and names the failed source', asy
     if (path === sources[2]!.storagePath) throw new Error('NotFound');
     return { byteSize: 2, contentType: 'image/jpeg' };
   };
-  await assert.rejects(completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP }),
+  await assert.rejects(completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP }),
     (error: any) => error.details.sourceId === sources[2]!.sourceId);
   assert.equal(h.enqueued.length, 0);
   assert.equal(h.db.callsTo('update', 'mediaUploads').length, 0);
@@ -64,13 +68,13 @@ test('missing later source prevents extraction and names the failed source', asy
 test('completion rejects actual metadata tampering before enqueue', async () => {
   const h = harness();
   h.deps.getObjectMetadata = async () => ({ byteSize: MAX_SOURCE_BYTES + 1, contentType: 'image/jpeg' });
-  await assert.rejects(completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP }), /declared size or type/);
+  await assert.rejects(completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP }), /declared size or type/);
   assert.equal(h.enqueued.length, 0);
 });
 
 test('repeated completion safely redispatches the same durable job identity', async () => {
   const h = harness(upload({ queuedAt: new Date() }));
-  const result = await completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP });
+  const result = await completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP });
   assert.equal(result.jobId, `upload-${UPLOAD}`);
   assert.equal(h.enqueued.length, 1);
 });
@@ -78,6 +82,7 @@ test('repeated completion safely redispatches the same durable job identity', as
 test('renewing a failed source preserves document, source IDs and successful keys', async () => {
   const h = harness();
   const result = await presignDocument(h.deps, {
+    actor,
     body: { uploadId: UPLOAD, sourceIds: [sources[2]!.sourceId] }, shopId: SHOP, userId: USER, currency: 'USD',
   });
   assert.equal(result.uploadId, UPLOAD);
@@ -91,6 +96,7 @@ test('renewing a failed source preserves document, source IDs and successful key
 test('initial request replay reuses its existing group before creating a business record', async () => {
   const h = harness();
   const result = await presignDocument(h.deps, {
+    actor,
     body: { clientRequestId: UPLOAD, kind: 'receipt', sources }, shopId: SHOP, userId: USER, currency: 'USD',
   });
   assert.equal(result.uploadId, UPLOAD);
@@ -101,6 +107,7 @@ test('initial request replay reuses its existing group before creating a busines
 test('initial request replay cannot renew PUT URLs after completion', async () => {
   const h = harness(upload({ queuedAt: new Date() }));
   await assert.rejects(presignDocument(h.deps, {
+    actor,
     body: { clientRequestId: UPLOAD, kind: 'receipt', sources }, shopId: SHOP, userId: USER, currency: 'USD',
   }), /already been submitted/);
 });
@@ -108,6 +115,7 @@ test('initial request replay cannot renew PUT URLs after completion', async () =
 test('source association tampering cannot sign a foreign shop object', async () => {
   const h = harness(upload({ sources: [{ ...sources[0]!, storagePath: 'foreign-shop/receipts/private.jpg' }] }));
   await assert.rejects(presignDocument(h.deps, {
+    actor,
     body: { uploadId: UPLOAD }, shopId: SHOP, userId: USER, currency: 'USD',
   }), /Upload source not found/);
 });
@@ -115,23 +123,25 @@ test('source association tampering cannot sign a foreign shop object', async () 
 test('dispatch failure leaves a durable readiness intent for a safe completion retry', async () => {
   const h = harness();
   h.deps.enqueueMediaJob = async () => { throw new Error('Redis temporarily unavailable'); };
-  await assert.rejects(completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP }), /Redis/);
+  await assert.rejects(completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP }), /Redis/);
   assert.ok(h.db.onlyCallTo('update', 'mediaUploads').set?.queuedAt instanceof Date);
 });
 
 test('order documents require an explicit target before creating any rows', async () => {
   const h = harness();
   await assert.rejects(presignDocument(h.deps, {
+    actor,
     body: { kind: 'order', sources }, shopId: SHOP, userId: USER, currency: 'USD',
   }), /Select an order/);
   assert.equal(h.db.calls.length, 0);
 });
 
 test('long recipe filenames preserve their unique upload suffix', async () => {
-  const h = harness();
+  const h = harness(null);
   h.db.push('insert', 'mediaUploads', [upload({ kind: 'recipe', receiptId: null })]);
   h.db.push('insert', 'recipes', [{ id: 'recipe-id' }]);
   await presignDocument(h.deps, {
+    actor,
     body: { clientRequestId: UPLOAD, kind: 'recipe', sources: [{ ...sources[0]!, originalFilename: 'a'.repeat(250) }] },
     shopId: SHOP, userId: USER, currency: 'USD',
   });
@@ -144,15 +154,17 @@ test('long recipe filenames preserve their unique upload suffix', async () => {
 test('unknown or cross-shop group cannot complete or renew', async () => {
   const h = harness();
   h.db.push('select', 'mediaUploads', []);
-  await completeDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP });
-  await assert.rejects(presignDocument(h.deps, { body: { uploadId: UPLOAD }, shopId: SHOP, userId: USER, currency: 'USD' }), /Upload not found/);
+  await completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP });
+  await assert.rejects(presignDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP, userId: USER, currency: 'USD' }), /Upload not found/);
 });
 
 test('multi-image/PDF input preserves source order and PDF bytes', async () => {
   const requested: string[] = [];
-  const input = await loadDocumentInput({ getObjectBytes: async (path) => {
+  const input = await loadDocumentInput({
+    getObjectBytes: async (path) => {
     requested.push(path); return new Uint8Array([sources.findIndex((source) => source.storagePath === path), 1]);
-  } } as WorkerDeps, { shopId: SHOP, sources } as MediaJobData);
+    }
+  } as WorkerDeps, { shopId: SHOP, sources } as MediaJobData);
   assert.deepEqual(requested, sources.map((source) => source.storagePath));
   assert.deepEqual(input.sources?.map((source) => source.mimeType), sources.map((source) => source.contentType));
   const parts = documentParts(input);
@@ -162,10 +174,12 @@ test('multi-image/PDF input preserves source order and PDF bytes', async () => {
 });
 
 test('a missing source stops the worker before any partial extraction', async () => {
-  await assert.rejects(loadDocumentInput({ getObjectBytes: async (path) => {
+  await assert.rejects(loadDocumentInput({
+    getObjectBytes: async (path) => {
     if (path === sources[1]!.storagePath) throw new Error('Missing');
     return new Uint8Array([0, 1]);
-  } } as WorkerDeps, { shopId: SHOP, sources } as MediaJobData), /Missing/);
+    }
+  } as WorkerDeps, { shopId: SHOP, sources } as MediaJobData), /Missing/);
 });
 
 test('durably processed group skips all worker effects after queue redelivery', async () => {

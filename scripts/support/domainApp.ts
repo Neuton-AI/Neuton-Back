@@ -31,6 +31,7 @@ import type {
   ShopRole,
 } from '../../src/modules/identity/contracts.js';
 import { searchProduct } from '../../src/lib/supermarket/product-search.js';
+import { FakeDb } from './fakeDb.js';
 import { testApplication, httpClient } from './httpClient.js';
 export const SHOP_ID = '22222222-2222-2222-2222-222222222222',
   USER_ID = '33333333-3333-3333-3333-333333333333';
@@ -68,8 +69,9 @@ export async function domainHarness(
           'execute',
           'transaction',
         ].includes(String(key))
-      )
+      ) {
         return undefined;
+      }
       return (...args: unknown[]) => {
         if (!current) throw new Error('Test database was not configured');
         const fn = Reflect.get(current.db, key);
@@ -139,6 +141,7 @@ export async function domainHarness(
     app: client,
     nest: app,
     use: (deps: DomainDeps) => {
+      if (deps.db instanceof FakeDb) deps.db.role = role;
       current = deps;
     },
     close: () => app.close(),

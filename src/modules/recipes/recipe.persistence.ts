@@ -1,7 +1,11 @@
+import { upsertReferencePrice } from '../../lib/referencePrices.js';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
-import { db } from '../../db/client.js';
-import type { TransactionalDatabase, ReadDatabase } from '../../db/types.js';
+import type { Database } from '../../db/client.js';
+import type { ShopTransaction } from '../../db/types.js';
+import type { ActorContext } from '../identity/contracts.js';
+import { ShopOperation, type AfterShopCommit } from '../../db/shop-operation.js';
+import type { ReadDatabase } from '../../db/types.js';
 import { recipes, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import type { Recipe } from '../../db/schema/catalog.js';
@@ -38,22 +42,27 @@ function mapRecipe(recipe: Recipe): RecipeDto {
 }
 @Injectable()
 export class RecipePersistence {
-  constructor(@Inject(RECIPE_DATABASE) readonly database: TransactionalDatabase = db) {}
+  constructor(@Inject(RECIPE_DATABASE) source: Database | ShopTransaction) { this.access = new ShopOperation(source); }
+  private readonly access: ShopOperation;
+  get database() { return this.access.database; }
+  get scope() { return this.access.scope; }
+  inShop<T>(actor: ActorContext, work: (persistence: RecipePersistence, actor: ActorContext, afterCommit?: AfterShopCommit) => Promise<T>): Promise<T> {
+    return this.access.run(actor, (scope, currentActor, afterCommit) => work(new RecipePersistence(scope), currentActor, afterCommit));
+  }
 
   async createRecipe(shopId: string, input: CreateRecipeInput): Promise<RecipeDto> {
-    return this.database.transaction(async tx => {
-      await assertCatalogLinks(tx, shopId, input);
-      const [recipe] = await tx.insert(recipes).values({
-        shopId, name: input.name, description: input.description ?? null,
-        imageUrl: input.imageUrl ?? null, categoryId: input.categoryId ?? null,
-        prepTimeMinutes: input.prepTimeMinutes, yieldQuantity: quantity(input.yieldQuantity),
-        yieldUnit: input.yieldUnit, targetMarginPct: input.targetMarginPct?.toFixed(2) ?? null,
-        allergens: input.allergens, steps: input.steps ?? [], status: 'pending',
-      }).returning();
-      if (!recipe) throw new Error('Recipe insert returned no row');
-      await tx.insert(recipeIngredients).values(ingredientValues(shopId, recipe.id, input.ingredients));
-      return mapRecipe(recipe);
-    });
+    const tx = this.database;
+    await assertCatalogLinks(tx, shopId, input);
+    const [recipe] = await tx.insert(recipes).values({
+      shopId, name: input.name, description: input.description ?? null,
+      imageUrl: input.imageUrl ?? null, categoryId: input.categoryId ?? null,
+      prepTimeMinutes: input.prepTimeMinutes, yieldQuantity: quantity(input.yieldQuantity),
+      yieldUnit: input.yieldUnit, targetMarginPct: input.targetMarginPct?.toFixed(2) ?? null,
+      allergens: input.allergens, steps: input.steps ?? [], status: 'pending',
+    }).returning();
+    if (!recipe) throw new Error('Recipe insert returned no row');
+    await tx.insert(recipeIngredients).values(ingredientValues(shopId, recipe.id, input.ingredients));
+    return mapRecipe(recipe);
   }
 
   async editRecipe(
@@ -74,68 +83,64 @@ export class RecipePersistence {
     }
     if (input.allergens !== undefined) patch.allergens = input.allergens;
     if (input.steps !== undefined) patch.steps = input.steps ?? [];
+    const tx = this.database;
+    const existing = await tx.select({ id: recipes.id }).from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+      .for('update').limit(1);
+    if (!existing[0]) throw notFound('Recipe not found');
 
-    const updated = await this.database.transaction(async (tx) => {
-      const existing = await tx.select({ id: recipes.id }).from(recipes)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
-        .for('update').limit(1);
-      if (!existing[0]) throw notFound('Recipe not found');
+    await assertCatalogLinks(tx, shopId, { categoryId: input.categoryId, ingredients });
 
-      await assertCatalogLinks(tx, shopId, { categoryId: input.categoryId, ingredients });
+    const rows = await tx.update(recipes).set(patch)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId))).returning();
+    if (!rows[0]) throw notFound('Recipe not found');
 
-      const rows = await tx.update(recipes).set(patch)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId))).returning();
-      if (!rows[0]) throw notFound('Recipe not found');
-
-      if (ingredients !== undefined) {
-        await tx
-          .delete(recipeIngredients)
-          .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
-        if (ingredients.length) {
-          await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, ingredients));
-        }
+    if (ingredients !== undefined) {
+      await tx
+        .delete(recipeIngredients)
+        .where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
+      if (ingredients.length) {
+        await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, ingredients));
       }
-      return rows[0];
-    });
+    }
+    const updated = await rows[0];
 
     return mapRecipe(updated);
   }
 
   async verifyRecipe(shopId: string, id: string, input: VerifyRecipeInput): Promise<RecipeDto> {
-    const recipe = await this.database.transaction(async (tx) => {
-      const rows = await tx
-        .select({ id: recipes.id, status: recipes.status })
-        .from(recipes)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
-        .for('update')
-        .limit(1);
-      const existing = rows[0];
-      if (!existing) throw notFound('Recipe not found');
-      if (existing.status === 'verified') throw conflict('Recipe is already verified');
-      await assertCatalogLinks(tx, shopId, input);
+    const tx = this.database;
+    const rows = await tx
+      .select({ id: recipes.id, status: recipes.status })
+      .from(recipes)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+      .for('update')
+      .limit(1);
+    const existing = rows[0];
+    if (!existing) throw notFound('Recipe not found');
+    if (existing.status === 'verified') throw conflict('Recipe is already verified');
+    await assertCatalogLinks(tx, shopId, input);
 
-      const patch: Partial<typeof recipes.$inferInsert> = {
-        status: 'verified',
-        errorMessage: null,
-        updatedAt: new Date(),
-      };
+    const patch: Partial<typeof recipes.$inferInsert> = {
+      status: 'verified',
+      errorMessage: null,
+      updatedAt: new Date(),
+    };
 
-      const updated = await tx
-        .update(recipes)
-        .set(patch)
-        .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
-        .returning();
-      if (!updated[0]) throw notFound('Recipe not found');
+    const updated = await tx
+      .update(recipes)
+      .set(patch)
+      .where(and(eq(recipes.id, id), eq(recipes.shopId, shopId)))
+      .returning();
+    if (!updated[0]) throw notFound('Recipe not found');
 
-      if (input.ingredients) {
-        await tx.delete(recipeIngredients).where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
-        if (input.ingredients.length) {
-          await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, input.ingredients));
-        }
+    if (input.ingredients) {
+      await tx.delete(recipeIngredients).where(and(eq(recipeIngredients.recipeId, id), eq(recipeIngredients.shopId, shopId)));
+      if (input.ingredients.length) {
+        await tx.insert(recipeIngredients).values(ingredientValues(shopId, id, input.ingredients));
       }
-
-      return updated[0];
-    });
+    }
+    const recipe = await updated[0];
 
     return mapRecipe(recipe);
   }
@@ -178,33 +183,20 @@ export class RecipePersistence {
   async manualProduct(
     product: ReturnType<typeof prepareManualProduct>,
   ) {
-    const [saved] = await this.database
-      .insert(generalPrices)
-      .values(product)
-      .returning({ id: generalPrices.id });
-    if (!saved) throw new Error('Manual general price insert returned no row');
-    return { ...product, id: saved.id, name: product.rawName };
+    const id = await upsertReferencePrice(this.database, product);
+    return { ...product, id, name: product.rawName };
   }
   async barcodePrice(
     price: Awaited<ReturnType<typeof prepareBarcodePrice>>['price'],
   ) {
-    const [saved] = await this.database
-      .insert(generalPrices)
-      .values(price)
-      .onConflictDoUpdate({
-        target: [generalPrices.rawMaterialName, generalPrices.sku],
-        set: price,
-      })
-      .returning({ id: generalPrices.id });
-    if (!saved) throw new Error('general price upsert returned no row');
-    return saved.id;
+    return upsertReferencePrice(this.database, price);
   }
 }
 
 export async function readRecipeCostIngredients(
   shopId: string,
   recipeId: string,
-  database: ReadDatabase = db,
+  database: ReadDatabase,
 ) {
   return database
     .select({

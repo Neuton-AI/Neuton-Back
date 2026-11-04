@@ -13,6 +13,7 @@ import { OrdersPersistence, ORDERS_DATABASE } from '../../src/modules/orders/ord
 import { OrdersAudit } from '../../src/modules/orders/orders.audit.js';
 import { apiLogger } from '../../src/lib/logger/index.js';
 import type { AuditInput } from '../../src/lib/audit.js';
+import { FakeDb } from './fakeDb.js';
 export const SHOP_ID = '22222222-2222-2222-2222-222222222222';
 export const USER_ID = '33333333-3333-3333-3333-333333333333';
 export const TEST_SHOP = {
@@ -26,12 +27,15 @@ export function actorFor(role: ShopRole = 'owner'): ActorContext {
   };
 }
 export async function buildNestOrdersApp(role: ShopRole = 'owner', database: Database = {} as Database) {
+  if (database instanceof FakeDb) database.role = role;
   let current = database;
   const audits: AuditInput[] = [];
-  const databaseProxy = new Proxy({} as Database, { get(_target, key) {
+  const databaseProxy = new Proxy({} as Database, {
+    get(_target, key) {
       const value = Reflect.get(current, key);
       return typeof value === 'function' ? value.bind(current) : value;
-    } });
+    }
+  });
   @Module({
     imports:[SyncModule,IdentityModule.register({
         sessionVerifier: { verify: async () => (testIdentity(USER_ID)) },
@@ -52,6 +56,6 @@ export async function buildNestOrdersApp(role: ShopRole = 'owner', database: Dat
   return {
     app, audits, use(next: {
       db: Database;
-    }) { current = next.db; }, close: () => app.close()
+    }) { current = next.db; if (current instanceof FakeDb) current.role = role; }, close: () => app.close()
   };
 }

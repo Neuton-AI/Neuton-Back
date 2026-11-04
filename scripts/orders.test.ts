@@ -333,8 +333,8 @@ test('POST /orders claims the next per-shop number inside the creation transacti
     const increment = new PgDialect().sqlToQuery((bump.set as { lastOrderNumber: SQL }).lastOrderNumber).sql;
     assert.match(
       increment,
-      /"shops"\."last_order_number" \+ 1/,
-      'an increment of the stored value, never a literal the next create could repeat',
+      /app_private\.next_order_number\(\)/,
+      'number allocation uses the restricted routine on the owning transaction',
     );
 
     const insert = h.db.onlyCallTo('insert', 'orders');

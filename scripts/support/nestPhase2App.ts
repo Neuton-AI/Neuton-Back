@@ -6,6 +6,7 @@ import type { Database } from '../../src/db/client.js';
 import { createHttpApplication } from '../../src/http/application.js';
 import { IdentityModule } from '../../src/modules/identity/identity.module.js';
 import type { ShopRole } from '../../src/modules/identity/contracts.js';
+import { FakeDb } from './fakeDb.js';
 import { ReceiptsController } from '../../src/modules/receipts/receipts.controller.js';
 import { ReceiptsService } from '../../src/modules/receipts/receipts.service.js';
 import {
@@ -25,6 +26,7 @@ export async function buildNestPhase2App(
   database: Database,
   role: ShopRole = 'owner',
 ) {
+  if (database instanceof FakeDb) database.role = role;
   const dispatched: unknown[] = [];
   const services: UploadServices = {
     db: database,

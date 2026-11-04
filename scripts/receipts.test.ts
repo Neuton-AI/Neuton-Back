@@ -72,10 +72,11 @@ test('DELETE /receipts/:id hard-removes every status that has not been verified'
       assert.equal(body.ok, true);
       assert.deepEqual(
         h.db.callSequence(),
-        ['select:receipts', 'select:mediaUploads', 'insert:storageObjectDeletions', 'delete:receipts'],
-        `${status}: one locked read, one delete, nothing else`,
+        ['select:receipts', 'select:mediaUploads', 'insert:storageObjectDeletions', 'delete:receipts', 'insert:auditLogs'],
+        `${status}: deletion, cleanup and audit share the same transaction`,
       );
       assert.deepEqual(h.deleted, [], 'storage cleanup is deferred durably');
+      assert.equal(h.db.onlyCallTo('insert', 'auditLogs').inTransaction, true);
       const intent=h.db.onlyCallTo('insert','storageObjectDeletions');
       assert.equal(intent.inTransaction,true);
       assert.deepEqual((intent.values as {storagePath:string}[]).map(row=>row.storagePath),[STORAGE_PATH]);
