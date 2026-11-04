@@ -49,6 +49,7 @@ test('completion verifies every source then enqueues one ordered document', asyn
   const result = await completeDocument(h.deps, { actor, body: { uploadId: UPLOAD }, shopId: SHOP });
   assert.equal(result.receiptId, 'receipt-id');
   assert.equal(h.enqueued.length, 1);
+  assert.equal(h.enqueued[0]?.jobId, `upload-${UPLOAD}`);
   assert.deepEqual(h.enqueued[0]?.sources, sources);
   assert.equal(h.db.onlyCallTo('update', 'mediaUploads').inTransaction, true);
 });
@@ -211,6 +212,13 @@ test('an active stable queue job is not duplicated or restarted', async () => {
     add: async () => { throw new Error('Must reuse the existing job'); },
   } as never, { uploadId: UPLOAD, kind: 'receipt' } as MediaJobData);
   assert.equal(result.jobId, `upload-${UPLOAD}`);
+});
+
+test('a mismatched persisted job ID is rejected before touching Redis', async () => {
+  const forbidden = async () => { throw new Error('Queue must not be touched'); };
+  await assert.rejects(enqueueMediaJobOn({ getJob: forbidden, add: forbidden } as never, {
+    uploadId: UPLOAD, jobId: 'upload-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', kind: 'receipt',
+  } as MediaJobData), /Job identity does not match/);
 });
 
 test('ungrouped jobs are rejected before queue, database, or extraction effects', async () => {
