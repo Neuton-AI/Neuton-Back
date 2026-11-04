@@ -1,6 +1,21 @@
 # Restricted Neon roles
 
-Run `npm run db:provision` explicitly using shell/deployment-injected MIGRATION_DATABASE_URL plus DATABASE_URL, AUTH_DATABASE_URL, WORKER_DATABASE_URL and CLEANUP_DATABASE_URL. The command does not load environment files. It extracts each runtime password from its corresponding URL; no password is embedded in SQL files or printed. It does not run during API startup, change existing passwords or repair unsafe existing roles silently.
+Run `npm run db:provision` from `Neuton-Back`. Only the existing owner's
+`MIGRATION_DATABASE_URL` is needed. If it is not exported in the terminal, the
+command prompts for the owner connection string with hidden input. It never
+loads environment files, generates runtime passwords, prints connection strings,
+or writes credentials to a local file.
+
+Provisioning creates four restricted LOGIN roles without passwords and three
+NOLOGIN helper roles. In Neon, set/reset each LOGIN role's password, then copy
+its connection string into the matching runtime environment variable. No runtime
+URL is needed before its role exists. Existing role passwords are preserved.
+
+The owner URL must target the fresh, empty application database. Copied URLs may
+contain `channel_binding=require`; remove that option for this PostgreSQL driver,
+retaining `sslmode=require` and certificate validation. After provisioning, run
+`npm run db:migrate` with the owner connection exported in the terminal. Role
+creation does not apply the baseline automatically or run during API startup.
 
 The migration owner needs CREATEROLE and database/schema-owner permissions. The runtime URLs use neuton_app, neuton_auth, neuton_worker and neuton_cleanup, all LOGIN, NOINHERIT, NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION, NOBYPASSRLS. They have no membership in any other role and own no objects. NOLOGIN neuton_policy_reader and neuton_bootstrap own only narrow helpers introduced by the baseline. The provisioning transaction serializes its work, rejects privilege drift, removes PUBLIC database/schema privileges and default PUBLIC table/sequence/function grants, and grants only database CONNECT to runtime roles. The baseline supplies deliberate schema/table/routine grants afterward.
 
