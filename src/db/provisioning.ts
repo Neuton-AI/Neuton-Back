@@ -39,6 +39,15 @@ export async function provisionNeonRoles(source: EnvironmentSource): Promise<voi
   }
 }
 
+/** The migration owner must transfer helper ownership and manage the resulting function ACLs. */
+export async function grantMigrationHelperAccess(tx: postgres.TransactionSql): Promise<void> {
+  const [owner] = await tx<{ name: string }[]>`select current_user as name`;
+  if (!owner) throw new Error('Migration owner could not be resolved');
+  for (const role of ['neuton_policy_reader', 'neuton_bootstrap', 'neuton_maintenance']) {
+    await tx`grant ${tx(role)} to ${tx(owner.name)} with inherit true, set true`;
+  }
+}
+
 /** The owner transaction creates roles before any runtime credentials exist. */
 export async function provisionRoleTransaction(tx: postgres.TransactionSql): Promise<void> {
   const roles = readProvisioningRoles();
@@ -92,4 +101,5 @@ export async function provisionRoleTransaction(tx: postgres.TransactionSql): Pro
   await tx`alter default privileges revoke all on tables from public`;
   await tx`alter default privileges revoke all on sequences from public`;
   await tx`alter default privileges revoke execute on functions from public`;
+  await grantMigrationHelperAccess(tx);
 }

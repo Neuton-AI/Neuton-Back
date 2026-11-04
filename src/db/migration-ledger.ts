@@ -6,6 +6,30 @@ export interface MigrationDigest { name: string; checksum: string }
 export interface MigrationFile extends MigrationDigest { sql: string }
 export class MigrationError extends Error {}
 
+/** Keep connection strings, SQL and driver details out of command output. */
+export function migrationFailureMessage(error: unknown): string {
+  if (error instanceof MigrationError) return error.message;
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'Invalid authentication configuration: MIGRATION_DATABASE_URL') {
+    return 'Neon migration failed: MIGRATION_DATABASE_URL is missing or invalid. Use the owner connection for the target database.';
+  }
+  const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+  if (code === 'CHANNEL_BINDING_REQUIRED') return 'Neon migration failed: the endpoint did not complete required channel-bound authentication.';
+  if (code === '28P01') return 'Neon migration failed: the owner username or password was rejected.';
+  if (code === '42501') {
+    const role = ['neuton_policy_reader', 'neuton_bootstrap', 'neuton_maintenance'].find(name =>
+      message === `must be able to SET ROLE "${name}"` || message === `permission denied to set role "${name}"`);
+    if (role) return `Neon migration failed: the migration owner needs SET ROLE permission for ${role}.`;
+    const permission = /^(permission denied for|must be owner of) (schema|table|function|sequence) "?([a-z_][a-z0-9_]{0,100})"?$/.exec(message);
+    if (permission) return `Neon migration failed: ${permission[1]} ${permission[2]} ${permission[3]} (SQLSTATE 42501).`;
+    return 'Neon migration failed: the migration owner lacks required database permissions (SQLSTATE 42501).';
+  }
+  if (typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code)) {
+    return `Neon migration failed (SQLSTATE ${code}). No credentials or SQL details were logged.`;
+  }
+  return 'Neon migration failed. Check migration-only configuration, connectivity and the approved SQL chain.';
+}
+
 export interface MigrationTransaction {
   query<T extends Record<string, unknown>>(statement: string, parameters?: string[]): Promise<T[]>;
   execute(statement: string): Promise<void>;

@@ -20,8 +20,16 @@ passwords, so it is an initialization operation, not a routine provisioning step
 The owner URL must target the fresh, empty application database. Copied URLs can retain `sslmode=require&channel_binding=require`. The v4 driver
 requires both verified TLS and channel-bound authentication, including during
 role provisioning. After provisioning, run
-`npm run db:migrate` with the owner connection exported in the terminal. Role
+`npm run db:migrate` with `MIGRATION_DATABASE_URL` in `Neuton-Back/.env` or exported
+in the terminal. The migration entry point loads `.env` without overriding existing
+terminal variables. Role
 creation does not apply the baseline automatically or run during API startup.
+
+The migration owner receives explicit SET and INHERIT membership in the three
+NOLOGIN helper roles so it can transfer function ownership and manage function
+ACLs afterward. Runtime roles receive no such membership. The migration entry
+point prepares this owner access under the shared migration lock, including for
+roles created by the earlier provisioning command.
 
 The migration owner needs CREATEROLE and database/schema-owner permissions. The runtime URLs use neuton_app, neuton_auth, neuton_worker and neuton_cleanup, all LOGIN, NOINHERIT, NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION, NOBYPASSRLS. They have no membership in any other role and own no objects. NOLOGIN neuton_policy_reader and neuton_bootstrap own only narrow helpers introduced by the baseline. The provisioning transaction serializes its work, rejects privilege drift, removes PUBLIC database/schema privileges and default PUBLIC table/sequence/function grants, and grants only database CONNECT to runtime roles. The baseline supplies deliberate schema/table/routine grants afterward.
 

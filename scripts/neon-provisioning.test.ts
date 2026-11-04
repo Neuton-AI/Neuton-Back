@@ -56,6 +56,13 @@ test('owner-only provisioning initializes restricted LOGIN passwords without ret
     const roles = (await database.query<{ rolname: string; rolcanlogin: boolean; rolpassword: string | null; rolinherit: boolean; rolbypassrls: boolean }>(
       "select rolname,rolcanlogin,rolpassword,rolinherit,rolbypassrls from pg_authid where rolname like 'neuton_%' order by rolname")).rows;
     assert.equal(roles.length, 7);
+    const memberships = (await database.query<{ inherit_option: boolean; set_option: boolean }>(
+      "select m.inherit_option,m.set_option from pg_auth_members m join pg_roles r on r.oid=m.roleid join pg_roles owner_role on owner_role.oid=m.member where owner_role.rolname=current_user and r.rolname in ('neuton_policy_reader','neuton_bootstrap','neuton_maintenance')")).rows;
+    assert.equal(memberships.length, 3);
+    for (const membership of memberships) {
+      assert.equal(membership.inherit_option, true);
+      assert.equal(membership.set_option, true);
+    }
     for (const role of roles) {
       assert.equal(role.rolpassword !== null, role.rolcanlogin);
       assert.equal(role.rolinherit, false);

@@ -9,6 +9,11 @@
 | Cleanup | CLEANUP_DATABASE_URL; storage credentials only when deleting stored objects |
 | Migration | MIGRATION_DATABASE_URL only; no Google, mail, Redis, storage or API credentials |
 
+`npm run db:migrate` loads `Neuton-Back/.env` when run from the backend directory.
+Existing terminal environment variables take precedence. Only the migration
+entry point performs this loading; importing configuration or connection factories
+does not open environment files or initialize the API.
+
 Database URLs must use PostgreSQL, include credentials and a database name, and must not request insecure SSL modes. Connection factories enforce certificate validation. Runtime usernames must be exactly neuton_app, neuton_auth, neuton_worker or neuton_cleanup for their respective settings. The migration owner must be separate. DATABASE_LISTEN_URL uses neuton_app with a direct/session endpoint; a Neon pooler endpoint is rejected.
 
 The pinned postgres-js 4.0.0 driver supports SCRAM-SHA-256-PLUS. All runtime,
