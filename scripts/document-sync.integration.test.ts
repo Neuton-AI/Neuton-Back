@@ -1,45 +1,35 @@
-import { businessActor } from './support/businessActor.js';
-import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
+import { sql } from 'drizzle-orm';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { buildSyncApplication } from './support/syncApp.js';
 
-// Explicit opt-in prevents this suite from applying fixtures to a configured production database.
+// Each run creates its own account/shop in the shared development/test database.
 test(
   'sync retries, conflicts, tombstones and order create completion preserve commit and rollback effects',
   {
-    timeout: 60_000,
-    skip:
-      !process.env.SYNC_TEST_DATABASE_URL &&
-      'Set SYNC_TEST_DATABASE_URL to a migrated disposable database',
+    timeout: 120_000,
+    skip: neonTestSkip,
   },
   async () => {
-    process.env.DATABASE_URL = process.env.SYNC_TEST_DATABASE_URL;
-    const [{db,sql:connection},{sql},{buildSyncApplication}]=await Promise.all([import('../src/db/client.js'),import('drizzle-orm'),import('./support/syncApp.js')]);
-    const shopId = randomUUID();
-    const userId = randomUUID();
+    const f = await neonFixture();
+    const { admin: db, shopId, userId } = f;
     const recipeId = randomUUID();
-    const app=await buildSyncApplication(db,{id:shopId,name:'Sync fixture',slug:shopId,currency:'USD',timezone:'UTC',storeAddress:null,targetProfitMargin:'30',hourlyLaborCost:'25',deliveryBaseFee:'5',deliveryRatePerKm:'1'},userId);
+    let app: Awaited<ReturnType<typeof buildSyncApplication>> | undefined;
     try {
-      await db.execute(
-        sql`insert into auth.users(id,email) values (${userId}::uuid,'sync@example.com')`,
-      );
-      await db.execute(
-        sql`insert into profiles(id) values (${userId}::uuid) on conflict do nothing`,
-      );
-      await db.execute(
-        sql`insert into shops(id,name,slug) values (${shopId}::uuid,'Sync fixture',${shopId})`,
-      );
-      await db.execute(
-        sql`insert into recipes(id,shop_id,name,status) values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`,
-      );
+      const client = await buildSyncApplication(f.application, f.shop, userId, 'owner',
+        { id: f.sessionId, secret: f.secret });
+      app = client;
+      await db.execute(sql`insert into recipes(id,shop_id,name,status)
+        values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`);
       const headers = {
-        cookie: TEST_SESSION_COOKIE,
+        cookie: `neuton-dev-session=${f.secret}`,
         'x-shop-id': shopId,
       };
       const check = () =>
-        app.inject({
+        client.inject({
           method: 'POST',
           url: '/api/v1/sync/check',
           headers,
@@ -50,7 +40,7 @@ test(
       const version = first.updatedAt + 100;
       const mutationId = randomUUID();
       const patch = (name: string, updatedAt: number, id = randomUUID()) =>
-        app.inject({
+        client.inject({
           method: 'PATCH',
           url: `/api/v1/recipes/${recipeId}`,
           headers: {
@@ -95,7 +85,7 @@ test(
         sql`select name from recipes where id=${recipeId}::uuid`,
       );
       assert.equal(row[0]?.name, 'Newer edit');
-      const equal = await app.inject({
+      const equal = await client.inject({
         method: 'POST',
         url: '/api/v1/sync/check',
         headers,
@@ -111,7 +101,7 @@ test(
       assert.equal((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt, version + 100);
       assert.equal(
         (
-          await app.inject({
+          await client.inject({
             method: 'POST',
             url: '/api/v1/sync/check',
             payload: { documents: [] },
@@ -121,7 +111,7 @@ test(
       );
       assert.equal(
         (
-          await app.inject({
+          await client.inject({
             method: 'POST',
             url: '/api/v1/sync/check',
             headers: { ...headers, 'x-shop-id': randomUUID() },
@@ -143,7 +133,7 @@ test(
       assert.ok((await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt > beforeCostChange);
       const beforeShopChange = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       await db.execute(
-        sql`update shops set target_profit_margin=35 where id=${shopId}::uuid`,
+        sql`update shops set target_profit_margin=target_profit_margin+5 where id=${shopId}::uuid`,
       );
       // A failure saving the sync retry receipt must roll back the domain
       // mutation without publishing a successful order audit.
@@ -157,7 +147,7 @@ test(
       const orderPayload = { items: [{ recipeId: orderRecipeId, quantity: 1 }] };
       const orderVersion = Date.now() + 100_000;
       const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
-        app.inject({
+        client.inject({
           method, url: `/api/v1/orders${path}`, headers: {
           ...headers, 'x-sync-id': mutation, 'x-sync-version': String(version),
           }, ...(path === '' ? { payload: orderPayload } : {})
@@ -179,7 +169,7 @@ test(
         where shop_id=${shopId}::uuid and resource_id=${recipeId}::uuid and event_type='RECIPE_UPDATED'`);
       const auditCountBefore = (await recipeAudits())[0]?.count;
       const nameBefore = (await db.execute(sql`select name from recipes where id=${recipeId}::uuid`))[0]?.name;
-      await rejectReceipt(() => app.inject({
+      await rejectReceipt(() => client.inject({
         method: 'PATCH', url: `/api/v1/recipes/${recipeId}`, headers: {
         ...headers, 'x-sync-id': rejectedMutation, 'x-sync-version': String(beforeRecipeRollback.updatedAt + 100),
         }, payload: { name: 'Must roll back' }
@@ -188,7 +178,7 @@ test(
       assert.equal((await recipeAudits())[0]?.count, auditCountBefore, 'rolled-back recipe edit emits no audit');
       const ingredientsBefore = [...await db.execute(sql`select id,raw_name,quantity,base_unit_amount
         from recipe_ingredients where recipe_id=${recipeId}::uuid order by id`)];
-      await rejectReceipt(() => app.inject({
+      await rejectReceipt(() => client.inject({
         method: 'POST', url: `/api/v1/recipes/${recipeId}/verify`, headers: {
         ...headers, 'x-sync-id': rejectedMutation, 'x-sync-version': String(beforeRecipeRollback.updatedAt + 100),
         }, payload: { ingredients: [{ rawName: 'Must roll back', quantity: 2, rawSrcUnit: 'kg', baseUnit: 'g', baseUnitAmount: 2000 }] }
@@ -230,7 +220,7 @@ test(
 
       const beforeDelete = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       assert.ok(beforeDelete > beforeShopChange);
-      const removed = await app.inject({
+      const removed = await client.inject({
         method: 'DELETE',
         url: `/api/v1/recipes/${recipeId}`,
         headers: {
@@ -249,7 +239,7 @@ test(
         await import('../src/lib/mediaUploads.js');
       const uploadId = randomUUID();
       const services = {
-        db,
+        db: f.application,
         createPresignedUploadUrl: async () => 'https://storage.example/upload',
         getObjectMetadata: async () => ({
           byteSize: 4,
@@ -261,7 +251,7 @@ test(
         }),
       };
       const uploadInput = {
-        actor: businessActor(shopId, userId),
+        actor: f.actor,
         body: {
           clientRequestId: uploadId,
           kind: 'receipt',
@@ -283,7 +273,7 @@ test(
         (await presignDocument(services, uploadInput)).receiptId,
         uploadId,
       );
-      const completion = { actor: businessActor(shopId, userId), body: { uploadId }, shopId };
+      const completion = { actor: f.actor, body: { uploadId }, shopId };
       assert.equal((await completeDocument(services, completion)).queued, true);
       assert.equal((await completeDocument(services, completion)).queued, true);
       const count = await db.execute(
@@ -294,7 +284,7 @@ test(
       const cleanupCount = () => db.execute(sql`select count(*)::int as count from storage_object_deletions where shop_id=${shopId}::uuid`);
       const beforeCleanup = (await cleanupCount())[0]?.count;
       const beforePaths = await db.execute(sql`select storage_path from storage_object_deletions where shop_id=${shopId}::uuid`);
-      await rejectReceipt(() => app.inject({
+      await rejectReceipt(() => client.inject({
         method: 'DELETE', url: `/api/v1/receipts/${uploadId}`, headers: {
         ...headers,'x-sync-id':rejectedMutation,'x-sync-version':String(receiptVersion+100),
         }
@@ -303,7 +293,7 @@ test(
       assert.equal((await db.execute(sql`select count(*)::int as count from media_uploads where id=${uploadId}::uuid`))[0]?.count,1);
       assert.equal((await cleanupCount())[0]?.count,beforeCleanup,'outer rollback leaves no cleanup intent');
       const deleteId=randomUUID();
-      const removeReceipt = () => app.inject({
+      const removeReceipt = () => client.inject({
         method: 'DELETE', url: `/api/v1/receipts/${uploadId}`, headers: {
         ...headers,'x-sync-id':deleteId,'x-sync-version':String(receiptVersion+100),
         }
@@ -321,11 +311,7 @@ test(
         sql`insert into receipts(shop_id,storage_path) values (${shopId}::uuid,${`${shopId}/fixture.jpg`})`,
       );
     } finally {
-      await app.close();
-      await db.execute(sql`delete from storage_object_deletions where shop_id=${shopId}::uuid`);
-      await db.execute(sql`delete from shops where id=${shopId}::uuid`);
-      await db.execute(sql`delete from auth.users where id=${userId}::uuid`);
-      await connection.end({ timeout: 5 });
+      try { await app?.close(); } finally { await f.close(); }
     }
   },
 );

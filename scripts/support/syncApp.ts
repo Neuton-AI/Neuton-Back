@@ -29,6 +29,7 @@ export async function buildSyncApplication(
   shop: ShopContext,
   userId: string,
   role: ShopRole = 'owner',
+  session = { id: TEST_SESSION_ID, secret: TEST_SESSION_SECRET },
 ) {
   const app = await testApplication(Root, [
     [INVENTORY_DATABASE, database],
@@ -41,8 +42,8 @@ export async function buildSyncApplication(
       SessionVerifier,
       {
         verify: async (token: string) =>
-          token === TEST_SESSION_SECRET
-            ? testIdentity(userId, 'sync@example.com')
+          token === session.secret
+            ? { ...testIdentity(userId, 'sync@example.com'), sessionId: session.id }
             : null,
       },
     ],

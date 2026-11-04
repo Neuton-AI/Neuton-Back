@@ -4,18 +4,15 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { eq } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import postgres from 'postgres';
 import * as schema from '../src/db/schema/index.js';
 import { verifyReceipt } from '../src/lib/verifyReceipt.js';
-import { businessActor, fixtureScope } from './support/businessActor.js';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { createDatabaseConnection } from '../src/db/connection.js';
 
-// Opt in with a disposable database; never repoint the normal developer database.
-const databaseUrl = process.env.RECEIPT_INVENTORY_TEST_DATABASE_URL;
-const skip = !databaseUrl && 'requires RECEIPT_INVENTORY_TEST_DATABASE_URL';
+const skip = neonTestSkip;
 
 test('migration converts package amounts and backfills the latest 20 verified costs', { skip }, async () => {
-  const connection = postgres(databaseUrl!, { max: 1 });
+  const connection = createDatabaseConnection('migration');
   try {
     await connection.begin(async (tx) => {
       // Temporary tables shadow the application tables and disappear at commit.
@@ -58,15 +55,9 @@ test('migration converts package amounts and backfills the latest 20 verified co
 });
 
 test('verified purchases accumulate total base units and serialize concurrent SMA updates', { skip }, async () => {
-  const connection = postgres(databaseUrl!, { max: 5 });
-  const db = drizzle(connection, { schema });
-  const shopId = randomUUID();
-  const userId = randomUUID();
+  const f = await neonFixture();
+  const { admin: db, shopId, userId } = f;
   try {
-    // Profiles reference Supabase auth users on a fully migrated database.
-    await connection`INSERT INTO auth.users(id,email) VALUES (${userId},'receipt-inventory-test@example.com')`;
-    await db.insert(schema.profiles).values({ id: userId });
-    await db.insert(schema.shops).values({ id: shopId, name: 'Receipt inventory regression', slug: shopId });
     async function purchase(cost: number, quantity: number, accepted = true) {
       const [receipt] = await db.insert(schema.receipts).values({ shopId, status: 'unverified', storagePath: `${shopId}/receipts/${randomUUID()}.png` }).returning();
       assert.ok(receipt);
@@ -78,8 +69,8 @@ test('verified purchases accumulate total base units and serialize concurrent SM
       assert.ok(line);
       return { db, shopId, userId, receiptId: receipt.id, items: [{ id: line.id, accepted }] };
     }
-    const applyReceipt = (input: Awaited<ReturnType<typeof purchase>>) => db.transaction(tx =>
-      verifyReceipt({ scope: fixtureScope(tx, businessActor(shopId, userId)), receiptId: input.receiptId, items: input.items }));
+    const applyReceipt = (input: Awaited<ReturnType<typeof purchase>>) => f.inShop(scope =>
+      verifyReceipt({ scope, receiptId: input.receiptId, items: input.items }));
 
     let lastPurchase;
     for (let cost = 1; cost <= 21; cost++) {
@@ -100,9 +91,6 @@ test('verified purchases accumulate total base units and serialize concurrent SM
     assert.equal(after?.baseUnitAverageCost, '13.500000');
     assert.equal(after?.currentQuantity, '236.000');
   } finally {
-    await db.delete(schema.shops).where(eq(schema.shops.id, shopId));
-    await db.delete(schema.profiles).where(eq(schema.profiles.id, userId));
-    await connection`DELETE FROM auth.users WHERE id=${userId}`;
-    await connection.end();
+    await f.close();
   }
 });

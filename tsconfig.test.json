@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["src/**/*.ts", "drizzle.config.ts", "scripts/**/*.test.ts", "scripts/support/**/*.ts"],
+  "include": ["src/**/*.ts", "drizzle.config.ts", "scripts/**/*.test.ts", "scripts/support/**/*.ts", "scripts/verify-rls.ts"],
   "exclude": ["node_modules", "dist"]
 }

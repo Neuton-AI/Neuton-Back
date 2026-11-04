@@ -1,52 +1,26 @@
-import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { sql } from 'drizzle-orm';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { buildSyncApplication } from './support/syncApp.js';
 
 test(
   'base revisions prevent future client timestamps from overwriting intervening edits and preserve replay',
   {
-    skip:
-      !process.env.SYNC_TEST_DATABASE_URL &&
-      'Requires a migrated disposable SYNC_TEST_DATABASE_URL',
-    timeout: 20000,
+    skip: neonTestSkip,
+    timeout: 60000,
   },
   async () => {
-    process.env.DATABASE_URL = process.env.SYNC_TEST_DATABASE_URL;
-    const [{ db, sql: connection }, { sql }, { buildSyncApplication }] =
-      await Promise.all([
-        import('../src/db/client.js'),
-        import('drizzle-orm'),
-        import('./support/syncApp.js'),
-      ]);
-    const shopId = randomUUID(),
-      userId = randomUUID(),
-      recipeId = randomUUID();
-    const fixture = await buildSyncApplication(
-      db,
-      {
-        id: shopId,
-        name: 'Base fixture',
-        slug: shopId,
-        currency: 'USD',
-        timezone: 'UTC',
-        storeAddress: null,
-        targetProfitMargin: '30',
-        hourlyLaborCost: '25',
-        deliveryBaseFee: '5',
-        deliveryRatePerKm: '1',
-      },
-      userId,
-    );
+    const f = await neonFixture();
+    const { admin: db, shopId, userId } = f;
+    const recipeId = randomUUID();
+    let fixture: Awaited<ReturnType<typeof buildSyncApplication>> | undefined;
     try {
-      await db.execute(
-        sql`insert into auth.users(id,email) values (${userId}::uuid,'base@example.test')`,
-      );
-      await db.execute(sql`insert into profiles(id) values (${userId}::uuid)`);
-      await db.execute(
-        sql`insert into shops(id,name,slug) values (${shopId}::uuid,'Base fixture',${shopId})`,
-      );
+      const client = await buildSyncApplication(f.application, f.shop, userId, 'owner',
+        { id: f.sessionId, secret: f.secret });
+      fixture = client;
       await db.execute(
         sql`insert into recipes(id,shop_id,name,status) values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`,
       );
@@ -61,11 +35,11 @@ test(
         expected: number,
         id = randomUUID(),
       ) =>
-        fixture.inject({
+        client.inject({
           method: 'PATCH',
           url: `/api/v1/recipes/${recipeId}`,
           headers: {
-            cookie: TEST_SESSION_COOKIE,
+            cookie: `neuton-dev-session=${f.secret}`,
             'x-shop-id': shopId,
             'x-sync-id': id,
             'x-sync-version': String(version),
@@ -75,8 +49,8 @@ test(
         });
       const first = await patch('First edit', base + 100, base, mutationId);
       assert.equal(first.statusCode, 200);
-    const snapshot = await fixture.inject({ method: 'GET', url: `/api/v1/recipes/${recipeId}`, headers: {
-      cookie: TEST_SESSION_COOKIE, 'x-shop-id': shopId, 'x-sync-snapshot': 'true',
+    const snapshot = await client.inject({ method: 'GET', url: `/api/v1/recipes/${recipeId}`, headers: {
+      cookie: `neuton-dev-session=${f.secret}`, 'x-shop-id': shopId, 'x-sync-snapshot': 'true',
     } });
     assert.equal(snapshot.statusCode, 200);
     assert.equal(snapshot.json().syncVersion, base + 100);
@@ -101,10 +75,7 @@ test(
         409,
       );
     } finally {
-      await fixture.close();
-      await db.execute(sql`delete from shops where id=${shopId}::uuid`);
-      await db.execute(sql`delete from auth.users where id=${userId}::uuid`);
-      await connection.end({ timeout: 2 });
+      try { await fixture?.close(); } finally { await f.close(); }
     }
   },
 );

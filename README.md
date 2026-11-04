@@ -169,12 +169,38 @@ without stable identity remain conservative conflict units. Conflicts require an
 explicit local/server choice; accepting a remote deletion discards its pending
 queue, so export a retained draft first if a copy is needed.
 
-Verification: `npm run verify` and `npm run db:validate`. On a disposable migrated
-database, set `SYNC_TEST_DATABASE_URL` for base-version/integration checks and
-`NATIVE_SYNC_TEST_DATABASE_URL` for native commit/rollback/fan-out/reconnect tests.
+Verification: `npm run verify` and `npm run db:validate`. The sync/base-version
+integration checks use the development Neon connections described below.
+`NATIVE_SYNC_TEST_DATABASE_URL` selects native commit/rollback/fan-out/reconnect tests.
 Never point these fixture variables at production. See
 [SPEC-183-live-document-sync.md](./SPEC-183-live-document-sync.md) for acceptance
 criteria. Roll back frontend/backend together to restore the old comparison
 triggers; the additive notification trigger may remain, or remove it and
 `notify_document_change()` after stopping all listeners. Retain version tables
 and offline queues during rollback.
+
+## Development database integration tests
+
+The prepared development Neon database also serves as the test database. Run
+`npm test` or `npm run verify` from this directory with its existing role settings:
+`DATABASE_URL` (`neuton_app`), `AUTH_DATABASE_URL` (`neuton_auth`), and
+`MIGRATION_DATABASE_URL` (the separate schema owner). The database must already
+have the current `drizzle-neon` chain applied; tests do not provision roles or
+run migrations against it. Never use production settings for these commands.
+
+Order numbering, document sync, base revisions, receipt inventory and signed
+downloads share `scripts/support/neonFixture.ts`. It checks that all three
+connections target the same database, creates unique accounts/sessions and a
+shop, and removes only those fixtures in `finally`. Owner access is used for
+fixture setup/cleanup and fault injection; application operations run through
+the real restricted app connection and verified user/shop scopes. The tests
+skip explicitly when those development settings are absent, so offline CI can
+still run without credentials. These suites no longer use the old
+`SYNC_TEST_DATABASE_URL` or `RECEIPT_INVENTORY_TEST_DATABASE_URL` settings.
+
+`npm run db:verify-rls` uses the same development connections to check forced
+RLS, the restricted app role, cross-shop access, member permissions and immutable
+upload sources with fresh, automatically cleaned fixtures. Historical migration
+regression SQL in receipt-inventory tests runs only against connection-local
+temporary tables. Signed-download checks generate signatures locally; no test
+objects are uploaded to or removed from storage.

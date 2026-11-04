@@ -1,66 +1,40 @@
+import './support/testEnv.js';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { isPlaceholder } from './support/testEnv.js';
-import { db } from '../src/db/client.js';
 import { receipts } from '../src/db/schema/index.js';
+import { UploadsService } from '../src/modules/uploads/uploads.service.js';
+import { UploadsPersistence, defaultUploadServices } from '../src/modules/uploads/uploads.persistence.js';
 import { createPresignedDownloadUrl } from '../src/lib/storage.js';
-import { sql, and, eq } from 'drizzle-orm';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
 
-function tenantPrefix(shopId: string, path: string) {
-  return `${shopId}/${path}`;
-}
-
-test('download-url rejects cross-tenant path', async () => {
-  const shopA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-  const shopB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
-  const path = tenantPrefix(shopB, 'receipts/test.png');
-
-  assert.throws(() => {
-    if (!path.startsWith(`${shopA}/`)) {
-      throw new Error('forbidden');
-    }
-  }, { message: /forbidden/i });
-});
-
-/**
- * The two cases below are database-backed. When no real `DATABASE_URL` is
- * configured — CI, or a fresh clone — the suite placeholder fills one in, so
- * they are skipped explicitly instead of hanging on a refused connection.
- */
-const databaseBacked = !isPlaceholder('DATABASE_URL');
-const skip = databaseBacked
-  ? false
-  : 'no real DATABASE_URL configured (CI) — database-backed signed-download cases skipped';
-
-test('download-url rejects unknown path for tenant', { skip }, async () => {
-  const shopId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
-  const path = tenantPrefix(shopId, 'receipts/does-not-exist.png');
-
-  const rows = await db
-    .select({ id: receipts.id })
-    .from(receipts)
-    .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, path)))
-    .limit(1);
-
-  assert.equal(rows.length, 0);
-});
-
-test('download-url returns signed URL for owned path', { skip }, async () => {
-  const shopId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
-  const path = tenantPrefix(shopId, 'receipts/owned.png');
-
-  const rows = await db
-    .select({ id: receipts.id })
-    .from(receipts)
-    .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, path)))
-    .limit(1);
-
-  if (rows.length === 0) {
-    console.log('Test skipped: no matching receipt row in DB');
-    return;
+test('download authorization rejects foreign/unknown paths and signs a seeded owned path', { skip: neonTestSkip }, async () => {
+  const f = await neonFixture();
+  const signed: string[] = [];
+  const service = new UploadsService(new UploadsPersistence({ ...defaultUploadServices,
+    db: f.application,
+    async createPresignedDownloadUrl(path) {
+      signed.push(path);
+      // Signing is local: no object is uploaded or downloaded.
+      return createPresignedDownloadUrl(path);
+    },
+  }));
+  try {
+    const path = `${f.shopId}/receipts/owned.png`;
+    await f.inShop(async ({ database }) => {
+      await database.insert(receipts).values({ shopId: f.shopId, uploadedBy: f.userId, storagePath: path });
+    });
+    await assert.rejects(service.download(f.actor, `${randomUUID()}/receipts/foreign.png`), { statusCode: 403 });
+    await assert.rejects(service.download(f.actor, `${f.shopId}/receipts/missing.png`), { statusCode: 404 });
+    assert.deepEqual(signed, [], 'rejected paths never reach the signer');
+    const download = await service.download(f.actor, path);
+    const url = new URL(download.url);
+    assert.equal(url.protocol, 'https:');
+    assert.ok(url.pathname.endsWith(path));
+    assert.ok(url.searchParams.has('X-Amz-Signature'));
+    assert.equal(download.expiresIn, 3600);
+    assert.deepEqual(signed, [path]);
+  } finally {
+    await f.close();
   }
-
-  const url = await createPresignedDownloadUrl(path);
-  assert.ok(url.startsWith('http'));
-  assert.ok(url.includes(path));
 });

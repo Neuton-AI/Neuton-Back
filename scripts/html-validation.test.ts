@@ -9,7 +9,7 @@
  * covered; the rest walk the same guard across the shop, catalog and upload
  * schemas it was applied to.
  *
- * Each harness stubs the guards (they would reach Supabase) but registers the
+ * Each harness stubs the guards (they would reach Neon) but registers the
  * real routes, and a rejected request must leave the scripted database
  * untouched — proof the check sits in front of the write, not after it.
  */

@@ -1,197 +1,84 @@
-import { sql } from '../src/db/client.js';
+import './support/testEnv.js';
+import assert from 'node:assert/strict';
+import { sql } from 'drizzle-orm';
+import { inventoryItems, mediaUploads, profiles, shopMembers } from '../src/db/schema/index.js';
+import { withShopTransaction } from '../src/db/tenant-context.js';
+import { neonFixture } from './support/neonFixture.js';
 
-/**
- * Verifies tenant isolation by impersonating each user through the JWT GUC
- * that auth.uid() reads, running as the non-owner `authenticated` role so RLS
- * genuinely applies (table owners bypass it).
- *
- * Fixture data is created and removed inside a single transaction that is
- * rolled back, so nothing is left behind.
- */
-
-await sql.begin(async (tx) => {
-  // Fail loudly if RLS is not actually enabled on the tables under test.
-  const rls = await tx<{ relname: string; enabled: boolean }[]>`
-    select relname, relrowsecurity as enabled
-    from pg_class
-    where relnamespace = 'public'::regnamespace
-      and relname in ('shops','profiles','shop_members','inventory_items','recipes',
-                      'categories','receipts','receipt_items','orders','order_items',
-                      'recipe_ingredients','audit_logs','media_uploads')
-      and not relrowsecurity
-  `;
-  if (rls.length > 0) {
-    throw new Error(`RLS not enabled on: ${rls.map((r) => r.relname).join(', ')}`);
-  }
-
-  const policyCount = await tx<{ count: number }[]>`
-    select count(*)::int as count from pg_policies
-    where schemaname = 'public'
-  `;
-  console.log(`RLS enabled on 13 tables, ${policyCount[0]?.count} policies present`);
-
-  const ownerId = '11111111-1111-1111-1111-111111111111';
-  const memberId = '22222222-2222-2222-2222-222222222222';
-  const outsiderId = '33333333-3333-3333-3333-333333333333';
-  const shopA = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-  const shopB = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
-
-  await tx`
-    insert into public.shops (id, name, slug) values
-      (${shopA}, 'Shop A', 'shop-a'),
-      (${shopB}, 'Shop B', 'shop-b')
-  `;
-
-  // profiles.id is FK'd to auth.users(id), so the fixture needs real auth rows.
-  // They are created inside this transaction and vanish with the rollback.
-  for (const userId of [ownerId, memberId, outsiderId]) {
-    await tx`
-      insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data)
-      values (
-        ${userId},
-        ${`${userId.slice(0, 8)}@rls-test.local`},
-        'authenticated',
-        'authenticated',
-        '{"provider":"email","providers":["email"]}'::jsonb,
-        '{}'::jsonb
-      )
-      on conflict (id) do nothing
-    `;
-    await tx`insert into public.profiles (id) values (${userId}) on conflict (id) do nothing`;
-  }
-
-  await tx`
-    insert into public.shop_members (shop_id, user_id, role) values
-      (${shopA}, ${ownerId}, 'owner'),
-      (${shopA}, ${memberId}, 'member'),
-      (${shopB}, ${ownerId}, 'admin')
-  `;
-  await tx`
-    insert into public.inventory_items (shop_id, name, raw_material_name, unit, base_unit, base_unit_amount, base_unit_cost) values
-      (${shopA}, 'Flour A', 'Flour', 'kg', 'kg', 1, 0),
-      (${shopB}, 'Flour B', 'Flour', 'kg', 'kg', 1, 0)
-  `;
-  await tx`
-    insert into public.media_uploads (shop_id, kind, sources) values
-      (${shopA}, 'receipt', '[{"sourceId":"a","storagePath":"a/receipt.jpg","contentType":"image/jpeg","byteSize":1}]'),
-      (${shopB}, 'receipt', '[{"sourceId":"b","storagePath":"b/receipt.jpg","contentType":"image/jpeg","byteSize":1}]')
-  `;
-
-  /**
-   * Fixture data must be written as the owner, then all assertions run under
-   * SET LOCAL ROLE authenticated -- the table owner bypasses RLS, so testing as
-   * the owner would report a false pass.
-   *
-   * Each call runs in a savepoint: a rejected statement aborts its enclosing
-   * transaction, which would otherwise poison every later assertion.
-   */
-  async function asUser<T>(userId: string, statement: (t: typeof tx) => Promise<T>): Promise<T> {
-    return tx.savepoint(async (sp) => {
-      await sp`reset role`;
-      await sp`select set_config('request.jwt.claim.sub', ${userId}, true)`;
-      await sp`select set_config('request.jwt.claims', ${JSON.stringify({ sub: userId })}, true)`;
-      await sp`set local role authenticated`;
-      return statement(sp as unknown as typeof tx);
+// Uses the prepared development Neon role connections. All fixture IDs are fresh;
+// only these accounts/shops are removed, including when an assertion fails.
+const fixtures: Awaited<ReturnType<typeof neonFixture>>[] = [];
+function databaseCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined;
+  if ('code' in error && typeof error.code === 'string') return error.code;
+  if ('cause' in error) return databaseCode(error.cause);
+  return undefined;
+}
+try {
+  const owner = await neonFixture();
+  fixtures.push(owner);
+  const other = await neonFixture();
+  fixtures.push(other);
+  const member = await neonFixture();
+  fixtures.push(member);
+  const tenantTables = ['shops', 'profiles', 'shop_members', 'inventory_items', 'recipes',
+    'categories', 'receipts', 'receipt_items', 'orders', 'order_items', 'recipe_ingredients',
+    'audit_logs', 'media_uploads', 'document_versions', 'document_mutations',
+    'inventory_adjustment_batches', 'product_measurements', 'ingredient_conversions'];
+  const relations = await owner.ownerConnection<{ relname: string; enabled: boolean; forced: boolean }[]>`
+    select relname,relrowsecurity as enabled,relforcerowsecurity as forced from pg_class
+    where relnamespace='public'::regnamespace and relname=any(${tenantTables})`;
+  assert.equal(relations.length, tenantTables.length, 'all expected tenant tables exist');
+  assert.ok(relations.every(row => row.enabled && row.forced), 'tenant tables must enable and force RLS');
+  const role = await owner.application.execute(sql`select current_user as name,rolsuper,rolbypassrls
+    from pg_roles where rolname=current_user`);
+  assert.equal(role[0]?.name, 'neuton_app');
+  assert.equal(role[0]?.rolsuper, false);
+  assert.equal(role[0]?.rolbypassrls, false);
+  await owner.admin.insert(shopMembers).values({ shopId: owner.shopId, userId: member.userId, role: 'member' });
+  for (const fixture of [owner, other]) {
+    await fixture.inShop(async ({ database, shopId }) => {
+      await database.insert(inventoryItems).values({ shopId, name: 'RLS fixture',
+        rawMaterialName: 'RLS fixture', unit: 'g', baseUnit: 'g', baseUnitAmount: '1', baseUnitCost: '0' });
+      await database.insert(mediaUploads).values({ shopId, uploadedBy: fixture.userId, kind: 'receipt',
+        sources: [{ sourceId: 'fixture', storagePath: `${shopId}/fixture.png`, contentType: 'image/png',
+          originalFilename: null, byteSize: 1 }] });
     });
   }
-
-  const failures: string[] = [];
-  function check(label: string, actual: number, expected: number) {
-    const ok = actual === expected;
-    if (!ok) failures.push(`${label}: expected ${expected}, got ${actual}`);
-    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label} (expected ${expected}, got ${actual})`);
-  }
-
-  console.log('\nshop_members scoped by membership:');
-  check(
-    'owner of shop A sees own 2 + co-members of shop A = 3',
-    (await asUser(ownerId, (t) => tx<{ n: number }[]>`select count(*)::int n from public.shop_members`))[0]!.n,
-    3,
-  );
-  check(
-    'member of shop A only',
-    (await asUser(memberId, (t) => tx<{ n: number }[]>`select count(*)::int n from public.shop_members`))[0]!.n,
-    1,
-  );
-  check(
-    'non-member sees nothing',
-    (await asUser(outsiderId, (t) => tx<{ n: number }[]>`select count(*)::int n from public.shop_members`))[0]!.n,
-    0,
-  );
-
-  console.log('\ninventory_items cross-tenant read:');
-  check(
-    'member of shop A cannot see shop B stock',
-    (await asUser(memberId, (t) => tx<{ n: number }[]>`select count(*)::int n from public.inventory_items`))[0]!.n,
-    1,
-  );
-  check(
-    'non-member sees no inventory',
-    (await asUser(outsiderId, (t) => tx<{ n: number }[]>`select count(*)::int n from public.inventory_items`))[0]!.n,
-    0,
-  );
-
-  console.log('\ncross-tenant write:');
-  check('member cannot see another shop upload sources',
-    (await asUser(memberId, (t) => t<{ n: number }[]>`select count(*)::int n from public.media_uploads`))[0]!.n, 1);
-  check('outsider cannot see upload sources',
-    (await asUser(outsiderId, (t) => t<{ n: number }[]>`select count(*)::int n from public.media_uploads`))[0]!.n, 0);
-  let sourcesImmutable = false;
-  try {
-    await asUser(ownerId, (t) => t`update public.media_uploads set sources = '[]' where shop_id = ${shopA}`);
-  } catch { sourcesImmutable = true; }
-  check('authenticated owners cannot mutate immutable upload associations directly', sourcesImmutable ? 1 : 0, 1);
-  // A WITH CHECK violation raises rather than filtering, so the pass condition
-  // is that Postgres rejects the row.
-  let writeBlocked = false;
-  let writeError = '';
-  try {
-    await asUser(memberId, (t) => tx`
-      insert into public.inventory_items (shop_id, name, raw_material_name, unit, base_unit, base_unit_amount, base_unit_cost)
-      values (${shopB}, 'Injected', 'Injected', 'kg', 'kg', 1, 0)
-    `);
-  } catch (error) {
-    writeBlocked = true;
-    writeError = error instanceof Error ? error.message : String(error);
-  }
-  check('member cannot insert into another shop', writeBlocked ? 1 : 0, 1);
-  if (writeBlocked) console.log(`        rejected with: ${writeError.split('\n')[0]}`);
-
-  // ...but the member must still be able to write into their own shop.
-  await tx`reset role`;
-  let ownWriteOk = false;
-  try {
-    await asUser(memberId, (t) => tx`
-      insert into public.inventory_items (shop_id, name, raw_material_name, unit, base_unit, base_unit_amount, base_unit_cost)
-      values (${shopA}, 'Own Shop Item', 'Own Shop Item', 'kg', 'kg', 1, 0)
-    `);
-    ownWriteOk = true;
-  } catch (error) {
-    console.log(`        own-shop write failed: ${error instanceof Error ? error.message : error}`);
-  }
-  check('member can still write into their own shop', ownWriteOk ? 1 : 0, 1);
-
-  console.log('\nhelper functions:');
-  const helper = await asUser(memberId, (t) => tx<{ isMember: boolean; role: string | null }[]>`
-    select public.is_shop_member(${shopA}) as "isMember", public.shop_role(${shopA}) as role
-  `);
-  check('is_shop_member true for own shop', helper[0]!.isMember ? 1 : 0, 1);
-  check('shop_role resolves', helper[0]!.role === 'member' ? 1 : 0, 1);
-
-  if (failures.length > 0) {
-    throw new Error(`\n${failures.length} RLS assertion(s) failed:\n  ${failures.join('\n  ')}`);
-  }
-
-  console.log('\nAll RLS assertions passed.');
-  throw new Error('__rollback__');
-}).catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message === '__rollback__') {
-    console.log('\n(fixture rolled back — no rows persisted)');
-  } else {
-    console.error(`\nRLS VERIFICATION FAILED:\n${message}`);
+  await owner.inShop(async ({ database }) => {
+    assert.equal((await database.select().from(profiles)).length, 1, 'profile reads remain self-only');
+    assert.equal((await database.select().from(shopMembers)).length, 1, 'membership projection remains self-only');
+    assert.equal((await database.select().from(inventoryItems)).length, 1, 'foreign inventory is hidden');
+    assert.equal((await database.select().from(mediaUploads)).length, 1, 'foreign uploads are hidden');
+  });
+  await assert.rejects(withShopTransaction(owner.application, owner.actor.session, other.shopId, async () => {}),
+    { statusCode: 403 });
+  await assert.rejects(withShopTransaction(other.application, other.actor.session, owner.shopId, async () => {}),
+    { statusCode: 403 });
+  await assert.rejects(owner.inShop(async ({ database }) => {
+    await database.insert(inventoryItems).values({ shopId: other.shopId, name: 'Forbidden',
+      rawMaterialName: 'Forbidden', unit: 'g', baseUnit: 'g', baseUnitAmount: '1', baseUnitCost: '0' });
+  }), error => databaseCode(error) === '42501');
+  await withShopTransaction(member.application, member.actor.session, owner.shopId, async ({ database }) => {
+    assert.equal((await database.select().from(inventoryItems)).length, 1, 'members can read their shop');
+  });
+  await assert.rejects(withShopTransaction(member.application, member.actor.session, owner.shopId, async ({ database }) => {
+    await database.insert(inventoryItems).values({ shopId: owner.shopId, name: 'Forbidden member edit',
+      rawMaterialName: 'Forbidden', unit: 'g', baseUnit: 'g', baseUnitAmount: '1', baseUnitCost: '0' });
+  }), error => databaseCode(error) === '42501');
+  await assert.rejects(owner.application.execute(sql`select id from auth_private.users`),
+    error => databaseCode(error) === '42501');
+  await assert.rejects(owner.inShop(({ database }) => database.execute(sql`update public.media_uploads set sources='[]'::jsonb`)),
+    error => databaseCode(error) === '23514');
+  assert.equal((await owner.application.select().from(inventoryItems)).length, 0, 'shop scope cannot leak after a transaction');
+  console.log(`Neon RLS verification passed: ${tenantTables.length} forced tenant tables, restricted app role, scoped reads/writes and immutable sources.`);
+} catch (error) {
+  console.error('Neon RLS verification failed:', error instanceof assert.AssertionError ? error.message : 'Database or authorization check failed');
+  process.exitCode = 1;
+} finally {
+  const cleanup = await Promise.allSettled(fixtures.reverse().map(fixture => fixture.close()));
+  if (cleanup.some(result => result.status === 'rejected')) {
+    console.error('Neon RLS fixture cleanup failed');
     process.exitCode = 1;
   }
-});
-
-await sql.end({ timeout: 5 });
+}
