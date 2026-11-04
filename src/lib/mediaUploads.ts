@@ -13,6 +13,7 @@ import type { ActorContext } from '../modules/identity/contracts.js';
 import { ShopOperation } from '../db/shop-operation.js';
 import { requireActorRole } from '../modules/identity/authorization.js';
 import { sql } from 'drizzle-orm';
+import { JobAuthorizationRepository } from '../modules/processing/job-authorization.repository.js';
 
 export const MAX_DOCUMENT_SOURCES = 4;
 export const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
@@ -217,24 +218,29 @@ export async function completeDocument(deps: MediaUploadDeps, input: { body: unk
       }
     }
   }
-  const upload = await access.run(input.actor, async (scope, actor) => {
+  const acceptance = await access.run(input.actor, async (scope, actor) => {
     requireActorRole(actor, ['owner', 'admin']);
     const upload = await authorizedUpload(scope, body.uploadId, true);
     if (uploadIdentity(upload) !== uploadIdentity(prepared)) throw conflict('Upload association changed');
-    if (upload.queuedAt) return upload;
-    // Commit readiness before touching Redis. If dispatch fails or the API crashes,
-    // completion retries safely redispatch this same durable intent and stable job ID.
-    await scope.database.update(mediaUploads).set({ queuedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
-    return upload;
+    if (!upload.queuedAt) {
+      await scope.database.update(mediaUploads).set({ queuedAt: new Date() }).where(eq(mediaUploads.id, upload.id));
+    }
+    // Register on retries too: ON CONFLICT preserves the original requester,
+    // source digest, expiry and state, including work accepted before dispatch.
+    const job = await new JobAuthorizationRepository().register(scope, upload.id, actor.traceId);
+    return { upload, job };
   });
-  const identity = { uploadId: upload.id, receiptId: upload.receiptId, recipeId: upload.recipeId };
-  if (upload.processedAt) return { ...identity, queued: true, jobId: `upload-${upload.id}` };
-  const first = upload.sources[0]!;
+  const { upload: accepted, job } = acceptance;
+  const identity = { uploadId: accepted.id, receiptId: accepted.receiptId, recipeId: accepted.recipeId };
+  if (accepted.processedAt) return { ...identity, queued: true, jobId: job.jobId };
+  const first = accepted.sources[0]!;
   const enqueued = await deps.enqueueMediaJob({
-    uploadId: upload.id, shopId: upload.shopId, uploadedBy: upload.uploadedBy,
-    kind: upload.kind, sources: upload.sources, storagePath: first.storagePath,
+    jobId: job.jobId,
+    uploadId: accepted.id, shopId: accepted.shopId, uploadedBy: accepted.uploadedBy,
+    kind: accepted.kind, sources: accepted.sources, storagePath: first.storagePath,
     contentType: first.contentType, originalFilename: first.originalFilename,
-    ...(upload.orderId ? { orderId: upload.orderId } : {}), traceId: input.traceId,
+    ...(accepted.orderId ? { orderId: accepted.orderId } : {}), traceId: input.actor.traceId,
   });
   return { ...identity, ...enqueued };
 }
+

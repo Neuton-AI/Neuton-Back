@@ -21,6 +21,8 @@ export function createRedisConnection(): Redis {
 export type MediaKind = 'receipt' | 'recipe' | 'product' | 'order';
 
 export interface MediaJobData {
+  /** Persisted authority identifier; other fields are transitional dispatch hints. */
+  jobId?: string;
   uploadId?: string;
   sources?: UploadSource[];
   shopId: string;
@@ -66,12 +68,14 @@ export async function enqueueMediaJobOn(
   data: MediaJobData,
 ): Promise<EnqueueResult> {
   if (!data.uploadId) throw new Error('Grouped uploadId is required for media jobs');
-  const existing = await mediaQueue.getJob(`upload-${data.uploadId}`);
+  const jobId = data.jobId ?? `upload-${data.uploadId}`;
+  if (jobId !== `upload-${data.uploadId}`) throw new Error('Job identity does not match its upload');
+  const existing = await mediaQueue.getJob(jobId);
   if (existing) {
     if (await existing.getState() === 'failed') await existing.retry();
     return { queued: true, jobId: String(existing.id) };
   }
-  const job = await mediaQueue.add(data.kind, data, { jobId: `upload-${data.uploadId}` });
+  const job = await mediaQueue.add(data.kind, data, { jobId });
   return { queued: true, jobId: String(job.id) };
 }
 

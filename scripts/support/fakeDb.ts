@@ -214,6 +214,7 @@ export class FakeDb {
     const query = new PgDialect().sqlToQuery(statement);
     this.routineCalls.push(query.sql);
     if (query.sql.includes('set_config')) return [];
+    if (query.sql.includes('register_job')) return [{ job_id: `upload-${query.params[0]}` }];
     if (query.sql.includes('lock_shop_context')) return [{ role: this.role }];
     if (query.sql.includes('pg_advisory_xact_lock')) return [];
     if (query.sql.includes('upsert_general_price')) {
