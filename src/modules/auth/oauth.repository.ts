@@ -138,6 +138,6 @@ export class OAuthRepository {
         ${input.initiator?.userId ?? null}::uuid,${input.initiator?.sessionId ?? null}::uuid,${input.initiator?.securityVersion ?? null},
         ${input.nonce},${encrypted.ciphertext},${encrypted.keyId},${input.returnPath},
         clock_timestamp()+${AUTH_POLICY.tokens.oauthMs}*interval '1 millisecond')`);
-    return { secret, expiresAt: browser.expiresAt };
+    return { secret, expiresAt: browser.expiresAt, transactionId: id };
   }
 }

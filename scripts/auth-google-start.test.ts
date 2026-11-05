@@ -38,6 +38,8 @@ test('Google start binds encrypted transactions to browser and exact authenticat
     assert.ok(pending);
     await assert.rejects(services.google.start({ purpose: 'link', returnPath: '/profile' }, { sessionSecret: pending.secret }, context), { statusCode: 403 });
     await database.query("update auth_private.users set status='active',email_confirmed_at=now() where id=$1", [user.user.id]);
+    await assert.rejects(services.google.start({ purpose: 'link', returnPath: '/profile' },
+      { sessionSecret: pending.secret, expectedUserId: '00000000-0000-4000-8000-000000000001' }, context), { code: 'ACCOUNT_CHANGED' });
     const started = await services.google.start({ purpose: 'link', returnPath: '/profile' }, { sessionSecret: pending.secret, browserSecret: newSecret() }, context);
     assert.ok(started.browser);
     const initiated = (await database.query<{ initiating_user_id: string; initiating_session_id: string; expected_security_version: number }>("select * from auth_private.oauth_transactions where purpose='link'")).rows[0]!;

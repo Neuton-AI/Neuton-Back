@@ -3,9 +3,15 @@ import type { ApiAuthConfig } from '../../config/auth.js';
 import { AppError } from '../../lib/errors.js';
 import { GoogleOidcClient } from './auth.ports.js';
 import type { GoogleIdentityClaims, GooglePurpose } from './auth.ports.js';
+import { authUnavailable } from './auth-errors.js';
 
 const ISSUER = 'https://accounts.google.com';
 const failed = () => new AppError(400, 'GOOGLE_AUTH_FAILED', 'Google authentication failed; start again');
+function protocolError(error: unknown): AppError {
+  if (error instanceof AppError && error.statusCode === 503) return error;
+  if (error instanceof oidc.ClientError && error.code === 'OAUTH_TIMEOUT') return authUnavailable();
+  return failed();
+}
 
 /** Google supplies identity proof only; account and session decisions stay in Neuton. */
 export class GoogleProtocolClient extends GoogleOidcClient {
@@ -17,9 +23,9 @@ export class GoogleProtocolClient extends GoogleOidcClient {
     if (!this.configuration) {
       this.configuration = oidc.discovery(new URL(ISSUER), this.google.clientId,
         { client_secret: this.google.clientSecret, id_token_signed_response_alg: 'RS256' }, undefined,
-        { ...this.options, execute: [oidc.enableNonRepudiationChecks], timeout: 10 }).catch(error => {
+        { ...this.options, execute: [oidc.enableNonRepudiationChecks], timeout: 10 }).catch(() => {
           this.configuration = undefined;
-          throw error;
+          throw authUnavailable();
         });
     }
     return this.configuration;
@@ -32,10 +38,11 @@ export class GoogleProtocolClient extends GoogleOidcClient {
         code_challenge: input.codeChallenge, code_challenge_method: 'S256' };
       if (input.purpose === 'reauthenticate') {
         parameters.max_age = '0';
-        parameters.prompt = 'login';
+        parameters.prompt = 'select_account';
+        parameters.claims = JSON.stringify({ id_token: { auth_time: { essential: true } } });
       }
       return oidc.buildAuthorizationUrl(await this.discover(), parameters).href;
-    } catch { throw failed(); }
+    } catch (error) { throw protocolError(error); }
   }
 
   async exchange(input: { callbackUrl: URL; state: string; nonce: string; verifier: string; purpose: GooglePurpose }): Promise<GoogleIdentityClaims> {
@@ -50,7 +57,9 @@ export class GoogleProtocolClient extends GoogleOidcClient {
       const tokens = await oidc.authorizationCodeGrant(await this.discover(), input.callbackUrl, checks);
       const claims = tokens.claims();
       if (!claims || claims.iss !== ISSUER || !claims.sub || claims.sub.length > 255 ||
-        (claims.azp !== undefined && claims.azp !== this.google.clientId)) throw failed();
+        (claims.azp !== undefined && claims.azp !== this.google.clientId)) {
+        throw failed();
+      }
       let authenticatedAt: Date | null = null;
       if (input.purpose === 'reauthenticate') {
         if (typeof claims.auth_time !== 'number' || claims.auth_time > Date.now() / 1000 + 60) throw failed();
@@ -61,6 +70,6 @@ export class GoogleProtocolClient extends GoogleOidcClient {
         emailVerified: claims.email_verified === true,
         displayName: typeof claims.name === 'string' ? claims.name.slice(0, 200) : null,
         avatarUrl: typeof claims.picture === 'string' ? claims.picture.slice(0, 2048) : null, authenticatedAt };
-    } catch { throw failed(); }
+    } catch (error) { throw protocolError(error); }
   }
 }

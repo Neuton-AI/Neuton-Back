@@ -44,7 +44,7 @@ export class GoogleController {
   @Post('start') @HttpCode(200)
   async start(@Body() body: unknown, @Req() request: HttpRequest, @Res({ passthrough: true }) response: Response) {
     const result = await this.google.start(body, { browserSecret: this.cookies.read('browser', request.headers.cookie),
-      sessionSecret: this.cookies.read('session', request.headers.cookie) }, authRequestContext(request));
+      sessionSecret: this.cookies.read('session', request.headers.cookie), expectedUserId: request.headers['x-client-user-id'] }, authRequestContext(request));
     response.setHeader('Set-Cookie', this.cookies.set('browser', result.browser.secret, result.browser.expiresAt));
     return { authorizationUrl: result.authorizationUrl };
   }

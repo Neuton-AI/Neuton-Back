@@ -98,11 +98,11 @@ All routes use `/api/v1`. `AuthController` owns `/session` and `/auth/*`; remove
 | POST /auth/password/reset | token, password | 204; browser CSRF; normal login afterward |
 | POST /auth/reauthenticate/password | password | 204 and replacement cookie; session CSRF |
 | POST /profile/password | currentPassword, newPassword | 204 and replacement cookie; session CSRF |
-| POST /auth/password/add | password | 204 and replacement cookie; recent Google proof |
+| POST /auth/password/add | newPassword | 204 and replacement cookie; recent Google proof |
 | POST /auth/google/start | purpose, returnPath | `{authorizationUrl}`; CSRF; initiating session for link/reauthenticate |
 | GET /auth/google/callback | code/state or provider denial | Fixed completion-page redirect; state/nonce/PKCE/browser binding |
-| POST /auth/google/complete | ticket | `{returnPath}` and permitted new cookie; browser/session CSRF as appropriate |
-| GET /auth/methods | Cookie | Available password/Google methods; no protocol secrets |
+| POST /auth/google/complete | ticket | `{returnPath,purpose}` and permitted new cookie; browser/session CSRF as appropriate |
+| GET /auth/methods | Cookie | `{passwordAvailable,googleLinked,capabilities}`; no protocol secrets |
 | DELETE /auth/methods/google | No identity fields | 204; recent proof and remaining password method |
 | POST /auth/email/change | email | 202; active account, recent proof and CSRF |
 | POST /auth/email/change/confirm | token | 204; same account, recent proof, CSRF; normal login afterward |
@@ -145,7 +145,13 @@ No lock or transaction spans Google, SMTP, R2 or model calls. Read authorized in
 
 ## Browser identity and offline state
 
-OAuth completion records reference an existing target user or reserve a server-generated candidate UUID for a new account, exclusively. The latter has no user FK until the completion POST creates the account; callback GET does not have to create an account to satisfy a premature FK. Store only the validated identity claim allowlist, never Google tokens. Completion rechecks email collisions, initiating session and security version under locks before applying the mapping.
+OAuth callbacks atomically claim the browser-bound state before exchanging the code outside SQL. Claiming removes encrypted verifier material; failure requires a fresh start. Returning subjects resolve to their existing account without changing contact/profile fields. A new verified Google email creates a pending account, profile, unique subject mapping and local confirmation outbox message together. A normalized-email collision never merges accounts. No callback issues a session.
+
+Completion records reference that existing target user and contain only the validated identity claim allowlist, never Google tokens. The fixed `/auth/google/complete` redirect carries a one-use 60-second fragment ticket. Completion locks the user first and rechecks browser context, ticket expiry, current account version/status and the initiating session before applying login, link or reauthentication. Selecting a different Google subject cannot reauthenticate or switch an authenticated account. Linking additionally rechecks uniqueness and recent authentication, preserves contact email, revokes old security state and queues a notice atomically.
+
+The OIDC adapter fixes Google's issuer, configured callback and RS256 verification, requests only `openid email profile`, and enables library signature checks in addition to state, nonce, PKCE and claim validation. It requests no offline access. Reauthentication requests `max_age=0`, account selection and the essential `auth_time` claim; missing or stale authentication-time assurance never grants recent authentication. Google's [OIDC claim documentation](https://developers.google.com/identity/openid-connect/openid-connect#authenticationuriparameters) requires enabling `auth_time` in the Google client settings. Discovery outages return a bounded 503 and can be retried.
+
+Method capabilities are `linkGoogle`, `unlinkGoogle`, `addPassword` and `reauthenticateGoogle`. They describe current availability; each mutation rechecks the same rules under the account lock. First-password creation requires an active confirmed Google-only account and a session established by recent proof of its linked Google identity. Password hashing stays outside SQL, followed by another proof check. Unlinking requires recent proof and an existing password. Both transitions increment security version, invalidate prior sessions/actions/completions, enqueue a contact notice, and issue a replacement cookie from the established proof. Replacement retains the credential-proof timestamp rather than extending it through method-management activity.
 
 One provider exposes loading, anonymous, pending-email, authenticated and unavailable. Unavailable is not confirmed logout or fresh authority. Cold offline startup remains locked. Partitions are environment + verified user UUID + shop UUID and survive ordinary session replacement. Legacy partitions are quarantined; never infer new ownership from email. Stop requests/subscriptions and clear transient caches before showing a different account. Preserve unsent edits in their original partition; never replay them under another user.
 
@@ -167,8 +173,8 @@ selection, bounded foreground renewal and cross-tab reload hints. Authentication
 outages are unavailable states, never confirmed logout. Signup, deliberate
 contact confirmation, password sign-in, first-shop bootstrap, scoped settings and
 failure-aware logout, recovery, password reset and password security controls
-are connected to the existing screens. Google journeys remain in their later
-migration phase.
+are connected to the existing screens. Google initiation/completion and account
+method controls use the same transport and identity boundaries.
 
 ## Password reauthentication
 

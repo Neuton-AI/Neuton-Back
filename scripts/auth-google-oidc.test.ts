@@ -49,10 +49,23 @@ test('Google adapter uses PKCE and validates signed identity and fresh authentic
   await assert.rejects(client.exchange({ ...input, state: 'wrong' }), { code: 'GOOGLE_AUTH_FAILED' });
   const fresh = new URL(await client.authorizationUrl({ state: 'state', nonce: 'nonce', codeChallenge: 'challenge', purpose: 'reauthenticate' }));
   assert.equal(fresh.searchParams.get('max_age'), '0');
-  assert.equal(fresh.searchParams.get('prompt'), 'login');
+  assert.equal(fresh.searchParams.get('prompt'), 'select_account');
+  assert.deepEqual(JSON.parse(fresh.searchParams.get('claims')!), { id_token: { auth_time: { essential: true } } });
   await assert.rejects(client.exchange({ ...input, purpose: 'reauthenticate' }), { code: 'GOOGLE_AUTH_FAILED' });
   claims.auth_time = now;
   assert.ok((await client.exchange({ ...input, purpose: 'reauthenticate' })).authenticatedAt);
   claims.auth_time = now - 3600;
   await assert.rejects(client.exchange({ ...input, purpose: 'reauthenticate' }), { code: 'GOOGLE_AUTH_FAILED' });
+});
+test('Google discovery outages return unavailable without leaking provider errors and can be retried', async () => {
+  let calls = 0;
+  const client = new GoogleProtocolClient(syntheticAuthConfig().google, { [oidc.customFetch]: async () => {
+    calls++;
+    throw new Error('private provider diagnostics');
+  } });
+  const input = { state: 'state', nonce: 'nonce', codeChallenge: 'challenge', purpose: 'login' as const };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(client.authorizationUrl(input), { statusCode: 503, code: 'AUTH_UNAVAILABLE', message: 'Authentication temporarily unavailable' });
+  }
+  assert.equal(calls, 2);
 });

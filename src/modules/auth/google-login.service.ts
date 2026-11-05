@@ -19,6 +19,7 @@ import { normalizeEmail } from './normalization.js';
 import type { LockedAuthAccount } from './auth.repository.js';
 import type { GoogleIdentityClaims } from './auth.ports.js';
 import type { ClaimedOAuth } from './oauth.repository.js';
+import { assertExpectedUser } from '../identity/expected-user.js';
 
 export const googleStartInput = z.object({ purpose: z.enum(['login', 'link', 'reauthenticate']),
   returnPath: z.string().refine(path => (AUTH_POLICY.returnPaths as readonly string[]).includes(path)).default('/') }).strict();
@@ -48,7 +49,9 @@ export class GoogleLoginService {
       let replaceSessionId: string | undefined;
       if (purpose !== 'login') {
         if (!presented || presented.userId !== userId || presented.id !== completion.sessionId ||
-          completion.initiatingUserId !== userId || completion.initiatingVersion !== account.user.securityVersion) throw googleFailed();
+          completion.initiatingUserId !== userId || completion.initiatingVersion !== account.user.securityVersion) {
+          throw googleFailed();
+        }
         const current = await this.sessions.current(account, presented.id);
         if (!current || current.status !== 'active' || !account.user.emailConfirmedAt) throw googleFailed();
         replaceSessionId = current.id;
@@ -65,7 +68,9 @@ export class GoogleLoginService {
       if (purpose === 'reauthenticate') {
         recentAuthenticatedAt = identity.authenticatedAt ? new Date(identity.authenticatedAt) : null;
         if (!recentAuthenticatedAt || recentAuthenticatedAt.getTime() < Date.now() - AUTH_POLICY.session.recentAuthenticationMs ||
-          recentAuthenticatedAt.getTime() > Date.now() + 60_000) throw googleFailed();
+          recentAuthenticatedAt.getTime() > Date.now() + 60_000) {
+          throw googleFailed();
+        }
       }
       await this.oauth.consume(account, completion.id);
       if (purpose === 'link') {
@@ -102,6 +107,8 @@ export class GoogleLoginService {
       return redirect.href;
     } catch (error) {
       await this.oauth.fail(claimed.id);
+      await this.auth.transaction(transaction => this.events.append(transaction, { event: 'google_completed', result: 'failed',
+        correlationId: context.traceId, subjectUserId: claimed.userId, metadata: { method: 'google', reason: 'denied', oauthTransactionId: claimed.id } }));
       if (error instanceof AppError) throw error;
       throw googleFailed();
     }
@@ -151,7 +158,7 @@ export class GoogleLoginService {
     if (!inserted) throw new AppError(409, 'GOOGLE_ALREADY_LINKED', 'This Google account is already linked');
   }
 
-  async start(body: unknown, browser: { browserSecret?: string; sessionSecret?: string }, context: AuthRequestContext) {
+  async start(body: unknown, browser: { browserSecret?: string; sessionSecret?: string; expectedUserId?: string | string[] }, context: AuthRequestContext) {
     const input = googleStartInput.parse(body);
     await this.limits.oauthStart(context.ip);
     const state = newSecret();
@@ -162,15 +169,24 @@ export class GoogleLoginService {
       codeChallenge: await calculatePKCECodeChallenge(verifier) });
     const create = { ...input, state, nonce, verifier, browserSecret: browser.browserSecret };
     if (input.purpose === 'login') {
-      const bound = await this.auth.transaction(transaction => this.oauth.create(transaction, create));
+      const bound = await this.auth.transaction(async transaction => {
+        const browser = await this.oauth.create(transaction, create);
+        await this.events.append(transaction, { event: 'google_started', result: 'success', correlationId: context.traceId,
+          metadata: { method: 'google', oauthTransactionId: browser.transactionId } });
+        return browser;
+      });
       return { authorizationUrl, browser: bound };
     }
     if (!browser.sessionSecret) throw unauthorized();
     const bound = await this.sessions.withSession(browser.sessionSecret, async (account, session) => {
+      assertExpectedUser(browser.expectedUserId, account.user.id);
       if (session.status !== 'active' || !account.user.emailConfirmedAt) throw forbidden('Confirm your email before managing Google sign-in');
       if (input.purpose === 'link') requireRecentAuthentication(session);
-      return this.oauth.create(account.transaction, { ...create, initiator: { userId: account.user.id,
+      const browserContext = await this.oauth.create(account.transaction, { ...create, initiator: { userId: account.user.id,
         sessionId: session.id, securityVersion: account.user.securityVersion } });
+      await this.events.append(account.transaction, { event: 'google_started', result: 'success', correlationId: context.traceId,
+        actorUserId: account.user.id, sessionId: session.id, metadata: { method: 'google', oauthTransactionId: browserContext.transactionId } });
+      return browserContext;
     });
     if (!bound) throw unauthorized();
     return { authorizationUrl, browser: bound };
