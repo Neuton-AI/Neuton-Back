@@ -25,6 +25,8 @@ See [the module separation decision](docs/decisions/0001-separate-inventory-reci
 
 Run `npm run build`, then `npm start` and `npm run start:worker` as separate
 processes. Deliberately apply the committed `drizzle-neon/` chain before deploying.
+`npm run build` clears `dist/` before compilation so retired modules cannot remain
+in deployment output. Use the npm command when preparing the production bundle.
 The old chain is preserved in `drizzle-archive/` and is never active discovery.
 Storage/auth cleanup and durable mail dispatch follow the API lifecycle;
 leased work survives restarts. Startup never migrates the database.
@@ -136,7 +138,7 @@ conversion, fallback, editor, and worker suites cover pricing and persistence.
 # Live document synchronization (#183)
 
 Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
-`GET /api/v1/sync/events` SSE endpoint. It does not use Supabase Realtime.
+`GET /api/v1/sync/events` SSE endpoint.
 The database hosting provider can change without changing the sync protocol.
 
 The active Neon baseline includes document notifications. `DATABASE_LISTEN_URL`

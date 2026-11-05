@@ -62,7 +62,7 @@ The API additionally needs `APP_ORIGIN`, `GOOGLE_CLIENT_ID`,
 `AUTH_RATE_LIMIT_SECRET`. Retain existing `UPSTASH_REDIS_URL`, R2 account/key/
 bucket settings and `GEMINI_API_KEY` for the processes using queue/storage/model
 services. Optional log settings and bounded runtime controls are defined in
-`src/env.ts`. Supabase settings and old owner-URL fallbacks are unused.
+`src/env.ts`. Only role-specific Neon URLs are used; owner-URL fallbacks are unsupported.
 
 Use Brevo's SMTP relay with a verified sender/domain and operator-supplied SMTP
 credentials. Port 465 uses implicit TLS; port 587 uses mandatory STARTTLS with
