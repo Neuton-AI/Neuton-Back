@@ -38,14 +38,17 @@ export class MailOutboxRepository {
       token.expiresAt, action.id);
   }
 
-  async enqueueNotice(account: LockedAuthAccount, notice: SecurityNotice): Promise<string> {
+  async enqueueNotice(account: LockedAuthAccount, notice: SecurityNotice, previousEmail?: string): Promise<string> {
     this.auth.assertLocked(account);
+    if (previousEmail !== undefined && (notice !== 'email_changed' || previousEmail !== account.user.normalizedEmail)) {
+      throw new Error('Only the locked previous contact may receive an email-change notice');
+    }
     const [current] = await authRows(account.transaction, sql`select normalized_email as destination,
       clock_timestamp()+${AUTH_POLICY.tokens.confirmationMs}*interval '1 millisecond' as "expiresAt"
       from auth_private.users where id=${account.user.id}::uuid`,
     z.object({ destination: z.string(), expiresAt: z.coerce.date() }));
     if (!current) throw new Error('Current account required for mail');
-    return this.insert(account, 'security_notice', current.destination, this.templates.notice(notice), current.expiresAt, null);
+    return this.insert(account, 'security_notice', previousEmail ?? current.destination, this.templates.notice(notice), current.expiresAt, null);
   }
 
   private async insert(account: LockedAuthAccount, purpose: ActionPurpose | 'security_notice', destination: string,

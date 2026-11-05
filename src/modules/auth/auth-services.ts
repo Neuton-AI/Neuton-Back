@@ -36,7 +36,7 @@ export function createAuthServices(config: ApiAuthConfig, auth: AuthRepository,
   return { config, auth, accounts, actions, sessions, events, outbox, csrf, limits,
     methods: new MethodsService(auth, sessions, hasher, outbox, events, limits),
     google: new GoogleLoginService(auth, oauth, sessions, protocol, limits, accounts, actions, outbox, events, config.origin),
-    accountService: new AccountService(auth, accounts, actions, outbox, hasher, limits, events),
+    accountService: new AccountService(auth, accounts, actions, outbox, hasher, limits, events, sessions),
     passwords: new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox, actions),
     sessionService: new SessionService(sessions, events), projection: new SessionProjection(accounts, sessions, application, config.environment) };
 }

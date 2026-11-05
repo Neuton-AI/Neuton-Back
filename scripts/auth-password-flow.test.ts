@@ -30,7 +30,7 @@ test('registration, pending login, resend and deliberate confirmation preserve a
       return { count, retryMs: windowMs, windowId: 'synthetic' };
     }, async release(key) { counters.set(key, Math.max(0, (counters.get(key) ?? 0) - 1)); } },
     Buffer.alloc(32, 31), 'test:synthetic', 'neuton:auth:test:synthetic');
-    const accountService = new AccountService(auth, accounts, actions, outbox, hasher, limits, events);
+    const accountService = new AccountService(auth, accounts, actions, outbox, hasher, limits, events, sessions);
     const passwords = new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox, actions);
     const context = { ip: '192.0.2.1', traceId: 'synthetic-flow' };
     const input = registrationInput.parse({ email: ' Alice+Tag@Example.com ', password: 'a long real password', fullName: 'Alice' });

@@ -179,3 +179,8 @@ method controls use the same transport and identity boundaries.
 ## Password reauthentication
 
 `POST /api/v1/auth/reauthenticate/password` accepts only `{ currentPassword }` and requires an active session, same-origin CSRF proof, and matching client-user identity. Password verification happens before acquiring the account lock. Inside that lock the credential and session are checked again, then the current session is replaced and the security event committed atomically. Only the successful response sets the new cookie. Other devices remain signed in. The replacement receives new idle, absolute, recent-authentication and CSRF windows. A lost replacement response requires ordinary sign-in when the browser retains the revoked cookie.
+
+## Contact email
+
+POST /auth/email/change accepts { email } for an active, confirmed, recently authenticated account (202). The existing address stays authoritative. A purpose-, destination-, user- and security-version-bound action expires after 24 hours; a new request supersedes previous requests. POST /auth/email/change/confirm accepts { token } with the same account, fresh authentication and CSRF (204). Completion rechecks uniqueness, changes only local contact email, queues notices to both addresses, increments security version, invalidates sessions/actions/OAuth state, and clears the cookie. Normal sign-in is required. EMAIL_UNAVAILABLE is an authenticated destination conflict; ACCOUNT_CHANGED requires the requesting account. Google subject mappings remain unchanged.
+
