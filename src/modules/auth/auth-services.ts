@@ -28,7 +28,7 @@ export function createAuthServices(config: ApiAuthConfig, auth: AuthRepository,
   const csrf = new CsrfService(auth, sessions, config);
   return { config, auth, accounts, actions, sessions, events, outbox, csrf, limits,
     accountService: new AccountService(auth, accounts, actions, outbox, hasher, limits, events),
-    passwords: new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox),
+    passwords: new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox, actions),
     sessionService: new SessionService(sessions, events), projection: new SessionProjection(accounts, sessions, application, config.environment) };
 }
 export type AuthServices = ReturnType<typeof createAuthServices>;

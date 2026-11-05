@@ -31,7 +31,7 @@ test('registration, pending login, resend and deliberate confirmation preserve a
     }, async release(key) { counters.set(key, Math.max(0, (counters.get(key) ?? 0) - 1)); } },
     Buffer.alloc(32, 31), 'test:synthetic', 'neuton:auth:test:synthetic');
     const accountService = new AccountService(auth, accounts, actions, outbox, hasher, limits, events);
-    const passwords = new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox);
+    const passwords = new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox, actions);
     const context = { ip: '192.0.2.1', traceId: 'synthetic-flow' };
     const input = registrationInput.parse({ email: ' Alice+Tag@Example.com ', password: 'a long real password', fullName: 'Alice' });
     await accountService.register(input, context);
@@ -73,7 +73,7 @@ test('registration, pending login, resend and deliberate confirmation preserve a
         });
         return valid;
       },
-    }, limits, events, outbox);
+    }, limits, events, outbox, actions);
     await assert.rejects(racing.login(loginInput.parse({ email: input.email.display, password: input.password }), context), { code: 'INVALID_CREDENTIALS' });
     assert.equal(await sessions.resolve(active.secret), null);
     const changedLogin = await passwords.login(loginInput.parse({ email: input.email.display, password: 'a different new password' }), context);

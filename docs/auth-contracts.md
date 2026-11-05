@@ -67,6 +67,14 @@ its security event. Cookies expire only after success; dependency failures retur
 503 without claiming revocation. Renewal preserves the bearer and absolute
 expiry, with activity writes at most once per five minutes.
 
+Password recovery accepts `{email}` and returns a generic 202, issuing encrypted
+mail only for an active, locally confirmed password account. Reset accepts
+`{token, newPassword}` through browser-context CSRF. It hashes before acquiring
+account locks, then consumes the action, replaces the password, invalidates
+security state and records its notice/event atomically. Success is 204 without
+a session cookie; the user signs in normally. Used/expired links share
+`400 INVALID_ACTION` and never disclose account eligibility.
+
 The existing backend `{role, shop}` membership response and frontend `{shopId, role, shops}` expectation are replaced together through the central membership adapter; no two public shapes remain.
 
 ## HTTP ownership

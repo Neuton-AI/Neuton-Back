@@ -4,7 +4,7 @@ import type { HttpRequest } from '../../http/request-context.js';
 import { AccountService } from './account.service.js';
 import { PasswordService } from './password.service.js';
 import { AuthCookies } from './cookies.js';
-import { registrationInput, loginInput, emailInput, actionInput } from './contracts.js';
+import { registrationInput, loginInput, emailInput, actionInput, resetPasswordInput } from './contracts.js';
 import type { AuthRequestContext } from './account.service.js';
 
 export function authRequestContext(request: HttpRequest): AuthRequestContext {
@@ -32,5 +32,14 @@ export class AuthController {
   @Post('email/confirm') @HttpCode(204)
   async confirm(@Body() body: unknown, @Req() request: HttpRequest): Promise<void> {
     await this.accounts.confirm(actionInput.parse(body).token, authRequestContext(request));
+  }
+  @Post('password/recovery') @HttpCode(202)
+  async recovery(@Body() body: unknown, @Req() request: HttpRequest): Promise<void> {
+    await this.passwords.recovery(emailInput.parse(body).email.normalized, authRequestContext(request));
+  }
+  @Post('password/reset') @HttpCode(204)
+  async reset(@Body() body: unknown, @Req() request: HttpRequest): Promise<void> {
+    const input = resetPasswordInput.parse(body);
+    await this.passwords.reset(input.token, input.newPassword, authRequestContext(request));
   }
 }
