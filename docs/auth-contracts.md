@@ -168,3 +168,7 @@ outages are unavailable states, never confirmed logout. Signup, deliberate
 contact confirmation, password sign-in, first-shop bootstrap, scoped settings and
 failure-aware logout are connected to the existing screens. Google and recovery
 journeys remain in their later migration phases.
+# Password reauthentication
+
+`POST /api/v1/auth/reauthenticate/password` accepts only `{ currentPassword }` and requires an active session, same-origin CSRF proof, and matching client-user identity. Password verification happens before acquiring the account lock. Inside that lock the credential and session are checked again, then the current session is replaced and the security event committed atomically. Only the successful response sets the new cookie. Other devices remain signed in. The replacement receives new idle, absolute, recent-authentication and CSRF windows. A lost replacement response requires ordinary sign-in when the browser retains the revoked cookie.
+

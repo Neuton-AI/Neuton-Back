@@ -82,6 +82,31 @@ export class PasswordService {
     return issued;
   }
 
+  async reauthenticate(reference: VerifiedSessionReference, currentPassword: string, context: AuthRequestContext) {
+    assertVerifiedSession(reference);
+    const reservation = await this.limits.beginLogin(context.ip, reference.userId);
+    const proof = await this.accounts.findPasswordForUser(reference.userId);
+    if (!proof) {
+      await this.hasher.verifyDummy(currentPassword);
+      throw invalidCredentials();
+    }
+    if (!(await this.hasher.verify(proof.encodedHash, currentPassword))) throw invalidCredentials();
+    await this.limits.loginSucceeded(reservation);
+    const issued = await this.auth.withUser(reference.userId, async account => {
+      const current = await this.sessions.current(account, reference.sessionId);
+      if (!current || current.status !== 'active' || !(await this.accounts.credentialUnchanged(account, proof))) {
+        throw invalidCredentials();
+      }
+      const replacement = await this.sessions.issue(account, { method: 'password' },
+        { ip: context.ip, userAgent: context.userAgent }, current.id);
+      await this.events.append(account.transaction, { event: 'reauthenticated', result: 'success', correlationId: context.traceId,
+        actorUserId: reference.userId, sessionId: replacement.sessionId, metadata: { method: 'password' } });
+      return replacement;
+    });
+    if (!issued) throw invalidCredentials();
+    return issued;
+  }
+
   async login(input: z.infer<typeof loginInput>, context: AuthRequestContext) {
     const reservation = await this.limits.beginLogin(context.ip, input.email.normalized);
     const proof = await this.accounts.findPassword(input.email.normalized);

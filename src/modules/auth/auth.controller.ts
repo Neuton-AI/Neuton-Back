@@ -1,10 +1,11 @@
-import { Body, Controller, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import type { HttpRequest } from '../../http/request-context.js';
 import { AccountService } from './account.service.js';
 import { PasswordService } from './password.service.js';
 import { AuthCookies } from './cookies.js';
-import { registrationInput, loginInput, emailInput, actionInput, resetPasswordInput } from './contracts.js';
+import { registrationInput, loginInput, emailInput, actionInput, resetPasswordInput, reauthenticateInput } from './contracts.js';
+import { SessionGuard, CurrentSession, type SessionActor } from '../identity/session.guard.js';
 import type { AuthRequestContext } from './account.service.js';
 
 export function authRequestContext(request: HttpRequest): AuthRequestContext {
@@ -36,6 +37,13 @@ export class AuthController {
   @Post('password/recovery') @HttpCode(202)
   async recovery(@Body() body: unknown, @Req() request: HttpRequest): Promise<void> {
     await this.passwords.recovery(emailInput.parse(body).email.normalized, authRequestContext(request));
+  }
+  @Post('reauthenticate/password') @HttpCode(204) @UseGuards(SessionGuard)
+  async reauthenticate(@CurrentSession() actor: SessionActor, @Body() body: unknown,
+    @Req() request: HttpRequest, @Res({ passthrough: true }) response: Response): Promise<void> {
+    const input = reauthenticateInput.parse(body);
+    const result = await this.passwords.reauthenticate(actor.session, input.currentPassword, authRequestContext(request));
+    response.setHeader('Set-Cookie', this.cookies.set('session', result.secret, result.expiresAt));
   }
   @Post('password/reset') @HttpCode(204)
   async reset(@Body() body: unknown, @Req() request: HttpRequest): Promise<void> {

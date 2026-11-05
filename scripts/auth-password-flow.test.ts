@@ -85,5 +85,17 @@ test('registration, pending login, resend and deliberate confirmation preserve a
     const finalSession = await passwords.change(verified.reference, { currentPassword: 'a different new password', newPassword: 'a final replacement password' }, context);
     assert.equal(await sessions.resolve(changedLogin.secret), null);
     assert.ok(await sessions.resolve(finalSession.secret));
+    const beforeReauth = await sessions.resolve(finalSession.secret);
+    assert.ok(beforeReauth);
+    await assert.rejects(passwords.reauthenticate(beforeReauth.reference, 'wrong long password', context), { code: 'INVALID_CREDENTIALS' });
+    assert.ok(await sessions.resolve(finalSession.secret));
+    const replacement = await passwords.reauthenticate(beforeReauth.reference, 'a final replacement password', context);
+    assert.equal(await sessions.resolve(finalSession.secret), null);
+    const afterReauth = await sessions.resolve(replacement.secret);
+    assert.ok(afterReauth);
+    assert.equal(afterReauth.securityVersion, beforeReauth.securityVersion);
+    assert.notEqual(afterReauth.csrfDigest, beforeReauth.csrfDigest);
+    assert.ok(afterReauth.recentAuthenticatedAt);
+    await assert.rejects(passwords.reauthenticate(beforeReauth.reference, 'a final replacement password', context), { code: 'INVALID_CREDENTIALS' });
   } finally { await database.close(); }
 });

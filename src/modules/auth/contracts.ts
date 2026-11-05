@@ -30,6 +30,7 @@ export const loginInput = z.object({ email: emailSchema, password: passwordSchem
 export const emailInput = z.object({ email: emailSchema }).strict();
 export const actionInput = z.object({ token: z.string().refine(isBearerSecret, 'Invalid action token') }).strict();
 export const resetPasswordInput = actionInput.extend({ newPassword: passwordSchema }).strict();
+export const reauthenticateInput = z.object({ currentPassword: passwordSchema }).strict();
 
 export interface ShopMembershipDto {
   shopId: string;

@@ -12,6 +12,12 @@ import { createAuthServices } from '../src/modules/auth/auth-services.js';
 import { AuthModule } from '../src/modules/auth/auth.module.js';
 import { AuthRateLimits } from '../src/modules/auth/rate-limit.service.js';
 import { AuthEncryption } from '../src/modules/auth/crypto.js';
+import { ShopsModule } from '../src/modules/shops/shops.module.js';
+import { SHOPS_DATABASE } from '../src/modules/shops/shops.persistence.js';
+import { authUnavailable } from '../src/modules/auth/auth-errors.js';
+import { IdentityRepository } from '../src/modules/identity/identity.ports.js';
+import { DrizzleIdentityRepository } from '../src/modules/identity/identity.repository.js';
+import type { Database } from '../src/db/client.js';
 
 test('cookie HTTP auth enforces CSRF, pending restrictions, safe session DTOs and deliberate confirmation', async () => {
   const { database, orm, auth } = await isolatedAuthDatabase();
@@ -24,8 +30,9 @@ test('cookie HTTP auth enforces CSRF, pending restrictions, safe session DTOs an
     config.encryption.rateLimitSecret, config.environment, config.redisNamespace);
   const services = createAuthServices(config, auth, application, limits);
   @Controller('api/v1/probe') class MutationProbe { @Post('mutation') mutate() { return { ok: true }; } }
-  @Module({ imports: [AuthModule.forServices(services)], controllers: [MutationProbe] }) class Root {}
-  const app = await testApplication(Root, [], { authOrigin: config.origin, origins: [config.origin], bodyLimit: 1_000_000 });
+  @Module({ imports: [AuthModule.forServices(services), ShopsModule], controllers: [MutationProbe] }) class Root {}
+  const app = await testApplication(Root, [[SHOPS_DATABASE, application], [IdentityRepository, new DrizzleIdentityRepository(application as unknown as Database)]],
+    { authOrigin: config.origin, origins: [config.origin], bodyLimit: 1_000_000 });
   try {
     const agent = request.agent(app.getHttpServer());
     const headers = { Origin: config.origin, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' };
@@ -63,7 +70,33 @@ test('cookie HTTP auth enforces CSRF, pending restrictions, safe session DTOs an
     assert.equal(active.body.user.status, 'active');
     assert.equal(active.body.user.fullName, 'Alice');
     assert.deepEqual(active.body.memberships, []);
-    const activeCsrf = await boot();
+    let activeCsrf = await boot();
+    const reauth = { currentPassword: input.password };
+    await agent.post('/api/v1/auth/reauthenticate/password').set(headers).send(reauth).expect(403);
+    const protectedHeaders = () => ({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken });
+    await agent.post('/api/v1/auth/reauthenticate/password').set(protectedHeaders()).send({ currentPassword: 'wrong long password' }).expect(401);
+    await agent.post('/api/v1/auth/reauthenticate/password').set(protectedHeaders()).send({ ...reauth, userId: active.body.user.id }).expect(400);
+    const append = services.events.append.bind(services.events);
+    services.events.append = async () => { throw authUnavailable(); };
+    const failed = await agent.post('/api/v1/auth/reauthenticate/password').set(protectedHeaders()).send(reauth).expect(503);
+    assert.equal(failed.headers['set-cookie'], undefined);
+    assert.equal((await agent.get('/api/v1/session')).body.session.id, active.body.session.id);
+    services.events.append = append;
+    await agent.post('/api/v1/auth/reauthenticate/password').set(protectedHeaders()).send(reauth).expect(204);
+    const renewed = await agent.get('/api/v1/session').expect(200);
+    assert.notEqual(renewed.body.session.id, active.body.session.id);
+    assert.ok(renewed.body.session.recentAuthenticationExpiresAt);
+    await agent.post('/api/v1/auth/reauthenticate/password').set(protectedHeaders()).send(reauth).expect(403);
+    activeCsrf = await boot();
+    await agent.patch('/api/v1/profile').set(protectedHeaders()).send({ email: 'attacker@example.com' }).expect(400);
+    const change = { currentPassword: input.password, newPassword: 'a changed long password' };
+    await agent.post('/api/v1/profile/password').set(headers).send(change).expect(403);
+    await agent.post('/api/v1/profile/password').set(protectedHeaders()).send(change).expect(204);
+    const changed = await agent.get('/api/v1/session').expect(200);
+    assert.notEqual(changed.body.session.id, renewed.body.session.id);
+    const revoked = await database.query<{ revoked: boolean }>('select revoked_at is not null as revoked from auth_private.sessions where id=$1', [renewed.body.session.id]);
+    assert.equal(revoked.rows[0]?.revoked, true);
+    activeCsrf = await boot();
     await agent.post('/api/v1/auth/logout').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken,
       'X-Client-User-Id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }).send({}).expect(409);
     await agent.get('/api/v1/session').expect(200);
@@ -71,5 +104,25 @@ test('cookie HTTP auth enforces CSRF, pending restrictions, safe session DTOs an
     await agent.post('/api/v1/auth/register').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken }).send({ large: 'x'.repeat(17_000) }).expect(413);
     await agent.post('/api/v1/auth/logout').set({ ...headers, 'X-CSRF-Token': activeCsrf.body.csrfToken }).send({}).expect(204);
     await agent.get('/api/v1/session').expect(401);
+    const recoveryCsrf = await boot();
+    const recoveryHeaders = { ...headers, 'X-CSRF-Token': recoveryCsrf.body.csrfToken };
+    for (const email of [input.email, 'unknown@example.com']) {
+      const accepted = await agent.post('/api/v1/auth/password/recovery').set(recoveryHeaders).send({ email }).expect(202);
+      assert.equal(accepted.text, '');
+    }
+    const resetMail = (await database.query<{ id: string; encrypted_payload: string; payload_key_id: string }>(
+      "select id,encrypted_payload,payload_key_id from auth_private.mail_outbox where purpose='password_reset' and action_token_id is not null")).rows[0];
+    assert.ok(resetMail);
+    const resetPayload = JSON.parse(encryption.decrypt('mail:password_reset', resetMail.id, { keyId: resetMail.payload_key_id, ciphertext: resetMail.encrypted_payload }));
+    const resetToken = /#token=([A-Za-z0-9_-]+)/.exec(resetPayload.text)![1]!;
+    await agent.get('/api/v1/auth/password/reset').expect(404);
+    const reset = { token: resetToken, newPassword: 'a recovered long password' };
+    await agent.post('/api/v1/auth/password/reset').set(headers).send(reset).expect(403);
+    const resetResult = await agent.post('/api/v1/auth/password/reset').set(recoveryHeaders).send(reset).expect(204);
+    assert.equal(resetResult.headers['set-cookie'], undefined);
+    await agent.get('/api/v1/session').expect(401);
+    await agent.post('/api/v1/auth/password/reset').set(recoveryHeaders).send(reset).expect(400);
+    await agent.post('/api/v1/auth/login').set(recoveryHeaders).send({ email: input.email, password: reset.newPassword }).expect(204);
+    await agent.get('/api/v1/session').expect(200);
   } finally { await app.close(); await database.close(); }
 });
