@@ -60,7 +60,7 @@ test('forward migration preserves IDs, references, instructions and only proven 
           (1, 1, 'two kg flour', 'flour', 'kg', 2, NULL, '00000000-0000-4000-8000-000000000001'),
           (2, 1, 'cup milk', 'milk', 'cup', 1, NULL, '00000000-0000-4000-8000-000000000002');
       `);
-      const migration = readFileSync(new URL('../drizzle/0025_recipe_field_contract.sql', import.meta.url), 'utf8');
+      const migration = readFileSync(new URL('../drizzle-archive/0025_recipe_field_contract.sql', import.meta.url), 'utf8');
       for (const statement of migration.split('--> statement-breakpoint')) await tx.unsafe(statement);
       const lines = await tx`SELECT * FROM recipe_ingredients ORDER BY id`;
       assert.equal(lines[0]?.id, 1);

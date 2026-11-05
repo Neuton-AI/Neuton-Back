@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { migrationChecksum, migrationFailureMessage, validateMigrationHistory, BASELINE_FILE } from '../src/db/migration-ledger.js';
+import { PGlite } from '@electric-sql/pglite';
+import { migrationChecksum, migrationFailureMessage, runMigrationBatch, validateMigrationHistory, BASELINE_FILE } from '../src/db/migration-ledger.js';
+import type { MigrationDatabase } from '../src/db/migration-ledger.js';
 
 const baseline = { name: BASELINE_FILE, checksum: migrationChecksum('baseline') };
 const later = { name: '0001_next.sql', checksum: migrationChecksum('next') };
@@ -28,4 +30,38 @@ test('migration history must be a complete unchanged prefix starting at the appr
   assert.throws(() => validateMigrationHistory([baseline, later], [baseline, baseline]));
   assert.throws(() => validateMigrationHistory([baseline], [baseline, later]));
   assert.throws(() => validateMigrationHistory([baseline, later], [{ ...baseline, checksum: 'modified' }]));
+});
+
+test('fresh runner rejects historical ledgers, populated databases and incompatible markers without applying SQL', async () => {
+  const cases = [
+    { setup: 'create table public.__neuton_migrations(id integer)', reason: /Legacy migration ledger/ },
+    { setup: 'create schema drizzle; create table drizzle.__drizzle_migrations(id integer)', reason: /Legacy migration ledger/ },
+    { setup: 'create table public.existing_business(id integer)', reason: /empty application database/ },
+    { setup: "create schema app_private; create table app_private.schema_metadata(name text, version integer); insert into app_private.schema_metadata values ('other-baseline', 1)", reason: /Incompatible Neon baseline marker/ },
+  ];
+  for (const scenario of cases) {
+    const db = new PGlite();
+    let applied = false;
+    try {
+      await db.exec(scenario.setup);
+      const database: MigrationDatabase = {
+        transaction(work) {
+          return db.transaction(transaction => work({
+            async query<T extends Record<string, unknown>>(statement: string, parameters: string[] = []) {
+              return (await transaction.query<T>(statement, parameters)).rows;
+            },
+            async execute(statement) {
+              applied = true;
+              await transaction.exec(statement);
+            },
+          }));
+        },
+      };
+      const sql = 'select 1';
+      await assert.rejects(runMigrationBatch(database, [{ name: BASELINE_FILE, checksum: migrationChecksum(sql), sql }]), scenario.reason);
+      assert.equal(applied, false);
+    } finally {
+      await db.close();
+    }
+  }
 });

@@ -48,7 +48,7 @@ test('repeated recipe lines survive the migration without merging amounts or uni
       CREATE UNIQUE INDEX recipe_ingredients_recipe_id_inventory_item_id_unique ON recipe_ingredients(recipe_id, inventory_item_id);
       CREATE UNIQUE INDEX recipe_ingredients_recipe_id_raw_name_unique ON recipe_ingredients(recipe_id, raw_name);
       INSERT INTO recipe_ingredients VALUES (1, 1, 1, 'Flour', 100, 'g');`);
-      const migration = readFileSync(new URL('../drizzle/0026_recipe_repeated_lines.sql', import.meta.url), 'utf8');
+      const migration = readFileSync(new URL('../drizzle-archive/0026_recipe_repeated_lines.sql', import.meta.url), 'utf8');
       for (const statement of migration.split('--> statement-breakpoint')) await tx.unsafe(statement);
       await tx.unsafe(`INSERT INTO recipe_ingredients VALUES
         (2, 1, 1, 'Flour', 2, 'kg'), (3, 1, NULL, 'Unknown', 1, 'cup'), (4, 1, NULL, 'Unknown', 3, 'g');`);

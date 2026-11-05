@@ -96,5 +96,6 @@ quiet. Heartbeats do not renew session activity. Revocation, expiry, disablement
 membership loss, a changed identity or an unavailable authorization dependency
 closes the stream; authorization waits also have a bounded watchdog.
 
-Frontend consumers and offline identity boundaries remain Phase F work. Phase E
-completion does not perform the production cutover or retire all Supabase code.
+Frontend consumers use cookie auth and environment/user/shop offline partitions.
+The external-auth runtime is retired. Production cutover remains a separately
+authorized operation; see [setup and operations](auth-setup.md).

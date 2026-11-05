@@ -1,6 +1,6 @@
 # Fresh Neon schema and authorization inventory
 
-Source boundary: historical SQL through `drizzle/0031_native_document_events.sql` and `src/db/schema/*`. The new baseline is for an empty database; historical account/data backfills and the Supabase ledger are not replayed. This inventory is a design input, not a claim that the new runtime is enabled.
+Source boundary: historical SQL through `drizzle-archive/0031_native_document_events.sql` and `src/db/schema/*`. The active `drizzle-neon` baseline is for an empty database; historical account/data backfills and the Supabase ledger are not replayed. The historical chain is preserved outside active discovery; Neuton-owned auth is the runtime authority.
 
 ## Relation classification
 

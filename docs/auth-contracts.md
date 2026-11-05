@@ -1,6 +1,6 @@
 # Neuton authentication contracts
 
-Migration: Neuton-AI/Neuton-Back#195, Phase A. These contracts describe the target implementation. The existing Supabase runtime is replaced in later phases, not enabled alongside a second authority.
+Migration: Neuton-AI/Neuton-Back#195. These contracts are implemented by Neuton-owned auth. Cookie sessions are the only runtime identity authority; the external-auth runtime and dependencies are retired.
 
 ## Authority and boundaries
 

@@ -1,6 +1,6 @@
 # Auth migration configuration
 
-`readAuthConfig` in `src/config/auth.ts` reads a supplied environment map and never opens files. Process entry points call it explicitly. It is additive during the migration; the old runtime loader is retired when its consumers move. No owner connection is a fallback for a runtime connection.
+`readAuthConfig` in `src/config/auth.ts` reads a supplied environment map and never opens files. Process entry points call it explicitly. Neuton-owned auth is the only runtime identity authority. No owner connection is a fallback for a runtime connection. See [setup and operations](auth-setup.md) for provisioning, hosted routing and process lifecycle.
 
 | Process | Required migration settings |
 |---|---|
@@ -10,8 +10,8 @@
 | Migration | MIGRATION_DATABASE_URL only; no Google, mail, Redis, storage or API credentials |
 
 `npm run db:migrate` loads `Neuton-Back/.env` when run from the backend directory.
-Existing terminal environment variables take precedence. Only the migration
-entry point performs this loading; importing configuration or connection factories
+Existing terminal environment variables take precedence. This is explicit
+entry-point loading; importing auth configuration or connection factories
 does not open environment files or initialize the API.
 
 Database URLs must use PostgreSQL, include credentials and a database name, and must not request insecure SSL modes. Connection factories enforce certificate validation. Runtime usernames must be exactly neuton_app, neuton_auth, neuton_worker or neuton_cleanup for their respective settings. The migration owner must be separate. DATABASE_LISTEN_URL uses neuton_app with a direct/session endpoint; a Neon pooler endpoint is rejected.

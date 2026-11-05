@@ -25,6 +25,6 @@ Upload renewal and completion resolve the associated live resource. Completion r
 
 Members, admins, and owners may create orders, read them, request quotes, and verify delivery. Members create processing orders attributed to their verified account and insert lines only for their own processing orders. Updates and cancellation remain administrative; delivery verification uses the narrow routine. Migration `0012_member_order_creation.sql` enables member creation and scoped number allocation without granting members direct shop-counter updates.
 
-Phase E now implements persisted worker authorization, restricted cleanup dispatch, sync read/snapshot scoping and continuous event-stream reauthorization; see background-processing.md. Browser business consumers and offline synchronization remain Phase F work before the complete Supabase cutover.
+Persisted worker authorization, restricted cleanup dispatch, sync read/snapshot scoping and continuous event-stream reauthorization are implemented; see background-processing.md. Browser business consumers and offline synchronization use cookie auth and environment/user/shop partitions. See auth-setup.md for the fresh-account boundary and deployment setup.
 
 No additional environment variables are required by Phase D.

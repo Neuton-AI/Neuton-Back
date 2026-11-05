@@ -1,5 +1,9 @@
 # Neuton-Back
 
+Neuton owns password/Google accounts and opaque cookie sessions. Start with
+[auth setup and operations](docs/auth-setup.md) for fresh Neon projects, restricted
+roles, migration-only commands, mail, key rotation and one-origin hosting.
+
 ## Runtime and module boundaries
 
 The API runs on NestJS with Express. `src/app.ts` composes identity, shops,
@@ -20,9 +24,10 @@ inventory data through the existing tenant-scoped queries.
 See [the module separation decision](docs/decisions/0001-separate-inventory-recipes.md).
 
 Run `npm run build`, then `npm start` and `npm run start:worker` as separate
-processes. Apply all pending migrations, including
-`0030_storage_object_deletions.sql`, before deploying. Start and stop storage
-cleanup with the API process; leased cleanup work survives restarts.
+processes. Deliberately apply the committed `drizzle-neon/` chain before deploying.
+The old chain is preserved in `drizzle-archive/` and is never active discovery.
+Storage/auth cleanup and durable mail dispatch follow the API lifecycle;
+leased work survives restarts. Startup never migrates the database.
 
 Query parameters use camelCase only. Delivery preview uses `distanceKm`.
 Catalog boolean flags accept `true`/`false`; the string `false` keeps filters
@@ -134,18 +139,18 @@ Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
 `GET /api/v1/sync/events` SSE endpoint. It does not use Supabase Realtime.
 The database hosting provider can change without changing the sync protocol.
 
-Apply `0031_native_document_events.sql` with the normal migration runner before
-enabling the updated frontend. Set `DATABASE_LISTEN_URL` to a direct or
-session-pooled PostgreSQL connection. It defaults to `DATABASE_URL` for direct
-database deployments; **transaction-pooled URLs cannot be used for LISTEN**.
-The listener needs permission to connect and LISTEN; migrations require the
-normal owner privileges. No replication slot, publication or provider extension
-is required. Keep database credentials on the backend.
+The active Neon baseline includes document notifications. `DATABASE_LISTEN_URL`
+is mandatory and uses a dedicated direct/session connection as `neuton_app`;
+transaction-pooled URLs and fallback URLs are rejected. The listener needs
+permission to connect and LISTEN; migration-only execution uses the separate
+owner. No replication slot, publication or provider extension is required.
+Keep database credentials on the backend.
 
 Proxies must allow streaming responses, disable SSE buffering and permit an idle
 connection for longer than the 15-second heartbeat interval. Browser fetch uses
-the existing Authorization and x-shop-id headers. Authorize origins through the
-existing CORS configuration. Session/membership is checked before each forwarded
+HttpOnly session cookies and x-shop-id, without bearer authorization. Browser
+traffic uses the same origin; CORS/CSRF derive from exact APP_ORIGIN.
+Session/membership is checked before each forwarded
 hint and on heartbeat; a denied session is closed. Source loss closes streams.
 Each backend instance listens independently and serves its own browser sessions.
 

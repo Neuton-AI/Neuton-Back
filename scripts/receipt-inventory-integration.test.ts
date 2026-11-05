@@ -40,7 +40,7 @@ test('migration converts package amounts and backfills the latest 20 verified co
           (23, 1, 21, NULL, 'g', 500, 2, 50000),
           (24, 1, 21, 1, 'g', 500, 0, 50000);
       `);
-      const migration = readFileSync(new URL('../drizzle/0024_receipt_inventory_totals_and_cost_sma.sql', import.meta.url), 'utf8');
+      const migration = readFileSync(new URL('../drizzle-archive/0024_receipt_inventory_totals_and_cost_sma.sql', import.meta.url), 'utf8');
       for (const statement of migration.split('--> statement-breakpoint')) {
         await tx.unsafe(statement);
       }
