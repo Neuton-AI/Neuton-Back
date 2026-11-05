@@ -14,9 +14,56 @@ const transactionSchema = z.object({ id: z.string().uuid(), purpose: z.enum(['lo
   userId: z.string().uuid().nullable(), sessionId: z.string().uuid().nullable(), securityVersion: z.number().nullable(),
   nonce: z.string(), encryptedVerifier: z.string(), keyId: z.string(), returnPath: z.string() });
 export type ClaimedOAuth = z.infer<typeof transactionSchema> & { verifier: string };
+const completionSchema = z.object({ id: z.string().uuid(), userId: z.string().uuid(), securityVersion: z.number(),
+  purpose: z.enum(['login', 'link', 'reauthenticate']), initiatingUserId: z.string().uuid().nullable(),
+  sessionId: z.string().uuid().nullable(), initiatingVersion: z.number().nullable(), returnPath: z.string(),
+  identity: z.object({ issuer: z.literal('https://accounts.google.com'), subject: z.string().min(1).max(255),
+    observedEmail: z.string().nullable(), emailVerified: z.boolean(), displayName: z.string().nullable(), avatarUrl: z.string().nullable(),
+    authenticatedAt: z.string().datetime().nullable() }).strict() });
 
 export class OAuthRepository {
   constructor(private readonly auth: AuthRepository, private readonly encryption: AuthEncryption, private readonly environment: string) {}
+
+  async completionUser(ticket: string): Promise<string | null> {
+    if (!isBearerSecret(ticket)) throw googleFailed();
+    return this.auth.transaction(async transaction => {
+      const [row] = await authRows(transaction, sql`select target_user_id as id from auth_private.oauth_completions
+        where ticket_digest=${digestSecret('oauth_completion', ticket)} and consumed_at is null and expires_at>clock_timestamp()`,
+      z.object({ id: z.string().uuid() }));
+      return row?.id ?? null;
+    });
+  }
+
+  async completion(account: LockedAuthAccount, ticket: string, browserSecret: string) {
+    this.auth.assertLocked(account);
+    if (!isBearerSecret(browserSecret)) throw googleFailed();
+    const [row] = await authRows(account.transaction, sql`select c.id,c.target_user_id as "userId",c.expected_security_version as "securityVersion",
+      c.identity,t.purpose,t.initiating_user_id as "initiatingUserId",t.initiating_session_id as "sessionId",
+      t.expected_security_version as "initiatingVersion",t.return_path as "returnPath"
+      from auth_private.oauth_completions c join auth_private.oauth_transactions t on t.id=c.transaction_id
+      join auth_private.browser_contexts b on b.id=t.browser_context_id
+      where c.ticket_digest=${digestSecret('oauth_completion', ticket)} and c.target_user_id=${account.user.id}::uuid
+      and c.consumed_at is null and c.expires_at>clock_timestamp() and t.status='completed'
+      and b.token_digest=${digestSecret('browser_context', browserSecret)} and b.environment=${this.environment}
+      and b.expires_at>clock_timestamp() for update of c,t`, completionSchema);
+    if (!row || row.securityVersion !== account.user.securityVersion || account.user.status === 'disabled') throw googleFailed();
+    return row;
+  }
+
+  async consume(account: LockedAuthAccount, id: string): Promise<void> {
+    this.auth.assertLocked(account);
+    const [consumed] = await authRows(account.transaction, sql`update auth_private.oauth_completions set consumed_at=clock_timestamp()
+      where id=${id}::uuid and target_user_id=${account.user.id}::uuid and consumed_at is null and expires_at>clock_timestamp()
+      returning id`, z.object({ id: z.string().uuid() }));
+    if (!consumed) throw googleFailed();
+  }
+
+  async googleForUser(account: LockedAuthAccount): Promise<{ subject: string } | null> {
+    this.auth.assertLocked(account);
+    const [identity] = await authRows(account.transaction, sql`select subject from auth_private.google_identities
+      where user_id=${account.user.id}::uuid for update`, z.object({ subject: z.string() }));
+    return identity ?? null;
+  }
 
   async claim(state: string, browserSecret: string): Promise<ClaimedOAuth> {
     if (!isBearerSecret(state) || !isBearerSecret(browserSecret)) throw googleFailed();

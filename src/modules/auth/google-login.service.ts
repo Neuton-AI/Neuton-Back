@@ -36,6 +36,57 @@ export class GoogleLoginService {
     private readonly accounts: AccountRepository, private readonly actions: ActionTokenRepository,
     private readonly outbox: MailOutboxRepository, private readonly events: SecurityEvents, private readonly origin: string) {}
 
+  async complete(ticket: string, browserSecret: string | undefined, sessionSecret: string | undefined, context: AuthRequestContext) {
+    if (!browserSecret) throw googleFailed();
+    const userId = await this.oauth.completionUser(ticket);
+    if (!userId) throw googleFailed();
+    // Resolve presented cookie before locking; revalidate its exact record under the user lock below.
+    const presented = sessionSecret ? await this.sessions.resolve(sessionSecret) : null;
+    const result = await this.auth.withUser(userId, async account => {
+      const completion = await this.oauth.completion(account, ticket, browserSecret);
+      const { identity, purpose } = completion;
+      let replaceSessionId: string | undefined;
+      if (purpose !== 'login') {
+        if (!presented || presented.userId !== userId || presented.id !== completion.sessionId ||
+          completion.initiatingUserId !== userId || completion.initiatingVersion !== account.user.securityVersion) throw googleFailed();
+        const current = await this.sessions.current(account, presented.id);
+        if (!current || current.status !== 'active' || !account.user.emailConfirmedAt) throw googleFailed();
+        replaceSessionId = current.id;
+        if (purpose === 'link') requireRecentAuthentication(current);
+      }
+      const mapped = await this.oauth.identityUser(account.transaction, identity.subject);
+      if (purpose === 'link') {
+        if (mapped && mapped !== userId) throw new AppError(409, 'GOOGLE_ALREADY_LINKED', 'This Google account is already linked');
+        const existing = await this.oauth.googleForUser(account);
+        if (existing) throw new AppError(409, 'GOOGLE_ALREADY_LINKED', 'A Google account is already linked');
+        await this.insertIdentity(account, { ...identity, authenticatedAt: null });
+      } else if (mapped !== userId) throw googleFailed();
+      let recentAuthenticatedAt: Date | null = null;
+      if (purpose === 'reauthenticate') {
+        recentAuthenticatedAt = identity.authenticatedAt ? new Date(identity.authenticatedAt) : null;
+        if (!recentAuthenticatedAt || recentAuthenticatedAt.getTime() < Date.now() - AUTH_POLICY.session.recentAuthenticationMs ||
+          recentAuthenticatedAt.getTime() > Date.now() + 60_000) throw googleFailed();
+      }
+      await this.oauth.consume(account, completion.id);
+      if (purpose === 'link') {
+        await this.auth.invalidateSecurityState(account, 'google_linked');
+        await this.outbox.enqueueNotice(account, 'google_linked');
+        replaceSessionId = undefined;
+      }
+      const fresh = await this.auth.lockUser(account.transaction, userId);
+      if (!fresh) throw googleFailed();
+      const session = await this.sessions.issue(fresh, { method: 'google', recentAuthenticatedAt },
+        { ip: context.ip, userAgent: context.userAgent }, replaceSessionId);
+      await account.transaction.execute(sql`update auth_private.google_identities set last_login_at=clock_timestamp()
+        where user_id=${userId}::uuid and subject=${identity.subject}`);
+      await this.events.append(account.transaction, { event: 'google_completed', result: 'success', correlationId: context.traceId,
+        actorUserId: userId, sessionId: session.sessionId, metadata: { method: 'google' } });
+      return { session, returnPath: completion.returnPath, purpose };
+    });
+    if (!result) throw googleFailed();
+    return result;
+  }
+
   async callback(url: URL, browserSecret: string | undefined, context: AuthRequestContext): Promise<string> {
     const states = url.searchParams.getAll('state');
     if (states.length !== 1 || !browserSecret) throw googleFailed();
