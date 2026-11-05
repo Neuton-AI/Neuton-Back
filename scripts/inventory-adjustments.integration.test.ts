@@ -1,39 +1,40 @@
 import './support/testEnv.js';
-import { businessActor, fixtureScope } from './support/businessActor.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { buildCatalogApp, SHOP_ID, USER_ID } from './support/catalogApp.js';
+import { eq } from 'drizzle-orm';
 import { adjustInventory } from '../src/lib/inventoryAdjustments.js';
-import * as tables from '../src/db/schema/index.js';
+import { inventoryItems, shopMembers, inventoryAdjustmentBatches } from '../src/db/schema/index.js';
+import { withShopTransaction } from '../src/db/tenant-context.js';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { buildSyncApplication } from './support/syncApp.js';
 
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
-test('stock batches rollback, serialize retries, reject payload reuse and foreign IDs', { skip: !databaseUrl && 'requires disposable API_ALIGNMENT_TEST_DATABASE_URL' }, async () => {
-  const schema = `adjustments_${randomUUID().replaceAll('-', '')}`;
-  const connection = postgres(databaseUrl!, { max: 4, onnotice() {}, connection: { search_path: schema } });
-  const first = randomUUID();
-  const second = randomUUID();
-  const other = randomUUID();
-  const otherShop = randomUUID();
-  const h = await buildCatalogApp();
+test('stock batches rollback, serialize retries, reject payload reuse and foreign IDs', { skip: neonTestSkip, timeout: 90_000 }, async () => {
+  const f = await neonFixture();
+  let other: Awaited<ReturnType<typeof neonFixture>> | undefined;
+  let app: Awaited<ReturnType<typeof buildSyncApplication>> | undefined;
+  const first = randomUUID(), second = randomUUID(), foreign = randomUUID();
+  const constraint = `adjustment_test_${randomUUID().replaceAll('-', '')}`;
   try {
-    await connection.unsafe(`CREATE SCHEMA ${schema};
-      CREATE TABLE ${schema}.inventory_items(id uuid PRIMARY KEY, shop_id uuid NOT NULL, current_quantity numeric NOT NULL CHECK(current_quantity <> 13), updated_at timestamptz DEFAULT now());
-      CREATE TABLE ${schema}.inventory_adjustment_batches(shop_id uuid NOT NULL, id uuid NOT NULL, user_id uuid NOT NULL, request_hash text NOT NULL, response jsonb, PRIMARY KEY(shop_id,id));`);
-    await connection`INSERT INTO inventory_items(id,shop_id,current_quantity) VALUES (${first},${SHOP_ID},10),(${second},${SHOP_ID},10),(${other},${otherShop},10)`;
-    const database = drizzle(connection, { schema: tables });
-    h.use({ db: database as never, deleteObject: async () => {} });
-    const send = (adjustments: { inventoryItemId: string; deltaQuantity: number }[], key: string = randomUUID()) => h.app.inject({
-      method: 'POST', url: '/api/v1/inventory/adjust', payload: { adjustments }, headers: key ? { 'idempotency-key': key } : {},
-    });
-    const amounts = async () => Object.fromEntries((await connection`SELECT id,current_quantity FROM inventory_items`).map(row => [row.id, Number(row.current_quantity)]));
-    const failed = await send([{ inventoryItemId: first, deltaQuantity: 2 }, { inventoryItemId: second, deltaQuantity: 3 }], randomUUID());
+    other = await neonFixture();
+    await f.admin.insert(shopMembers).values({ shopId: f.shopId, userId: other.userId, role: 'admin' });
+    for (const [id, shopId] of [[first, f.shopId], [second, f.shopId], [foreign, other.shopId]] as const) {
+      await f.admin.insert(inventoryItems).values({ id, shopId, name: `Fixture ${id}`, rawMaterialName: id,
+        unit: 'g', baseUnit: 'g', baseUnitAmount: '10', baseUnitCost: '1', currentQuantity: '10' });
+    }
+    await f.ownerConnection.unsafe(`alter table public.inventory_items add constraint ${constraint}
+      check(id<>'${second}'::uuid or current_quantity<>13) not valid`);
+    const client = await buildSyncApplication(f.application, f.shop, f.userId, 'owner', { id: f.sessionId, secret: f.secret });
+    app = client;
+    const send = (adjustments: { inventoryItemId: string; deltaQuantity: number }[], key = randomUUID()) =>
+      client.inject({ method: 'POST', url: '/api/v1/inventory/adjust', payload: { adjustments }, headers: {
+        cookie: `neuton-dev-session=${f.secret}`, 'x-shop-id': f.shopId, 'idempotency-key': key,
+      } });
+    const amount = async (id: string) => Number((await f.admin.select().from(inventoryItems).where(eq(inventoryItems.id, id)))[0]?.currentQuantity);
+    const failed = await send([{ inventoryItemId: first, deltaQuantity: 2 }, { inventoryItemId: second, deltaQuantity: 3 }]);
     assert.equal(failed.statusCode, 500, failed.body);
-    assert.equal((await amounts())[first], 10, 'a later failure must rollback the first delta');
-    assert.equal((await connection`SELECT * FROM inventory_adjustment_batches`).length, 0, 'failed transaction cannot retain a retry receipt');
-
+    assert.equal(await amount(first), 10, 'a later failure rolls back the first delta');
+    assert.equal((await f.admin.select().from(inventoryAdjustmentBatches).where(eq(inventoryAdjustmentBatches.shopId, f.shopId))).length, 0);
     const key = randomUUID();
     const batch = [{ inventoryItemId: first, deltaQuantity: 2 }];
     const [a, b] = await Promise.all([send(batch, key), send(batch, key)]);
@@ -41,22 +42,25 @@ test('stock batches rollback, serialize retries, reject payload reuse and foreig
     assert.equal(b.statusCode, 200, b.body);
     assert.deepEqual(a.json(), b.json());
     assert.deepEqual(a.json(), { adjusted: 1, ids: [first] });
-    assert.equal((await amounts())[first], 12, 'concurrent retry must apply once');
-    assert.equal((await connection`SELECT user_id FROM inventory_adjustment_batches`)[0]?.user_id, USER_ID);
+    assert.equal(await amount(first), 12, 'concurrent replay applies once');
+    assert.equal((await f.admin.select().from(inventoryAdjustmentBatches).where(eq(inventoryAdjustmentBatches.shopId, f.shopId)))[0]?.userId, f.userId);
     assert.equal((await send([{ inventoryItemId: first, deltaQuantity: 4 }], key)).statusCode, 409);
-    assert.equal((await amounts())[first], 12);
-    const adjust = (input: Parameters<typeof adjustInventory>[1]) => database.transaction(tx =>
-      adjustInventory(fixtureScope(tx, businessActor(input.shopId, input.userId)), input));
-    await assert.rejects(adjust({ shopId: SHOP_ID, userId: randomUUID(), key, adjustments: batch }), { statusCode: 409 });
-    assert.equal((await amounts())[first], 12, 'another user cannot replay a saved result');
-    assert.deepEqual(await adjust({ shopId: otherShop, userId: USER_ID, key, adjustments: [{ inventoryItemId: other, deltaQuantity: 2 }] }), { adjusted: 1, ids: [other] });
-    assert.equal((await amounts())[other], 12, 'another shop has an independent retry namespace');
-    assert.equal((await send([{ inventoryItemId: first, deltaQuantity: 1 }, { inventoryItemId: other, deltaQuantity: 1 }])).statusCode, 403);
-    assert.equal((await amounts())[first], 12, 'foreign item rejects entire batch');
-    assert.equal((await send([...batch, ...batch])).statusCode, 400, 'duplicate IDs are ambiguous');
+    assert.equal(await amount(first), 12);
+    await assert.rejects(withShopTransaction(other.application, other.actor.session, f.shopId, scope =>
+      adjustInventory(scope, { shopId: f.shopId, userId: scope.userId, key, adjustments: batch })), { statusCode: 409 });
+    assert.equal(await amount(first), 12, 'another user cannot replay the saved result');
+    assert.deepEqual(await other.inShop(scope => adjustInventory(scope, { shopId: scope.shopId, userId: scope.userId,
+      key, adjustments: [{ inventoryItemId: foreign, deltaQuantity: 2 }] })), { adjusted: 1, ids: [foreign] });
+    assert.equal(await amount(foreign), 12, 'another shop has an independent retry namespace');
+    assert.equal((await send([{ inventoryItemId: first, deltaQuantity: 1 }, { inventoryItemId: foreign, deltaQuantity: 1 }])).statusCode, 403);
+    assert.equal(await amount(first), 12, 'foreign item rejects entire batch');
+    assert.equal((await send([...batch, ...batch])).statusCode, 400);
   } finally {
-    await h.close();
-    await connection.unsafe(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-    await connection.end();
+    try {
+      await app?.close();
+      await f.ownerConnection.unsafe(`alter table public.inventory_items drop constraint if exists ${constraint}`);
+    } finally {
+      try { await other?.close(); } finally { await f.close(); }
+    }
   }
 });

@@ -2,13 +2,13 @@ import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import postgres from 'postgres';
+import { createDatabaseConnection } from '../src/db/connection.js';
 import { parseRecipeExtraction, RECIPE_SCHEMA } from '../src/lib/gemini.js';
 import { generalPrices, recipeIngredients } from '../src/db/schema/catalog.js';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 
-// Explicit disposable database only; never migrate a developer or shared database.
-const databaseUrl = process.env.RECIPE_CONTRACT_TEST_DATABASE_URL;
+// Historical SQL runs only against temporary tables in the development database.
+const skip = !process.env.MIGRATION_DATABASE_URL && 'requires development MIGRATION_DATABASE_URL';
 test('recipe extraction schema is valid JSON and preserves ordered steps and renamed fields', () => {
   const schema = JSON.parse(RECIPE_SCHEMA);
   assert.ok(schema.properties.steps);
@@ -33,8 +33,8 @@ test('general prices expose only the agreed columns and receipt-compatible decim
   assert.equal(generalPrices.baseUnitCost.notNull, false);
 });
 
-test('forward migration preserves IDs, references, instructions and only proven conversions', { skip: !databaseUrl && 'requires RECIPE_CONTRACT_TEST_DATABASE_URL' }, async () => {
-  const connection = postgres(databaseUrl!, { max: 1 });
+test('forward migration preserves IDs, references, instructions and only proven conversions', { skip }, async () => {
+  const connection = createDatabaseConnection('migration');
   try {
     await connection.begin(async (tx) => {
       await tx.unsafe(`

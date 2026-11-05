@@ -8,7 +8,8 @@ export class PostgresSyncEvents extends SyncEventSource {
   private client?: postgres.Sql;
   private starting?: Promise<void>;
   private stopped = false;
-  constructor(private readonly url: string, private readonly events: SyncEvents) {
+  constructor(private readonly url: string, private readonly events: SyncEvents,
+    private readonly applicationName = 'neuton-sync-listener') {
     super(); listenDatabaseUrl({ DATABASE_LISTEN_URL: url });
   }
 
@@ -25,7 +26,7 @@ export class PostgresSyncEvents extends SyncEventSource {
     const client = postgres(this.url, {
       ...databaseTransportOptions(),
       max: 1, idle_timeout: 0, max_lifetime: 0, connect_timeout: 10,
-      connection: { application_name: 'neuton-sync-listener' },
+      connection: { application_name: this.applicationName },
       onnotice: () => {},
       onclose: lost,
       onnotify: (channel, payload) => {

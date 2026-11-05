@@ -2,28 +2,27 @@ import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq } from 'drizzle-orm';
-import { buildCatalogApp, SHOP_ID } from './support/catalogApp.js';
+import { eq, sql } from 'drizzle-orm';
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { buildSyncApplication } from './support/syncApp.js';
 import { costRecipe } from '../src/modules/recipes/recipe.costing.js';
 import { recipes } from '../src/db/schema/index.js';
 import * as tables from '../src/db/schema/index.js';
 
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
-test('real database rejects foreign links on all catalog write paths and accepts owned links', { skip: !databaseUrl && 'requires migrated disposable API_ALIGNMENT_TEST_DATABASE_URL' }, async () => {
-  const namespace = `links_${randomUUID().replaceAll('-', '')}`;
-  const connection = postgres(databaseUrl!, { max: 2, onnotice() {}, connection: { search_path: namespace } });
-  const h = await buildCatalogApp();
+
+test('real database rejects foreign links on all catalog write paths and accepts owned links', { skip: neonTestSkip, timeout: 90_000 }, async () => {
+  const f = await neonFixture();
+  const SHOP_ID = f.shopId;
+  const database = f.admin;
+  const connection = f.ownerConnection;
+  let other: Awaited<ReturnType<typeof neonFixture>> | undefined;
+  let app: Awaited<ReturnType<typeof buildSyncApplication>> | undefined;
   try {
-    await connection.unsafe(`CREATE SCHEMA ${namespace};
-      CREATE TABLE ${namespace}.categories (LIKE public.categories INCLUDING ALL);
-      CREATE TABLE ${namespace}.inventory_items (LIKE public.inventory_items INCLUDING ALL);
-      CREATE TABLE ${namespace}.recipes (LIKE public.recipes INCLUDING ALL);
-      CREATE TABLE ${namespace}.recipe_ingredients (LIKE public.recipe_ingredients INCLUDING ALL);`);
-    const database = drizzle(connection, { schema: tables });
-    h.use({ db: database, deleteObject: async () => {} });
-    const foreignShop = randomUUID();
+    other = await neonFixture();
+    const foreignShop = other.shopId;
+    const client = await buildSyncApplication(f.application, f.shop, f.userId, 'owner', { id: f.sessionId, secret: f.secret });
+    app = client;
+    const headers = { cookie: `neuton-dev-session=${f.secret}`, 'x-shop-id': SHOP_ID };
     const foreignCategory = randomUUID();
     const ownedCategory = randomUUID();
     const foreignInventory = randomUUID();
@@ -37,36 +36,40 @@ test('real database rejects foreign links on all catalog write paths and accepts
     for (const method of ['POST', 'PATCH'] as const) {
       const url = `/api/v1/recipes${method === 'PATCH' ? `/${recipe}` : ''}`;
       for (const payload of [{ name: 'Blocked', ingredients: [ingredient] }, { name: 'Blocked', categoryId: foreignCategory, ingredients: [{ ...ingredient, inventoryItemId: ownedInventory }] }]) {
-        const response = await h.app.inject({ method, url, payload });
+        const response = await client.inject({ headers, method, url, payload });
         assert.equal(response.statusCode, 403, response.body);
       }
     }
-    const verification = await h.app.inject({ method: 'POST', url: `/api/v1/recipes/${recipe}/verify`, payload: { ingredients: [ingredient] } });
+    const verification = await client.inject({ headers, method: 'POST', url: `/api/v1/recipes/${recipe}/verify`, payload: { ingredients: [ingredient] } });
     assert.equal(verification.statusCode, 403, verification.body);
-    assert.deepEqual([...(await connection`SELECT name,status FROM recipes`)], [{ name: 'Original', status: 'unverified' }]);
+    assert.deepEqual([...(await connection`SELECT name,status FROM recipes WHERE shop_id=${SHOP_ID}`)], [{ name: 'Original', status: 'unverified' }]);
     const inventory = { name: 'New item', rawMaterialName: 'flour', unit: 'kg', baseUnit: 'g', baseUnitAmount: 1000, baseUnitCost: 0.01, categoryId: foreignCategory };
     for (const method of ['POST', 'PATCH'] as const) {
-      const response = await h.app.inject({ method, url: `/api/v1/inventory${method === 'PATCH' ? `/${ownedInventory}` : ''}`, payload: inventory });
+      const response = await client.inject({ headers, method, url: `/api/v1/inventory${method === 'PATCH' ? `/${ownedInventory}` : ''}`, payload: inventory });
       assert.equal(response.statusCode, 403, response.body);
     }
-    const valid = await h.app.inject({ method: 'POST', url: '/api/v1/recipes', payload: { name: 'Valid', categoryId: ownedCategory, ingredients: [{ ...ingredient, inventoryItemId: ownedInventory }] } });
+    const valid = await client.inject({ headers, method: 'POST', url: '/api/v1/recipes', payload: { name: 'Valid', categoryId: ownedCategory, ingredients: [{ ...ingredient, inventoryItemId: ownedInventory }] } });
     assert.equal(valid.statusCode, 201, valid.body);
-    assert.equal((await connection`SELECT inventory_item_id FROM recipe_ingredients`)[0]?.inventory_item_id, ownedInventory);
+    assert.equal((await connection`SELECT inventory_item_id FROM recipe_ingredients WHERE shop_id=${SHOP_ID}`)[0]?.inventory_item_id, ownedInventory);
 
-    // Historical malformed links must not reveal another shop's stock/costs.
-    await connection`INSERT INTO recipe_ingredients(shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,raw_src_unit,quantity,base_unit,base_unit_amount)
-      VALUES (${SHOP_ID},${recipe},${foreignInventory},'Original flour','flour','kg',1,'g',1000)`;
+    // Current tenant FKs reject corrupt links. A connection-local temp table
+    // recreates a historical malformed line using owner-only temporary tables.
+    // Costing must filter foreign stock even when its connection bypasses RLS.
     const [row] = await database.select().from(recipes).where(eq(recipes.id, recipe));
     assert.ok(row);
-    // Keep the global-price join inside this isolated fixture as well.
-    await connection.unsafe(`CREATE TABLE ${namespace}.general_prices (LIKE public.general_prices INCLUDING ALL)`);
-    const costing = await costRecipe(SHOP_ID, row, '30', '25', database);
-    assert.equal(costing.costComplete, false);
-    assert.equal(costing.ingredients[0]?.name, 'Original flour');
-    assert.equal(costing.ingredients[0]?.currentQuantity, 0);
+    await f.admin.transaction(async scoped => {
+      await scoped.execute(sql`create temp table recipe_ingredients (like public.recipe_ingredients including all) on commit drop`);
+      await scoped.insert(tables.recipeIngredients).values({ shopId: SHOP_ID, recipeId: recipe,
+        inventoryItemId: foreignInventory, rawName: 'Original flour', rawMaterialName: 'flour',
+        rawSrcUnit: 'kg', quantity: '1', baseUnit: 'g', baseUnitAmount: '1000' });
+      const costing = await costRecipe(SHOP_ID, row, '30', '25', scoped);
+      assert.equal(costing.costComplete, false);
+      assert.equal(costing.ingredients[0]?.name, 'Original flour');
+      assert.equal(costing.ingredients[0]?.currentQuantity, 0);
+    });
   } finally {
-    await h.close();
-    await connection.unsafe(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`);
-    await connection.end();
+    try { await app?.close(); } finally {
+      try { await other?.close(); } finally { await f.close(); }
+    }
   }
 });

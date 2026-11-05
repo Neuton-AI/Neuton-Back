@@ -1,42 +1,32 @@
-import { fixtureScope } from './support/businessActor.js';
-import { referenceVerifiedSession } from '../src/modules/identity/verified-session.js';
-import { TEST_SESSION_ID, TEST_SESSION_SECRET, TEST_SESSION_COOKIE, testIdentity } from './support/authIdentity.js';
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
-import postgres from 'postgres';
-import { drizzle } from 'drizzle-orm/postgres-js';
 import request from 'supertest';
 import * as schema from '../src/db/schema/index.js';
-import { buildNestCatalogApp, SHOP_ID } from './support/nestCatalogApp.js';
-import { TEST_SHOP, USER_ID } from './support/catalogApp.js';
 import { CategoriesService } from '../src/modules/categories/categories.service.js';
 import { RecipeService } from '../src/modules/recipes/recipe.service.js';
 import type { ActorContext } from '../src/modules/identity/contracts.js';
 import { LoggerImpl } from '../src/lib/logger/index.js';
 import { recipeSchema } from '../src/modules/recipes/contracts.js';
-
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
+import { neonFixture, neonTestSkip } from './support/neonFixture.js';
+import { buildSyncApplication } from './support/syncApp.js';
 
 test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle filters', {
-  skip: !databaseUrl && 'requires migrated disposable API_ALIGNMENT_TEST_DATABASE_URL',
-  timeout: 30_000,
+  skip: neonTestSkip,
+  timeout: 90_000,
 }, async () => {
-  const namespace = `catalog_${randomUUID().replaceAll('-', '')}`;
-  const connection = postgres(databaseUrl!, {
-    max: 2, onnotice() {}, connection: { search_path: namespace },
-  });
-  let app: Awaited<ReturnType<typeof buildNestCatalogApp>> | undefined;
+  const f = await neonFixture();
+  const SHOP_ID = f.shopId;
+  const connection = f.ownerConnection;
+  const database = f.application;
+  let other: Awaited<ReturnType<typeof neonFixture>> | undefined;
+  let app: Awaited<ReturnType<typeof buildSyncApplication>> | undefined;
   try {
-    await connection.unsafe(`CREATE SCHEMA ${namespace};
-      CREATE TABLE ${namespace}.categories (LIKE public.categories INCLUDING ALL);
-      CREATE TABLE ${namespace}.inventory_items (LIKE public.inventory_items INCLUDING ALL);
-      CREATE TABLE ${namespace}.recipes (LIKE public.recipes INCLUDING ALL);
-      CREATE TABLE ${namespace}.recipe_ingredients (LIKE public.recipe_ingredients INCLUDING ALL);
-      CREATE TABLE ${namespace}.general_prices (LIKE public.general_prices INCLUDING ALL);
-      CREATE TABLE ${namespace}.media_uploads (LIKE public.media_uploads INCLUDING ALL);`);
-    const foreignShop = randomUUID();
+    const member = await neonFixture();
+    other = member;
+    const foreignShop = member.shopId;
+    await f.admin.insert(schema.shopMembers).values({ shopId: SHOP_ID, userId: member.userId, role: 'member' });
     await connection`INSERT INTO categories(shop_id,name) VALUES
       (${SHOP_ID},'Zulu'),(${foreignShop},'Foreign'),(${SHOP_ID},'Alpha')`;
     await connection`INSERT INTO inventory_items
@@ -46,10 +36,9 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
       (${SHOP_ID},'No threshold','flour','kg','g',1000,0.01,0,null,true),
       (${SHOP_ID},'Inactive','flour','kg','g',1000,0.01,0,1,false),
       (${foreignShop},'Foreign','flour','kg','g',1000,0.01,0,1,true)`;
-    const database = drizzle(connection, { schema });
-    app = await buildNestCatalogApp(database, 'member');
-    const get = (path: string) => request(app!.app.getHttpServer()).get(`/api/v1${path}`)
-      .set({ cookie: TEST_SESSION_COOKIE, 'x-shop-id': SHOP_ID });
+    app = await buildSyncApplication(database, f.shop, member.userId, 'member', { id: member.sessionId, secret: member.secret });
+    const get = (path: string) => request(app!.nest.getHttpServer()).get(`/api/v1${path}`)
+      .set({ cookie: `neuton-dev-session=${member.secret}`, 'x-shop-id': SHOP_ID });
     const categories = await get('/categories');
     assert.equal(categories.status, 200);
     assert.deepEqual(categories.body.categories.map((row: { name: string }) => row.name), ['Alpha', 'Zulu']);
@@ -94,23 +83,23 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
 
     const events: Record<string, unknown>[] = [];
     const actor: ActorContext = {
-      sessionId: TEST_SESSION_ID, session: referenceVerifiedSession(USER_ID, TEST_SESSION_ID), shop: TEST_SHOP, user: { id: USER_ID, email: null, fullName: null, avatarUrl: null },
-      role: 'owner', requestId: 'category-test', traceId: 'category-test',
+      ...f.actor,
       log: new LoggerImpl({ write: (_level, _message, meta) => { events.push(meta); } }, {}, 'debug'),
     };
-    const service = app.app.get(CategoriesService);
+    const audits = () => connection`select id from public.audit_logs where shop_id=${SHOP_ID} and event_type='RECIPE_CREATED'`;
+    const service = app.nest.get(CategoriesService);
     const effects: (() => Promise<void>)[] = [];
-    await assert.rejects(database.transaction(async tx => {
-      await service.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).createCategory(actor, { name: 'Rollback category' });
+    await assert.rejects(f.inShop(async scope => {
+      await service.inTransaction(scope, effect => effects.push(effect)).createCategory(actor, { name: 'Rollback category' });
       assert.equal(events.length, 0);
       throw new Error('rollback category transaction');
     }), /rollback category transaction/);
-    assert.equal((await connection`SELECT count(*)::int AS count FROM categories WHERE name='Rollback category'`)[0]?.count, 0);
+    assert.equal((await connection`SELECT count(*)::int AS count FROM categories WHERE shop_id=${SHOP_ID} AND name='Rollback category'`)[0]?.count, 0);
     assert.equal(events.length, 0);
     assert.equal(effects.length, 1);
     effects.length = 0;
-    await database.transaction(async tx => {
-      await service.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).createCategory(actor, { name: 'Committed category' });
+    await f.inShop(async scope => {
+      await service.inTransaction(scope, effect => effects.push(effect)).createCategory(actor, { name: 'Committed category' });
       assert.equal(events.length, 0);
     });
     assert.equal(events.length, 0);
@@ -122,30 +111,30 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     const recipeInput = recipeSchema.parse({
       name: 'Rollback recipe', ingredients: [{ rawName: 'User flour', quantity: 1, rawSrcUnit: 'kg' }],
     });
-    const recipeService = app.app.get(RecipeService);
-    await assert.rejects(database.transaction(async tx => {
-      await recipeService.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).createRecipe(actor, recipeInput);
-      assert.equal(app!.audits.length, 0);
+    const recipeService = app.nest.get(RecipeService);
+    await assert.rejects(f.inShop(async scope => {
+      await recipeService.inTransaction(scope, effect => effects.push(effect)).createRecipe(actor, recipeInput);
+      assert.equal((await audits()).length, 0);
       assert.equal(events.length, 0);
       throw new Error('rollback recipe transaction');
     }), /rollback recipe transaction/);
-    assert.equal((await connection`SELECT count(*)::int AS count FROM recipes WHERE name='Rollback recipe'`)[0]?.count, 0);
-    assert.equal(app.audits.length, 0);
+    assert.equal((await connection`SELECT count(*)::int AS count FROM recipes WHERE shop_id=${SHOP_ID} AND name='Rollback recipe'`)[0]?.count, 0);
+    assert.equal((await audits()).length, 0);
     assert.equal(events.length, 0);
     effects.length = 0;
-    await database.transaction(async tx => {
-      await recipeService.inTransaction(fixtureScope(tx, actor), effect => effects.push(effect)).createRecipe(actor, {
+    await f.inShop(async scope => {
+      await recipeService.inTransaction(scope, effect => effects.push(effect)).createRecipe(actor, {
         ...recipeInput, name: 'Committed recipe',
       });
-      assert.equal(app!.audits.length, 0);
+      assert.equal((await audits()).length, 0);
     });
-    assert.equal(app.audits.length, 0);
+    assert.equal((await audits()).length, 1, 'recipe audit commits with its mutation');
     for (const effect of effects) await effect();
-    assert.deepEqual(app.audits.map(audit => audit.eventType), ['RECIPE_CREATED']);
+    assert.equal((await audits()).length, 1);
     assert.deepEqual(events.map(event => event.event), ['recipe_created']);
   } finally {
-    await app?.close();
-    await connection.unsafe(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`);
-    await connection.end({ timeout: 5 });
+    try { await app?.close(); } finally {
+      try { await other?.close(); } finally { await f.close(); }
+    }
   }
 });

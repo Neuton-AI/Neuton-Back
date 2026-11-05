@@ -112,6 +112,16 @@ test('fresh Neon schema enforces tenant, credential, worker and cleanup boundari
     const counter = await asUser(owner, shop, tx => tx.query<{ value: number }>('select app_private.next_order_number() as value'));
     assert.equal(counter.rows[0]!.value, 2);
 
+    const deletedOrder = randomUUID();
+    await asUser(owner, shop, tx => tx.query(`insert into public.orders(id,shop_id,user_id,order_number)
+      values ($1,$2,$3,app_private.next_order_number())`, [deletedOrder, shop, owner.user]));
+    await db.query('update public.orders set deleted_at=now() where id=$1', [deletedOrder]);
+    const refused = await asUser(owner, shop, tx => tx.query<{ done: boolean }>(
+      'select app_private.mark_order_delivered($1) as done', [deletedOrder]));
+    assert.equal(refused.rows[0]!.done, false, 'verification cannot deliver a soft-deleted order');
+    const unchanged = await db.query<{ status: string }>('select status from public.orders where id=$1', [deletedOrder]);
+    assert.equal(unchanged.rows[0]!.status, 'processing');
+
     const pending = randomUUID();
     await db.query("insert into auth_private.users(id,email,normalized_email) values ($1,'pending@example.test','pending@example.test')", [pending]);
     await db.transaction(async tx => {

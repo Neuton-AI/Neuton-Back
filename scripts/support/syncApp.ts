@@ -57,5 +57,5 @@ export async function buildSyncApplication(
       },
     ],
   ]);
-  return httpClient(app);
+  return { ...httpClient(app), nest: app };
 }
