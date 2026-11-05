@@ -110,4 +110,21 @@ export class SessionRepository {
       where id=${sessionId}::uuid and user_id=${account.user.id}::uuid and revoked_at is null returning id`, z.object({ id: z.string().uuid() }));
     return revoked !== undefined;
   }
+
+  async list(account: LockedAuthAccount, currentSessionId: string) {
+    this.auth.assertLocked(account);
+    const records = await authRows(account.transaction, sql`select s.id,s.created_at as "createdAt",
+      s.last_activity_at as "lastActivityAt",s.idle_expires_at as "idleExpiresAt",
+      s.absolute_expires_at as "absoluteExpiresAt",s.user_agent as device
+      from auth_private.sessions s join auth_private.users u on u.id=s.user_id
+      where s.user_id=${account.user.id}::uuid and ${validSession}
+      order by s.created_at desc,s.id`, z.object({ id: z.string().uuid(), createdAt: z.coerce.date(),
+        lastActivityAt: z.coerce.date(), idleExpiresAt: z.coerce.date(), absoluteExpiresAt: z.coerce.date(),
+        device: z.string().max(256).nullable() }));
+    return records.map(record => ({ ...record, current: record.id === currentSessionId }));
+  }
+
+  invalidateSecurityState(account: LockedAuthAccount) {
+    return this.auth.invalidateSecurityState(account, 'logout_all');
+  }
 }

@@ -1,0 +1,92 @@
+import './support/testEnv.js';
+import 'reflect-metadata';
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { Module } from '@nestjs/common';
+import request from 'supertest';
+import { sql } from 'drizzle-orm';
+import { isolatedAuthDatabase } from './support/authDatabase.js';
+import { syntheticAuthConfig } from './support/authConfig.js';
+import { testApplication } from './support/httpClient.js';
+import { createAuthServices } from '../src/modules/auth/auth-services.js';
+import { AuthModule } from '../src/modules/auth/auth.module.js';
+import { AuthCookies } from '../src/modules/auth/cookies.js';
+import { AuthRateLimits } from '../src/modules/auth/rate-limit.service.js';
+import { authUnavailable } from '../src/modules/auth/auth-errors.js';
+
+test('device routes enforce ownership, safe descriptors, CSRF and committed revocation', async () => {
+  const { database, orm, auth } = await isolatedAuthDatabase();
+  const config = syntheticAuthConfig();
+  const limits = new AuthRateLimits({ async increment(_key, windowMs) {
+    return { count: 1, retryMs: windowMs, windowId: 'synthetic' };
+  }, async release() {} }, config.encryption.rateLimitSecret, config.environment, config.redisNamespace);
+  const services = createAuthServices(config, auth, orm, limits);
+  @Module({ imports: [AuthModule.forServices(services)] }) class Root {}
+  const app = await testApplication(Root, [], { authOrigin: config.origin, origins: [config.origin] });
+  try {
+    const create = (email: string) => auth.transaction(async transaction => {
+      const account = await services.accounts.createPending(transaction, { email });
+      assert.ok(account);
+      await transaction.execute(sql`update auth_private.users set status='active',email_confirmed_at=now() where id=${account.user.id}::uuid`);
+      return services.sessions.issue(account, { method: 'password' }, { userAgent: 'Synthetic device', ip: '192.0.2.1' });
+    });
+    const current = await create('devices@example.com');
+    const resolved = await services.sessions.resolve(current.secret);
+    assert.ok(resolved);
+    const other = await auth.withUser(resolved.userId, account => services.sessions.issue(account, { method: 'password' }, {}));
+    assert.ok(other);
+    const foreign = await create('foreign@example.com');
+    const cookie = new AuthCookies(config).set('session', current.secret, current.expiresAt).split(';')[0]!;
+    const headers = { Origin: config.origin, 'Sec-Fetch-Site': 'same-origin', Cookie: cookie };
+    const csrf = await request(app.getHttpServer()).post('/api/v1/auth/csrf').set(headers).send({}).expect(200);
+    const mutation = { ...headers, 'X-CSRF-Token': csrf.body.csrfToken };
+    await request(app.getHttpServer()).get('/api/v1/auth/sessions').expect(401);
+    const listed = await request(app.getHttpServer()).get('/api/v1/auth/sessions').set(headers).expect(200);
+    assert.equal(listed.headers['cache-control'], 'no-store');
+    assert.equal(listed.body.sessions.length, 2);
+    const device = listed.body.sessions.find((item: { id: string }) => item.id === current.sessionId);
+    assert.deepEqual(Object.keys(device).sort(), ['absoluteExpiresAt', 'createdAt', 'current', 'device', 'id', 'idleExpiresAt', 'lastActivityAt'].sort());
+    assert.equal(device.current, true);
+    assert.equal(device.device, 'Synthetic device');
+    assert.equal(JSON.stringify(listed.body).includes(current.secret), false);
+    await request(app.getHttpServer()).delete(`/api/v1/auth/sessions/${other.sessionId}`).set(headers).send({}).expect(403);
+    await request(app.getHttpServer()).delete(`/api/v1/auth/sessions/${foreign.sessionId}`).set(mutation).send({}).expect(404);
+    await request(app.getHttpServer()).delete('/api/v1/auth/sessions/invalid').set(mutation).send({}).expect(400);
+    assert.ok(await services.sessions.resolve(foreign.secret));
+    await request(app.getHttpServer()).delete(`/api/v1/auth/sessions/${other.sessionId}`).set(mutation).send({}).expect(204);
+    assert.equal(await services.sessions.resolve(other.secret), null);
+    assert.ok(await services.sessions.resolve(current.secret));
+    const self = await request(app.getHttpServer()).delete(`/api/v1/auth/sessions/${current.sessionId}`).set(mutation).send({}).expect(204);
+    assert.ok(self.headers['set-cookie']);
+    assert.equal(await services.sessions.resolve(current.secret), null);
+    const replacement = await auth.withUser(resolved.userId, account => services.sessions.issue(account, { method: 'password' }, {}));
+    assert.ok(replacement);
+    headers.Cookie = new AuthCookies(config).set('session', replacement.secret, replacement.expiresAt).split(';')[0]!;
+    const freshCsrf = await request(app.getHttpServer()).post('/api/v1/auth/csrf').set(headers).send({}).expect(200);
+    mutation.Cookie = headers.Cookie;
+    mutation['X-CSRF-Token'] = freshCsrf.body.csrfToken;
+    const survivor = await auth.withUser(resolved.userId, account => services.sessions.issue(account, { method: 'password' }, {}));
+    assert.ok(survivor);
+    await request(app.getHttpServer()).post('/api/v1/auth/session/renew').set(mutation).send({}).expect(204);
+    assert.ok(await services.sessions.resolve(replacement.secret));
+    const action = await auth.withUser(resolved.userId, account => services.actions.issue(account, 'email_change', 'next@example.com'));
+    assert.ok(action);
+    const append = services.events.append.bind(services.events);
+    services.events.append = async () => { throw authUnavailable(); };
+    const failed = await request(app.getHttpServer()).post('/api/v1/auth/logout-all').set(mutation).send({}).expect(503);
+    assert.equal(failed.headers['set-cookie'], undefined);
+    assert.ok(await services.sessions.resolve(replacement.secret));
+    services.events.append = append;
+    await request(app.getHttpServer()).post('/api/v1/auth/logout-all').set(headers).send({}).expect(403);
+    const logout = await request(app.getHttpServer()).post('/api/v1/auth/logout-all').set(mutation).send({}).expect(204);
+    assert.ok(logout.headers['set-cookie']);
+    assert.equal(await services.sessions.resolve(current.secret), null);
+    assert.equal(await services.sessions.resolve(replacement.secret), null);
+    assert.equal(await services.sessions.resolve(survivor.secret), null);
+    const state = await database.query<{ security_version: number; invalidated: boolean }>(`select u.security_version,
+      t.invalidated_at is not null as invalidated from auth_private.users u join auth_private.action_tokens t on t.user_id=u.id where t.id=$1`, [action.id]);
+    assert.equal(state.rows[0]?.security_version, 2);
+    assert.equal(state.rows[0]?.invalidated, true);
+    assert.ok(await services.sessions.resolve(foreign.secret));
+  } finally { await app.close(); await database.close(); }
+});

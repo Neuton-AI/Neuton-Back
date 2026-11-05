@@ -32,6 +32,17 @@ test('opaque sessions recheck status/version/expiry and rotate or revoke atomica
     assert.ok(renewed);
     assert.equal(renewed.absoluteExpiresAt.getTime(), pending.absoluteExpiresAt.getTime());
     assert.ok(renewed.idleExpiresAt.getTime() > pending.lastActivityAt.getTime() + 6 * 86_400_000);
+    const activity = (await sessions.resolve(issued.secret))!.lastActivityAt.getTime();
+    const throttled = await sessions.withSession(issued.secret, (account, session) => sessions.renew(account, session));
+    assert.equal(throttled?.idleExpiresAt.getTime(), renewed.idleExpiresAt.getTime());
+    assert.equal((await sessions.resolve(issued.secret))?.lastActivityAt.getTime(), activity);
+    await database.query(`update auth_private.sessions set authenticated_at=now()-interval '29 days',
+      last_activity_at=now()-interval '10 minutes',idle_expires_at=now()+interval '30 minutes',
+      absolute_expires_at=now()+interval '1 hour' where id=$1`, [pending.id]);
+    const capped = await sessions.withSession(issued.secret, (account, session) => sessions.renew(account, session));
+    assert.ok(capped);
+    assert.equal(capped.idleExpiresAt.getTime(), capped.absoluteExpiresAt.getTime());
+    assert.ok(await sessions.resolve(issued.secret));
     const replacement = await sessions.withSession(issued.secret, (account, session) =>
       sessions.issue(account, { method: 'password' }, {}, session.id));
     assert.ok(replacement);

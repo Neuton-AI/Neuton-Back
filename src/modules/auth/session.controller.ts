@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
+import { Controller, Delete, Get, HttpCode, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { z } from 'zod';
 import type { HttpRequest } from '../../http/request-context.js';
@@ -29,5 +29,24 @@ export class SessionController {
     z.object({}).strict().parse(request.body ?? {});
     await this.sessions.logout(this.secret(request), request.traceId, this.cookies.read('browser', request.headers.cookie), request.headers['x-client-user-id']);
     response.setHeader('Set-Cookie', [this.cookies.clear('session'), this.cookies.clear('browser')]);
+  }
+  @Post('auth/logout-all') @HttpCode(204)
+  async logoutAll(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response): Promise<void> {
+    z.object({}).strict().parse(request.body ?? {});
+    await this.sessions.logoutAll(this.secret(request), request.traceId, this.cookies.read('browser', request.headers.cookie), request.headers['x-client-user-id']);
+    response.setHeader('Set-Cookie', [this.cookies.clear('session'), this.cookies.clear('browser')]);
+  }
+  @Get('auth/sessions')
+  list(@Req() request: HttpRequest) {
+    return this.sessions.list(this.secret(request), request.headers['x-client-user-id']);
+  }
+  @Delete('auth/sessions/:id') @HttpCode(204)
+  async revokeDevice(@Param('id') id: string, @Req() request: HttpRequest, @Res({ passthrough: true }) response: Response): Promise<void> {
+    z.object({}).strict().parse(request.body ?? {});
+    const sessionId = z.string().uuid().parse(id).toLowerCase();
+    const result = await this.sessions.revokeDevice(this.secret(request), sessionId, request.traceId, request.headers['x-client-user-id']);
+    if (result.current) {
+      response.setHeader('Set-Cookie', [this.cookies.clear('session'), this.cookies.clear('browser')]);
+    }
   }
 }

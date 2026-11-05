@@ -1,4 +1,4 @@
-import { forbidden, unauthorized } from '../../lib/errors.js';
+import { forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { SessionRepository } from './session.repository.js';
 import { SecurityEvents } from './security-events.js';
 import { sql } from 'drizzle-orm';
@@ -39,6 +39,44 @@ export class SessionService {
       await this.events.append(account.transaction, { event: 'logout', result: 'success', correlationId,
         actorUserId: account.user.id, sessionId: session.id });
       return result;
+    });
+    if (!revoked) throw unauthorized();
+  }
+
+  async list(secret: string, expectedUserId?: string | string[]) {
+    const devices = await this.sessions.withSession(secret, async (account, session) => {
+      if (session.status !== 'active') throw forbidden('Confirm your email before managing devices');
+      assertExpectedUser(expectedUserId, account.user.id);
+      return this.sessions.list(account, session.id);
+    });
+    if (!devices) throw unauthorized();
+    return { sessions: devices };
+  }
+
+  async revokeDevice(secret: string, sessionId: string, correlationId: string, expectedUserId?: string | string[]) {
+    const result = await this.sessions.withSession(secret, async (account, session) => {
+      if (session.status !== 'active') throw forbidden('Confirm your email before managing devices');
+      assertExpectedUser(expectedUserId, account.user.id);
+      if (!(await this.sessions.revoke(account, sessionId, 'device_revoked'))) throw notFound('Session not found');
+      await this.events.append(account.transaction, { event: 'session_revoked', result: 'success', correlationId,
+        actorUserId: account.user.id, sessionId });
+      return { current: session.id === sessionId };
+    });
+    if (!result) throw unauthorized();
+    return result;
+  }
+
+  async logoutAll(secret: string, correlationId: string, browserSecret?: string, expectedUserId?: string | string[]): Promise<void> {
+    const revoked = await this.sessions.withSession(secret, async (account, session) => {
+      assertExpectedUser(expectedUserId, account.user.id);
+      await this.sessions.invalidateSecurityState(account);
+      if (browserSecret) {
+        await account.transaction.execute(sql`delete from auth_private.browser_contexts
+          where token_digest=${digestSecret('browser_context', browserSecret)}`);
+      }
+      await this.events.append(account.transaction, { event: 'logout_all', result: 'success', correlationId,
+        actorUserId: account.user.id, sessionId: session.id });
+      return true;
     });
     if (!revoked) throw unauthorized();
   }

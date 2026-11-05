@@ -53,6 +53,20 @@ type ShopMembershipDto = {
 
 Pending-email sessions have an empty membership list. Construct their safe projection using the auth repository; never enter an active-user tenant transaction. Disabled/expired/revoked sessions yield 401; database failure yields 503. `/session` does not renew activity. No response contains cookie values, bearer digests, password hashes, provider tokens or IP metadata. All account/session responses use `Cache-Control: no-store`.
 
+`GET /auth/sessions` returns `{sessions: [{id, createdAt, lastActivityAt,
+idleExpiresAt, absoluteExpiresAt, device, current}]}` for the active user's valid
+sessions, newest first. `device` is a nullable user-agent description limited to
+256 characters. Pending accounts cannot list or revoke devices, but can log out.
+Deleting an unknown, revoked or foreign session returns the same 404. Deleting
+the current device also expires browser cookies after commit. Device mutations
+honor `x-client-user-id` and require session CSRF proof.
+
+Logout-all increments the account security version, revokes every session and
+invalidates outstanding actions/OAuth security state in the same transaction as
+its security event. Cookies expire only after success; dependency failures return
+503 without claiming revocation. Renewal preserves the bearer and absolute
+expiry, with activity writes at most once per five minutes.
+
 The existing backend `{role, shop}` membership response and frontend `{shopId, role, shops}` expectation are replaced together through the central membership adapter; no two public shapes remain.
 
 ## HTTP ownership
