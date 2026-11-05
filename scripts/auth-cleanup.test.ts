@@ -48,3 +48,39 @@ test('cleanup-only routines remove completed secrets in bounded batches and enfo
     await assert.rejects(orm.transaction(async tx => { await tx.execute(sql`set local role neuton_auth`); await tx.execute(sql`delete from auth_private.security_events`); }), /permission denied/);
   } finally { await database.close(); }
 });
+
+test('cleanup retains live OAuth tickets and verifiers, then removes terminal and expired records without cascading live children', async () => {
+  const { database, orm, auth } = await isolatedAuthDatabase();
+  const config = syntheticAuthConfig();
+  const limits = new AuthRateLimits({ async increment(_key, retryMs) { return { count: 1, retryMs, windowId: 'test' }; }, async release() {} },
+    config.encryption.rateLimitSecret, config.environment, config.redisNamespace);
+  const services = createAuthServices(config, auth, orm, limits, {
+    async authorizationUrl(input) { return `https://accounts.google.com/auth?state=${input.state}`; },
+    async exchange() { return { issuer: 'https://accounts.google.com', subject: 'cleanup-subject', observedEmail: 'oauth-cleanup@example.com',
+      emailVerified: true, authenticatedAt: null, displayName: null, avatarUrl: null }; },
+  });
+  const context = { ip: '192.0.2.1', traceId: 'cleanup-oauth' };
+  async function cleanup() {
+    await orm.transaction(async tx => { await tx.execute(sql`set local role neuton_cleanup`); await tx.execute(sql`select app_private.cleanup_auth_records(1)`); });
+  }
+  try {
+    const started = await services.google.start({ purpose: 'login', returnPath: '/profile' }, {}, context);
+    await cleanup();
+    assert.equal((await database.query('select id from auth_private.oauth_transactions where encrypted_verifier is not null')).rows.length, 1);
+    const state = new URL(started.authorizationUrl).searchParams.get('state');
+    await services.google.callback(new URL(`${config.google.redirectUri}?code=synthetic&state=${state}`), started.browser.secret, context);
+    await cleanup();
+    assert.equal((await database.query('select id from auth_private.oauth_completions')).rows.length, 1);
+    assert.equal((await database.query('select id from auth_private.oauth_transactions')).rows.length, 1);
+    await database.query('update auth_private.oauth_completions set consumed_at=now()');
+    await cleanup();
+    assert.equal((await database.query('select id from auth_private.oauth_completions')).rows.length, 0);
+    assert.equal((await database.query('select id from auth_private.oauth_transactions')).rows.length, 0);
+    await services.google.start({ purpose: 'login', returnPath: '/profile' }, {}, context);
+    await database.query("update auth_private.oauth_transactions set created_at=now()-interval '1 hour',expires_at=now()-interval '1 minute'");
+    await database.query("update auth_private.browser_contexts set created_at=now()-interval '1 hour',expires_at=now()-interval '1 minute'");
+    for (let iteration = 0; iteration < 3; iteration += 1) await cleanup();
+    assert.equal((await database.query('select id from auth_private.oauth_transactions')).rows.length, 0);
+    assert.equal((await database.query('select id from auth_private.browser_contexts')).rows.length, 0);
+  } finally { await database.close(); }
+});

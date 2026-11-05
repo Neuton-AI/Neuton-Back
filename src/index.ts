@@ -6,8 +6,10 @@ import { createCleanupDatabase } from './db/cleanup-client.js';
 import { closeMediaQueue } from './lib/queue.js';
 import { deleteObject } from './lib/storage.js';
 import { StorageCleanupDispatcher } from './lib/storageCleanup.js';
+import { AuthCleanupDispatcher } from './modules/auth/auth-cleanup.js';
 const app = await buildApp();
 const cleanupPool = createCleanupDatabase();
+const authCleanup = new AuthCleanupDispatcher(cleanupPool.database, apiLogger);
 const cleanup = new StorageCleanupDispatcher({
   db: cleanupPool.database,
   deleteObject,
@@ -20,10 +22,12 @@ try {
     'Neuton API listening',
   );
   cleanup.start();
+  authCleanup.start();
 } catch {
   apiLogger.error({ event: 'api_start_failed' }, 'API startup failed');
   await app.close().catch(() => {});
   await cleanup.stop();
+  await authCleanup.stop();
   await cleanupPool.close();
   await closeMediaQueue();
   await connection.end({ timeout: 5 });
@@ -39,6 +43,7 @@ const shutdown = async (signal: string) => {
   try {
     await app.close();
     await cleanup.stop();
+    await authCleanup.stop();
     await cleanupPool.close();
     await closeMediaQueue();
     await connection.end({ timeout: 5 });
