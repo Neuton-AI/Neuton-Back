@@ -22,6 +22,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:validate": "tsx scripts/validate-migrations.ts",
     "db:verify-rls": "tsx scripts/verify-rls.ts",
+    "account:disable": "tsx scripts/disable-account.ts",
     "test:integrations": "tsx scripts/test-redis.ts && tsx scripts/test-upload-flow.ts"
   },
   "dependencies": {
