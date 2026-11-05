@@ -24,6 +24,8 @@ import { CsrfController } from './csrf.controller.js';
 import { AuthController } from './auth.controller.js';
 import { GoogleController } from './google.controller.js';
 import { GoogleLoginService } from './google-login.service.js';
+import { MethodsController } from './methods.controller.js';
+import { MethodsService } from './methods.service.js';
 import { SessionController } from './session.controller.js';
 import { AccountService } from './account.service.js';
 import { PasswordService } from './password.service.js';
@@ -73,7 +75,7 @@ export class AuthModule {
   }
 
   static forServices(services: AuthServices | (() => AuthServices)): DynamicModule {
-    return { global: true, module: AuthModule, imports: [IdentityModule], controllers: [AuthController, CsrfController, SessionController, GoogleController], providers: [
+    return { global: true, module: AuthModule, imports: [IdentityModule], controllers: [AuthController, CsrfController, SessionController, GoogleController, MethodsController], providers: [
       { provide: AUTH_SERVICES, useFactory: () => typeof services === 'function' ? services() : services },
       { provide: AuthRepository, useFactory: (s: AuthServices) => s.auth, inject: [AUTH_SERVICES] },
       { provide: AccountRepository, useFactory: (s: AuthServices) => s.accounts, inject: [AUTH_SERVICES] },
@@ -84,6 +86,7 @@ export class AuthModule {
       { provide: AccountService, useFactory: (s: AuthServices) => s.accountService, inject: [AUTH_SERVICES] },
       { provide: PasswordService, useFactory: (s: AuthServices) => s.passwords, inject: [AUTH_SERVICES] },
       { provide: GoogleLoginService, useFactory: (s: AuthServices) => s.google, inject: [AUTH_SERVICES] },
+      { provide: MethodsService, useFactory: (s: AuthServices) => s.methods, inject: [AUTH_SERVICES] },
       { provide: MailOutboxRepository, useFactory: (s: AuthServices) => s.outbox, inject: [AUTH_SERVICES] },
       { provide: CsrfService, useFactory: (s: AuthServices) => s.csrf, inject: [AUTH_SERVICES] },
       { provide: AuthCookies, useFactory: (s: AuthServices) => s.csrf.cookies, inject: [AUTH_SERVICES] },

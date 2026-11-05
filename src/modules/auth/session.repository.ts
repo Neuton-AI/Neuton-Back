@@ -53,13 +53,14 @@ export class SessionRepository {
     const secret = newSecret();
     const sessionId = randomUUID();
     const csrf = digestSecret('csrf', newSecret());
-    const recent = proof.method === 'google' ? proof.recentAuthenticatedAt ?? null : null;
+    const recent = proof.recentAuthenticatedAt ?? null;
+    const passwordProof = proof.method === 'password' && proof.recentAuthenticatedAt === undefined;
     if (recent && (!Number.isFinite(recent.getTime()) || recent.getTime() > Date.now() + 60_000)) throw unauthorized();
     const [created] = await authRows(account.transaction, sql`with clock as(select clock_timestamp() as now)
       insert into auth_private.sessions(id,user_id,token_digest,csrf_digest,security_version,authenticated_at,authentication_method,
         recent_authenticated_at,last_activity_at,idle_expires_at,absolute_expires_at,user_agent,ip_address)
       select ${sessionId}::uuid,u.id,${digestSecret('session', secret)},${csrf},u.security_version,clock.now,${proof.method},
-        case when ${proof.method}='password' then clock.now else ${recent}::timestamptz end,clock.now,
+        case when ${passwordProof} then clock.now else ${recent}::timestamptz end,clock.now,
         clock.now+${AUTH_POLICY.session.idleMs}*interval '1 millisecond',clock.now+${AUTH_POLICY.session.absoluteMs}*interval '1 millisecond',
         ${device.userAgent?.slice(0, 256) ?? null},${device.ip?.slice(0, 45) ?? null}
       from auth_private.users u,clock where u.id=${account.user.id}::uuid and u.security_version=${account.user.securityVersion}

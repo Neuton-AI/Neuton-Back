@@ -19,6 +19,7 @@ import { GoogleProtocolClient } from './google-oidc.client.js';
 import type { GoogleOidcClient } from './auth.ports.js';
 import { GoogleLoginService } from './google-login.service.js';
 import { OAuthRepository } from './oauth.repository.js';
+import { MethodsService } from './methods.service.js';
 
 /** Explicit collaborators let the same HTTP composition run against isolated PostgreSQL. */
 export function createAuthServices(config: ApiAuthConfig, auth: AuthRepository,
@@ -33,6 +34,7 @@ export function createAuthServices(config: ApiAuthConfig, auth: AuthRepository,
   const oauth = new OAuthRepository(auth, encryption, config.environment);
   const csrf = new CsrfService(auth, sessions, config);
   return { config, auth, accounts, actions, sessions, events, outbox, csrf, limits,
+    methods: new MethodsService(auth, sessions, hasher, outbox, events, limits),
     google: new GoogleLoginService(auth, oauth, sessions, protocol, limits, accounts, actions, outbox, events, config.origin),
     accountService: new AccountService(auth, accounts, actions, outbox, hasher, limits, events),
     passwords: new PasswordService(auth, accounts, sessions, hasher, limits, events, outbox, actions),

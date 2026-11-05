@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { AUTH_POLICY } from '../../config/auth-policy.js';
 import { AppError, forbidden, unauthorized } from '../../lib/errors.js';
-import { AuthRepository } from './auth.repository.js';
+import { AuthRepository, authRows } from './auth.repository.js';
 import { GoogleOidcClient } from './auth.ports.js';
 import type { AuthRequestContext } from './account.service.js';
 import { OAuthRepository, googleFailed } from './oauth.repository.js';
@@ -79,7 +79,8 @@ export class GoogleLoginService {
         { ip: context.ip, userAgent: context.userAgent }, replaceSessionId);
       await account.transaction.execute(sql`update auth_private.google_identities set last_login_at=clock_timestamp()
         where user_id=${userId}::uuid and subject=${identity.subject}`);
-      await this.events.append(account.transaction, { event: 'google_completed', result: 'success', correlationId: context.traceId,
+      const event = purpose === 'link' ? 'google_linked' : 'google_completed';
+      await this.events.append(account.transaction, { event, result: 'success', correlationId: context.traceId,
         actorUserId: userId, sessionId: session.sessionId, metadata: { method: 'google' } });
       return { session, returnPath: completion.returnPath, purpose };
     });
@@ -144,8 +145,10 @@ export class GoogleLoginService {
   }
 
   private async insertIdentity(account: LockedAuthAccount, claims: GoogleIdentityClaims): Promise<void> {
-    await account.transaction.execute(sql`insert into auth_private.google_identities(id,user_id,issuer,subject,observed_email)
-      values(${randomUUID()}::uuid,${account.user.id}::uuid,${claims.issuer},${claims.subject},${claims.observedEmail})`);
+    const [inserted] = await authRows(account.transaction, sql`insert into auth_private.google_identities(id,user_id,issuer,subject,observed_email)
+      values(${randomUUID()}::uuid,${account.user.id}::uuid,${claims.issuer},${claims.subject},${claims.observedEmail})
+      on conflict do nothing returning id`, z.object({ id: z.string().uuid() }));
+    if (!inserted) throw new AppError(409, 'GOOGLE_ALREADY_LINKED', 'This Google account is already linked');
   }
 
   async start(body: unknown, browser: { browserSecret?: string; sessionSecret?: string }, context: AuthRequestContext) {
