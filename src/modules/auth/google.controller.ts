@@ -1,14 +1,34 @@
-import { Body, Controller, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import type { HttpRequest } from '../../http/request-context.js';
 import { authRequestContext } from './auth.controller.js';
 import { AuthCookies } from './cookies.js';
 import { GoogleLoginService } from './google-login.service.js';
+import { AUTH_BROWSER_CONFIG } from './cookies.js';
+import type { BrowserConfig } from './cookies.js';
+import { AppError } from '../../lib/errors.js';
 
 @Controller('api/v1/auth/google')
 export class GoogleController {
   constructor(@Inject(GoogleLoginService) private readonly google: GoogleLoginService,
-    @Inject(AuthCookies) private readonly cookies: AuthCookies) {}
+    @Inject(AuthCookies) private readonly cookies: AuthCookies,
+    @Inject(AUTH_BROWSER_CONFIG) private readonly config: BrowserConfig) {}
+
+  @Get('callback')
+  async callback(@Req() request: HttpRequest, @Res() response: Response): Promise<void> {
+    const callback = new URL('/api/v1/auth/google/callback', this.config.origin);
+    callback.search = new URL(request.originalUrl, this.config.origin).search;
+    try {
+      const redirect = await this.google.callback(callback, this.cookies.read('browser', request.headers.cookie), authRequestContext(request));
+      response.redirect(303, redirect);
+    } catch (error) {
+      const redirect = new URL('/auth/google/complete', this.config.origin);
+      let code = 'GOOGLE_AUTH_FAILED';
+      if (error instanceof AppError && ['GOOGLE_EMAIL_COLLISION', 'GOOGLE_ALREADY_LINKED'].includes(error.code)) code = error.code;
+      redirect.hash = `error=${code}`;
+      response.redirect(303, redirect.href);
+    }
+  }
 
   @Post('start') @HttpCode(200)
   async start(@Body() body: unknown, @Req() request: HttpRequest, @Res({ passthrough: true }) response: Response) {
