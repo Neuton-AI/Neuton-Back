@@ -15,8 +15,7 @@ process.env.NODE_ENV = 'test';
 
 const PLACEHOLDERS: Record<string, string> = {
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/neuton_test',
-  SUPABASE_URL: 'https://placeholder.supabase.co',
-  SUPABASE_SERVICE_ROLE_KEY: 'placeholder-service-role-key',
+  NEUTON_JWT_SECRET: '01'.repeat(32),
   UPSTASH_REDIS_URL: 'redis://localhost:6379',
   R2_ACCOUNT_ID: 'placeholder-account',
   R2_ACCESS_KEY_ID: 'placeholder-access-key',

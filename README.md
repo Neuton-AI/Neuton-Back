@@ -39,6 +39,37 @@ HTTP setup. Request/trace IDs and safe error diagnostics accompany responses.
 See [migration and rollout notes](docs/nestjs-migration.md) and the
 [implementation plan](tasks/plan.md) for verification evidence and rollback.
 
+## Account authentication
+
+Run `npm run db:migrate` to create Neuton accounts and switch the profile
+foreign key. Plain PostgreSQL is supported. Existing profiles and shop records
+are preserved, and the Neuton user list starts empty. Existing shop memberships
+remain attached to their original profile IDs. Back up the database before
+cutover and deploy the API and web client together. To roll back, restore the
+pre-cutover database snapshot and the matching API and web versions.
+
+Set `NEUTON_JWT_SECRET` to a random 32-byte hex value on the server. Use the
+same value across API instances. Changing it expires every issued token.
+
+```sh
+node -p "require('node:crypto').randomBytes(32).toString('hex')"
+```
+
+| Endpoint | Body | Success |
+| --- | --- | --- |
+| `POST /api/v1/auth/signup` | `{ email, password, fullName? }` | `201 { token, user }` |
+| `POST /api/v1/auth/signin` | `{ email, password }` | `200 { token, user }` |
+| `GET /api/v1/session` | Bearer token | `200 { user, memberships }` |
+
+Signup trims and lowercases emails. New passwords must contain 15–128
+characters. Duplicate emails return `409`, and invalid sign-in credentials
+return `401`. Authentication and password changes share a per-IP limit of
+12 requests per minute. Send the one-hour JWT as `Authorization: Bearer <token>`.
+Shop-scoped routes still require `x-shop-id` and verify membership.
+
+Set `AUTH_TEST_DATABASE_URL` to a migrated disposable PostgreSQL database to
+run the account and tenant-access integration test.
+
 ## Verification endpoints
 
 All verification actions are domain-specific POST requests under `/api/v1`.

@@ -42,9 +42,9 @@ const skip = databaseBacked
 async function seedShop(): Promise<string> {
   await db.delete(shops).where(eq(shops.id, SHOP_ID));
   await db.delete(profiles).where(eq(profiles.id, USER_ID));
-  await db.execute(sql`delete from auth.users where id = ${USER_ID}`);
+  await db.execute(sql`delete from public.users where id = ${USER_ID}`);
 
-  await db.execute(sql`insert into auth.users (id, email) values (${USER_ID}, 'n105@example.com') on conflict do nothing`);
+  await db.execute(sql`insert into public.users (id, email, password_hash) VALUES (${USER_ID}, 'n105@example.com', 'unused-fixture-hash') on conflict do nothing`);
   await db.insert(profiles).values({ id: USER_ID });
   await db.insert(shops).values({
     id: SHOP_ID,
@@ -83,7 +83,7 @@ async function seedShop(): Promise<string> {
 async function dropShop(): Promise<void> {
   await db.delete(shops).where(eq(shops.id, SHOP_ID));
   await db.delete(profiles).where(eq(profiles.id, USER_ID));
-  await db.execute(sql`delete from auth.users where id = ${USER_ID}`);
+  await db.execute(sql`delete from public.users where id = ${USER_ID}`);
 }
 
 test('parallel creates come out as one gapless per-shop sequence', { skip }, async () => {

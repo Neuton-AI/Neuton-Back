@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Post,
   Patch,
   HttpCode,
@@ -28,7 +29,7 @@ import {
 @Controller('api/v1')
 export class ShopsController {
   constructor(@Inject(ShopsService) private readonly shops: ShopsService) {}
-  @Get('session') @UseGuards(SessionGuard) session(
+  @Get('session') @Header('Cache-Control', 'no-store') @UseGuards(SessionGuard) session(
     @CurrentSession() actor: SessionActor,
   ) {
     return this.shops.session(actor);

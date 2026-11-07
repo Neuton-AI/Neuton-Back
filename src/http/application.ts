@@ -55,6 +55,15 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     credentials: true, exposedHeaders: ['Retry-After', 'X-Trace-Id'],
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   });
+  app.use(['/api/v1/auth/signup', '/api/v1/auth/signin', '/api/v1/profile/password'], rateLimit({
+    windowMs: 60_000,
+    limit: 12,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (req, res) => res.status(429).json({ error: {
+      code: 'RATE_LIMIT_EXCEEDED', message: 'Too many authentication attempts', traceId: (req as HttpRequest).traceId,
+    } }),
+  }));
   app.use(rateLimit({
     windowMs: options.rateLimit.windowMs, limit: options.rateLimit.max,
     standardHeaders: 'draft-8', legacyHeaders: false,

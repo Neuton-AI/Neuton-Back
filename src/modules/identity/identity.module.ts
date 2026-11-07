@@ -5,7 +5,9 @@ import { DrizzleIdentityRepository } from './identity.repository.js';
 import { IdentityService } from './identity.service.js';
 import { ShopGuard } from './shop.guard.js';
 import { SessionGuard } from './session.guard.js';
-import { SupabaseSessionVerifier } from './supabase-session-verifier.js';
+import { AuthController } from './auth.controller.js';
+import { AuthService } from './auth.service.js';
+import { NeutonJwt } from './neuton-jwt.js';
 
 const defaultProviders: Provider[] = [
   {
@@ -13,12 +15,22 @@ const defaultProviders: Provider[] = [
     useFactory: async () => new DrizzleIdentityRepository((await import('../../db/client.js')).db),
   },
   {
-    provide: SessionVerifier,
-    useFactory: async () => new SupabaseSessionVerifier((await import('../../lib/supabase-admin.js')).supabaseAdmin),
+    provide: NeutonJwt,
+    useFactory: async () => new NeutonJwt(Buffer.from((await import('../../env.js')).env.NEUTON_JWT_SECRET, 'hex')),
+  },
+  { provide: SessionVerifier, useExisting: NeutonJwt },
+  {
+    provide: AuthService,
+    inject: [NeutonJwt],
+    useFactory: async (jwt: NeutonJwt) => new AuthService((await import('../../db/client.js')).db, jwt),
   },
 ];
 
-@Module({ providers: [...defaultProviders, IdentityService, ShopGuard, SessionGuard], exports: [IdentityService, ShopGuard, SessionGuard] })
+@Module({
+  controllers: [AuthController],
+  providers: [...defaultProviders, IdentityService, ShopGuard, SessionGuard],
+  exports: [AuthService, IdentityService, ShopGuard, SessionGuard],
+})
 export class IdentityModule {
   /** Replace external collaborators without replacing the guard or use case. */
   static register(options: { sessionVerifier: SessionVerifier; repository: IdentityRepository }): DynamicModule {

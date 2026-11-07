@@ -53,24 +53,15 @@ export class ShopsPersistence {
     const rows = await this.database
       .select({
         role: shopMembers.role,
-        shopId: shops.id,
-        shopName: shops.name,
-        slug: shops.slug,
-        currency: shops.currency,
-        timezone: shops.timezone,
+        shop: shops,
       })
       .from(shopMembers)
       .innerJoin(shops, eq(shops.id, shopMembers.shopId))
-      .where(eq(shopMembers.userId, userId));
+      .where(eq(shopMembers.userId, userId))
+      .orderBy(shopMembers.createdAt, shopMembers.id);
     return rows.map((row) => ({
       role: row.role,
-      shop: {
-        id: row.shopId,
-        name: row.shopName,
-        slug: row.slug,
-        currency: row.currency,
-        timezone: row.timezone,
-      },
+      shop: mapShop(row.shop),
     }));
   }
   async create(user: AuthUser, body: z.infer<typeof createShopSchema>) {

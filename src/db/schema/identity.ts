@@ -59,9 +59,7 @@ export const shops = pgTable('shops', {
 }));
 
 export const profiles = pgTable('profiles', {
-  // FK to auth.users(id) is added in the hand-written auth/RLS migration so the
-  // generated schema never tries to create Supabase's native auth table.
-  id: uuid('id').primaryKey(),
+  id: uuid('id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
   fullName: text('full_name'),
   avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

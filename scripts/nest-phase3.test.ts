@@ -14,10 +14,8 @@ import {
   ShopsPersistence,
   SHOPS_DATABASE,
 } from '../src/modules/shops/shops.persistence.js';
-import {
-  PasswordService,
-  PASSWORD_CLIENT,
-} from '../src/modules/shops/password.service.js';
+import { AuthService } from '../src/modules/identity/auth.service.js';
+import { NeutonJwt } from '../src/modules/identity/neuton-jwt.js';
 import { AnalyticsController } from '../src/modules/analytics/analytics.controller.js';
 import { AnalyticsService } from '../src/modules/analytics/analytics.service.js';
 import {
@@ -34,8 +32,8 @@ const shop = {
   updatedAt: date,
   privateColumn: 'hidden',
 };
-async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
-  let passwordWrites = 0;
+async function fixture(db: FakeDb, role = 'owner') {
+  const passwords = new FakeDb({ 'select:users': [[]] });
   @Module({
     imports: [
       IdentityModule.register({
@@ -58,27 +56,16 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
       { provide: SHOPS_AUDIT, useValue: async () => {} },
       ShopsService,
       ShopsPersistence,
-      PasswordService,
       AnalyticsService,
       AnalyticsPersistence,
       { provide: SHOPS_DATABASE, useValue: db },
       { provide: ANALYTICS_DEPS, useValue: { db, now: () => date } },
       {
-        provide: PASSWORD_CLIENT,
-        useValue: {
-          auth: {
-            signInWithPassword: async () => ({
-              data: { user: { id: providerId } },
-              error: null,
-            }),
-            admin: {
-              updateUserById: async () => {
-                passwordWrites++;
-                return { error: null };
-              },
-            },
-          },
-        },
+        provide: AuthService,
+        useValue: new AuthService(
+          passwords as unknown as ConstructorParameters<typeof AuthService>[0],
+          new NeutonJwt(new Uint8Array(32)),
+        ),
       },
     ],
   })
@@ -88,7 +75,7 @@ async function fixture(db: FakeDb, role = 'owner', providerId = USER_ID) {
     bodyLimit: 100000,
     rateLimit: { max: 1000, windowMs: 60000 },
   });
-  return { app, passwordWrites: () => passwordWrites };
+  return { app, passwordCalls: passwords.calls };
 }
 const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
 test('session/profile require authentication but no selected shop; profile fields are explicit', async () => {
@@ -97,11 +84,7 @@ test('session/profile require authentication but no selected shop; profile field
       [
         {
           role: 'owner',
-          shopId: SHOP_ID,
-          shopName: 'Shop',
-          slug: 'shop',
-          currency: 'USD',
-          timezone: 'UTC',
+          shop,
         },
       ],
     ],
@@ -178,7 +161,7 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
 });
 test('tenant/role and password identity checks reject writes before persistence', async () => {
   const db = new FakeDb();
-  const h = await fixture(db, 'member', 'another-user');
+  const h = await fixture(db, 'member');
   try {
     assert.equal(
       (
@@ -205,11 +188,11 @@ test('tenant/role and password identity checks reject writes before persistence'
         await request(h.app.getHttpServer())
           .post('/api/v1/profile/password')
           .set('authorization', 'Bearer test')
-          .send({ currentPassword: 'private', newPassword: 'private-new' })
+          .send({ currentPassword: 'private', newPassword: 'a new long password' })
       ).status,
       400,
     );
-    assert.equal(h.passwordWrites(), 0);
+    assert.equal(h.passwordCalls.length, 1);
     assert.equal(db.calls.length, 0);
   } finally {
     await h.app.close();

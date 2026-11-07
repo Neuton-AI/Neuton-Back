@@ -76,8 +76,3 @@ CREATE TABLE ingredient_conversions (
 CREATE UNIQUE INDEX ingredient_conversions_shop_scope_unique ON ingredient_conversions(shop_id, scope_key);
 ALTER TABLE product_measurements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingredient_conversions ENABLE ROW LEVEL SECURITY;
-GRANT SELECT, INSERT, UPDATE, DELETE ON product_measurements, ingredient_conversions TO authenticated;
-CREATE POLICY product_measurements_read ON product_measurements FOR SELECT TO authenticated USING (public.is_shop_member(shop_id));
-CREATE POLICY product_measurements_write ON product_measurements FOR ALL TO authenticated USING (public.can_admin_shop(shop_id)) WITH CHECK (public.can_admin_shop(shop_id));
-CREATE POLICY ingredient_conversions_read ON ingredient_conversions FOR SELECT TO authenticated USING (public.is_shop_member(shop_id));
-CREATE POLICY ingredient_conversions_write ON ingredient_conversions FOR ALL TO authenticated USING (public.can_admin_shop(shop_id)) WITH CHECK (public.can_admin_shop(shop_id));

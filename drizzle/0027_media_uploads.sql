@@ -21,11 +21,3 @@ ALTER TABLE "media_uploads" ADD CONSTRAINT "media_uploads_order_id_orders_id_fk"
 CREATE INDEX "media_uploads_shop_id_idx" ON "media_uploads" USING btree ("shop_id");
 --> statement-breakpoint
 ALTER TABLE "media_uploads" ENABLE ROW LEVEL SECURITY;
---> statement-breakpoint
-CREATE POLICY "media_uploads_shop_read" ON "media_uploads" FOR SELECT TO authenticated
-USING (public.is_shop_member(shop_id));
---> statement-breakpoint
--- Only the API may create/change a group or its immutable source associations.
-REVOKE ALL ON "media_uploads" FROM anon, authenticated;
---> statement-breakpoint
-GRANT SELECT ON "media_uploads" TO authenticated;

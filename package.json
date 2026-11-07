@@ -2,7 +2,7 @@
   "name": "neuton-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Neuton — Kitchen & Business Management API (NestJS/Express + Drizzle + Supabase + BullMQ + R2)",
+  "description": "Neuton — Kitchen & Business Management API (NestJS/Express + Drizzle + PostgreSQL + BullMQ + R2)",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -20,7 +20,6 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:validate": "tsx scripts/validate-migrations.ts",
-    "db:verify-rls": "tsx scripts/verify-rls.ts",
     "db:mark-applied": "tsx scripts/mark-applied.ts",
     "test:integrations": "tsx scripts/test-redis.ts && tsx scripts/test-upload-flow.ts",
     "db:push": "drizzle-kit push",
@@ -33,7 +32,6 @@
     "@nestjs/common": "^12.2.0",
     "@nestjs/core": "^12.2.0",
     "@nestjs/platform-express": "^12.2.0",
-    "@supabase/supabase-js": "^2.47.10",
     "argon2": "^0.44.0",
     "bullmq": "^5.34.6",
     "dotenv": "^16.4.7",

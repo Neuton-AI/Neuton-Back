@@ -1,0 +1,80 @@
+import './support/testEnv.js';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import test from 'node:test';
+import request from 'supertest';
+import postgres from 'postgres';
+import { SignJWT } from 'jose';
+
+const url = process.env.AUTH_TEST_DATABASE_URL;
+test('app accounts sign up, own shops, sign in and reject invalid credentials and JWTs', {
+  skip: !url && 'requires a migrated disposable AUTH_TEST_DATABASE_URL',
+}, async () => {
+  process.env.DATABASE_URL = url!;
+  const { buildApp } = await import('../src/app.js');
+  const { env } = await import('../src/env.js');
+  const { sql } = await import('../src/db/client.js');
+  const connection = postgres(url!);
+  const app = await buildApp({ logger: false });
+  const api = request(app.getHttpServer());
+  const email = `auth-${randomUUID()}@example.com`;
+  const password = 'a long test password';
+  let shopId: string | undefined;
+  try {
+    const signup = () => api.post('/api/v1/auth/signup').send({
+      email: ` ${email.toUpperCase()} `, password, fullName: 'Neuton Tester',
+    });
+    const attempts = await Promise.all([signup(), signup()]);
+    assert.deepEqual(attempts.map((result) => result.status).sort(), [201, 409]);
+    const created = attempts.find((result) => result.status === 201)!;
+    assert.equal(created.headers['cache-control'], 'no-store');
+    const { token, user } = created.body;
+    assert.deepEqual(user, { id: user.id, email, fullName: 'Neuton Tester', avatarUrl: null });
+    const [stored] = await connection`SELECT password_hash FROM public.users WHERE id = ${user.id}`;
+    assert.match(stored?.password_hash, /^\$argon2id\$/);
+    const auth = { Authorization: `Bearer ${token}` };
+    const profile = await api.get('/api/v1/profile').set(auth);
+    assert.equal(profile.status, 200);
+    assert.equal(profile.body.profile.fullName, 'Neuton Tester');
+
+    const shop = await api.post('/api/v1/shops').set(auth).send({ name: email });
+    assert.equal(shop.status, 201);
+    shopId = shop.body.shop.id as string;
+    const headers = { ...auth, 'x-shop-id': shopId };
+    assert.equal((await api.get('/api/v1/shop').set(headers)).status, 200);
+    assert.equal((await api.get('/api/v1/shop').set({ ...headers, 'x-shop-id': randomUUID() })).status, 403);
+    const session = await api.get('/api/v1/session').set(auth);
+    assert.deepEqual(session.body.memberships, [{ shop: shop.body.shop, role: 'owner' }]);
+
+    const signIn = (candidate: string) => api.post('/api/v1/auth/signin').send({ email, password: candidate });
+    const login = await signIn(password);
+    assert.equal(login.status, 200);
+    assert.equal(login.body.user.id, user.id);
+    assert.equal((await signIn('wrong')).status, 401);
+    assert.equal((await api.post('/api/v1/auth/signin').send({ email: 'absent@example.com', password })).status, 401);
+
+    const expired = await new SignJWT({ email })
+      .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+      .setIssuer('neuton').setAudience('neuton-api').setSubject(user.id)
+      .setIssuedAt().setExpirationTime('0s').sign(Buffer.from(env.NEUTON_JWT_SECRET, 'hex'));
+    for (const invalid of ['invalid-token', expired]) {
+      assert.equal((await api.get('/api/v1/session').set('Authorization', `Bearer ${invalid}`)).status, 401);
+    }
+
+    const newPassword = 'a different test password';
+    const changed = await api.post('/api/v1/profile/password').set(auth).send({ currentPassword: password, newPassword });
+    assert.equal(changed.status, 200);
+    assert.equal((await signIn(password)).status, 401);
+    assert.equal((await signIn(newPassword)).status, 200);
+    for (let remaining = 4; remaining > 0; remaining--) {
+      assert.equal((await signIn('wrong')).status, 401);
+    }
+    assert.equal((await signIn(newPassword)).status, 429);
+  } finally {
+    if (shopId) await connection`DELETE FROM public.shops WHERE id = ${shopId}`;
+    await connection`DELETE FROM public.users WHERE email = ${email}`;
+    await app.close();
+    await connection.end();
+    await sql.end();
+  }
+});

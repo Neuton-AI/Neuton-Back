@@ -4,7 +4,7 @@ import type { ActorContext } from '../identity/contracts.js';
 import type { SessionActor } from '../identity/session.guard.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { ShopsPersistence } from './shops.persistence.js';
-import { PasswordService } from './password.service.js';
+import { AuthService } from '../identity/auth.service.js';
 import type {
   createShopSchema,
   shopSettingsSchema,
@@ -18,7 +18,7 @@ export const SHOPS_AUDIT = Symbol('SHOPS_AUDIT');
 export class ShopsService {
   constructor(
     @Inject(ShopsPersistence) private readonly persistence: ShopsPersistence,
-    @Inject(PasswordService) private readonly passwords: PasswordService,
+    @Inject(AuthService) private readonly auth: AuthService,
     @Optional()
     @Inject(SHOPS_AUDIT)
     private readonly writeAudit: typeof recordAudit = recordAudit,
@@ -87,7 +87,7 @@ export class ShopsService {
     };
   }
   password(actor: SessionActor, body: z.infer<typeof passwordSchema>) {
-    return this.passwords.change(actor.user, body);
+    return this.auth.changePassword(actor.user.id, body);
   }
   delivery(actor: ActorContext, distanceKm: number) {
     requireActorRole(actor, ['owner', 'admin', 'member']);

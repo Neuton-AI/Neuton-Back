@@ -40,7 +40,7 @@ test(
     );
     try {
       await db.execute(
-        sql`insert into auth.users(id,email) values (${userId}::uuid,'base@example.test')`,
+        sql`insert into public.users(id,email, password_hash) VALUES (${userId}::uuid, 'base@example.test', 'unused-fixture-hash')`,
       );
       await db.execute(sql`insert into profiles(id) values (${userId}::uuid)`);
       await db.execute(
@@ -102,7 +102,7 @@ test(
     } finally {
       await fixture.close();
       await db.execute(sql`delete from shops where id=${shopId}::uuid`);
-      await db.execute(sql`delete from auth.users where id=${userId}::uuid`);
+      await db.execute(sql`delete from public.users where id=${userId}::uuid`);
       await connection.end({ timeout: 2 });
     }
   },

@@ -21,7 +21,7 @@ test(
     const app=await buildSyncApplication(db,{id:shopId,name:'Sync fixture',slug:shopId,currency:'USD',timezone:'UTC',storeAddress:null,targetProfitMargin:'30',hourlyLaborCost:'25',deliveryBaseFee:'5',deliveryRatePerKm:'1'},userId);
     try {
       await db.execute(
-        sql`insert into auth.users(id,email) values (${userId}::uuid,'sync@example.com')`,
+        sql`insert into public.users(id,email, password_hash) VALUES (${userId}::uuid, 'sync@example.com', 'unused-fixture-hash')`,
       );
       await db.execute(
         sql`insert into profiles(id) values (${userId}::uuid) on conflict do nothing`,
@@ -311,7 +311,7 @@ test(
       await app.close();
       await db.execute(sql`delete from storage_object_deletions where shop_id=${shopId}::uuid`);
       await db.execute(sql`delete from shops where id=${shopId}::uuid`);
-      await db.execute(sql`delete from auth.users where id=${userId}::uuid`);
+      await db.execute(sql`delete from public.users where id=${userId}::uuid`);
       await connection.end({ timeout: 5 });
     }
   },

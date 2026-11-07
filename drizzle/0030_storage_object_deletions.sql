@@ -17,5 +17,3 @@ CREATE UNIQUE INDEX storage_object_deletions_shop_path_unique ON storage_object_
 CREATE INDEX storage_object_deletions_due_idx ON storage_object_deletions(next_attempt_at,created_at);
 --> statement-breakpoint
 ALTER TABLE storage_object_deletions ENABLE ROW LEVEL SECURITY;
---> statement-breakpoint
-REVOKE ALL ON storage_object_deletions FROM anon, authenticated;
