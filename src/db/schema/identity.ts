@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   char,
+  check,
   index,
   integer,
   jsonb,
@@ -13,6 +14,15 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { SHOP_ROLES } from './enums.js';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  email: text('email').notNull(),
+  passwordHash: text('password_hash').notNull(),
+}, (t) => ({
+  emailUnique: uniqueIndex('users_email_unique').on(t.email),
+  emailNormalized: check('users_email_normalized', sql`${t.email} = lower(btrim(${t.email}))`),
+}));
 
 export const shops = pgTable('shops', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
