@@ -98,11 +98,16 @@ export class LoggerImpl implements Logger {
     if (LEVEL_ORDER[level] < LEVEL_ORDER[this.#minLevel]) return;
     const { message, meta } = normalizeArgs(first, second);
     const dynamic = this.dynamic?.();
-    this.transport.write(level, message, {
-      ...this.context,
-      ...(dynamic ?? {}),
-      ...meta,
-    });
+    try {
+      this.transport.write(level, message, {
+        ...this.context,
+        ...(dynamic ?? {}),
+        ...meta,
+      });
+    } catch {
+      // Transport failures must not change the outcome of the operation being logged.
+      console.error('[logger] Log delivery failed');
+    }
   }
 
   debug(message: string, meta?: LogMeta): void;

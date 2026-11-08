@@ -153,14 +153,14 @@ export class SessionService {
   }
 
   async revoke(session: SessionRecord, targetId: string) {
-    await this.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const { now } = await this.lockCurrent(tx, session);
       const owned = and(eq(userSessions.id, targetId), eq(userSessions.userId, session.userId));
       const [target] = await tx.select({ revokedAt: userSessions.revokedAt }).from(userSessions).where(owned).for('update');
       if (!target) throw notFound('Session not found');
-      if (!target.revokedAt) {
-        await tx.update(userSessions).set({ revokedAt: now, revocationReason: 'sign_out' }).where(owned);
-      }
+      if (target.revokedAt) return false;
+      await tx.update(userSessions).set({ revokedAt: now, revocationReason: 'sign_out' }).where(owned);
+      return true;
     });
   }
 

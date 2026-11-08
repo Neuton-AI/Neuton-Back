@@ -107,7 +107,7 @@ export class AuthController {
     const { session } = await this.current(request);
     await this.sessions.revoke(session, session.id);
     clearSessionCookie(response);
-    request.log.info({ event: 'session_revoked', userId: session.userId, sessionId: session.id }, 'Session revoked');
+    request.log.info({ event: 'session_revoked', userId: session.userId, sessionId: session.id, reason: 'current' }, 'Session revoked');
   }
 
   @Post('logout-all') @HttpCode(204)
@@ -122,8 +122,10 @@ export class AuthController {
   async revoke(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response, @Param('id') id: string) {
     const { session } = await this.current(request);
     const target = z.string().uuid().parse(id).toLowerCase();
-    await this.sessions.revoke(session, target);
+    const revoked = await this.sessions.revoke(session, target);
     if (target === session.id) clearSessionCookie(response);
-    request.log.info({ event: 'session_revoked', userId: session.userId, sessionId: target }, 'Session revoked');
+    if (revoked) {
+      request.log.info({ event: 'session_revoked', userId: session.userId, sessionId: target, reason: 'targeted' }, 'Session revoked');
+    }
   }
 }
