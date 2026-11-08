@@ -73,7 +73,7 @@ const source = {
   originalFilename: 'receipt.jpg',
   byteSize: 8,
 };
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID };
 
 test('production feature modules compose with explicit Nest injection', async () => {
   @Module({ imports: [InventoryModule, RecipeModule, CategoriesModule, ReceiptsModule, UploadsModule] })

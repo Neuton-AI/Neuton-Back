@@ -9,7 +9,8 @@ import type { HttpRequest } from '../../http/request-context.js';
 import { IdentityService } from './identity.service.js';
 import type { ActorContext } from './contracts.js';
 import { unauthorized } from '../../lib/errors.js';
-export type SessionActor = Omit<ActorContext, 'shop' | 'role'>;
+import type { SessionRecord } from './session.service.js';
+export type SessionActor = Omit<ActorContext, 'shop' | 'role'> & { session?: SessionRecord };
 interface SessionRequest extends HttpRequest {
   sessionActor?: SessionActor;
 }
@@ -20,12 +21,11 @@ export class SessionGuard implements CanActivate {
   ) {}
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<SessionRequest>();
-    const user = await this.identity.authenticate(
-      request.headers.authorization,
-    );
+    const { user, session } = await this.identity.authenticate(request);
     request.log = request.log.child({ userId: user.id });
     request.sessionActor = {
       user,
+      session,
       requestId: request.requestId,
       traceId: request.traceId,
       ipAddress: request.ip,

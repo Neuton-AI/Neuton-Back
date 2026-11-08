@@ -45,6 +45,15 @@ test('opaque sessions use the account version and both strict expiry boundaries'
     assert.equal(await sessions.resolve(issued.secret), null);
     const other = await sessions.issue(account, now);
     assert.ok(other);
+    now = new Date(other.session.lastActivityAt.getTime() + 299_999);
+    assert.equal((await sessions.renew(other.session)).extended, false);
+    now = new Date(now.getTime() + 1);
+    assert.equal((await sessions.renew(other.session)).extended, true);
+    const absolute = other.session.absoluteExpiresAt.toISOString();
+    await connection`UPDATE user_sessions SET idle_expires_at = ${absolute} WHERE id = ${other.session.id}`;
+    now = new Date(other.session.absoluteExpiresAt.getTime() - day);
+    const capped = await sessions.renew(other.session);
+    assert.equal(capped.session.idleExpiresAt.toISOString(), absolute);
     await connection`UPDATE users SET security_version = 1 WHERE id = ${id}`;
     assert.equal(await sessions.resolve(other.secret), null);
     assert.equal(await sessions.issue(account, now), null);
@@ -104,4 +113,45 @@ test('session store errors surface as 503 without credentials or query details',
     assert.equal(error.cause, undefined);
     return true;
   });
+});
+
+test('version changes serialize issuance and renewal and roll back with password replacement', { skip }, async () => {
+  const connection = postgres(url!);
+  const competingConnection = postgres(url!);
+  const sessions = new SessionService(drizzle(connection, { schema }));
+  const competing = new SessionService(drizzle(competingConnection, { schema }));
+  const id = randomUUID();
+  const account = { id, passwordHash: 'old-password-hash', securityVersion: 0 };
+  try {
+    await connection`INSERT INTO users (id, email, password_hash) VALUES (${id}, ${id + '@example.test'}, ${account.passwordHash})`;
+    const issued = await sessions.issue(account, new Date());
+    assert.ok(issued);
+    const { session } = issued;
+    await assert.rejects(sessions.transaction(async (tx) => {
+      const { now } = await sessions.lockCurrent(tx, session);
+      const version = await sessions.advanceVersion(tx, session, now, 'password_change', 'replacement-hash');
+      await sessions.insert(tx, { id, securityVersion: version }, now);
+      throw new AppError(503, 'TEST_ABORT', 'Abort transaction');
+    }), { code: 'TEST_ABORT' });
+    const [unchanged] = await connection`SELECT password_hash, security_version FROM users WHERE id = ${id}`;
+    assert.deepEqual(unchanged, { password_hash: account.passwordHash, security_version: 0 });
+    assert.ok(await competing.resolve(issued.secret));
+
+    let overlapping: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    await sessions.transaction(async (tx) => {
+      const { now } = await sessions.lockCurrent(tx, session);
+      overlapping = Promise.allSettled([competing.issue(account, now), competing.renew(session)]);
+      await sessions.advanceVersion(tx, session, now, 'sign_out_all');
+    });
+    const [login, renewal] = (await overlapping)!;
+    assert.deepEqual(login, { status: 'fulfilled', value: null });
+    assert.equal(renewal?.status, 'rejected');
+    assert.ok(renewal.reason instanceof AppError);
+    assert.equal(renewal.reason.statusCode, 401);
+    assert.equal(await competing.resolve(issued.secret), null);
+  } finally {
+    await connection`DELETE FROM users WHERE id = ${id}`;
+    await connection.end();
+    await competingConnection.end();
+  }
 });

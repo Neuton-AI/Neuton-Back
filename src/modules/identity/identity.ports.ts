@@ -1,8 +1,9 @@
 import type { ShopRole } from '../../db/schema/enums.js';
 import type { ShopContext } from './contracts.js';
+import type { SessionRecord } from './session.service.js';
 
 export abstract class SessionVerifier {
-  abstract verify(token: string): Promise<{ id: string; email: string | null } | null>;
+  abstract verify(secret: string): Promise<{ id: string; email: string | null; session?: SessionRecord } | null>;
 }
 
 export abstract class IdentityRepository {

@@ -27,7 +27,7 @@ test(
         sql`insert into recipes(id,shop_id,name,status) values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`,
       );
       const headers = {
-        authorization: 'Bearer test-session',
+        cookie: '__Host-neuton-session=test-session',
         'x-shop-id': shopId,
       };
       const check = () =>

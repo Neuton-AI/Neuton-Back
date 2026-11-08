@@ -50,7 +50,7 @@ const envSchema = z.object({
   SCRAPY_API_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5000),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  NEUTON_JWT_SECRET: z.string().regex(/^[0-9a-f]{64}$/i, 'Expected a 32-byte hex signing key'),
+  SESSION_ORIGIN: emptyToUndefined(z.string().url()),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
 
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),
@@ -157,7 +157,16 @@ const envSchema = z.object({
   QUEUE_OPTIONAL: boolish.default(false),
 });
 
-const parsed = envSchema.safeParse(process.env);
+const parsed = envSchema.superRefine((settings, context) => {
+  const origin = settings.SESSION_ORIGIN;
+  if (!origin && settings.NODE_ENV !== 'production') return;
+  const url = origin && URL.canParse(origin) ? new URL(origin) : null;
+  const localHttp = url?.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  if (url?.origin === origin && (url?.protocol === 'https:' || (settings.NODE_ENV !== 'production' && localHttp))) {
+    return;
+  }
+  context.addIssue({ code: 'custom', path: ['SESSION_ORIGIN'], message: 'Expected an exact HTTPS origin or an explicit localhost development origin' });
+}).safeParse(process.env);
 
 if (!parsed.success) {
   const issues = parsed.error.issues

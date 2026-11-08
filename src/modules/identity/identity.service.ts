@@ -8,6 +8,8 @@ import {
 } from '../../lib/errors.js';
 import type { ActorContext } from './contracts.js';
 import { IdentityRepository, SessionVerifier } from './identity.ports.js';
+import type { Request } from 'express';
+import { protectSessionMutation, requireMatchingSession, sessionSecret } from './session-http.js';
 
 @Injectable()
 export class IdentityService {
@@ -16,33 +18,32 @@ export class IdentityService {
     @Inject(IdentityRepository) private readonly repository: IdentityRepository,
   ) {}
 
-  private async verifySession(authorization?: string) {
-    const token =
-      typeof authorization === 'string'
-        ? /^Bearer\s+(\S+)$/i.exec(authorization)?.[1]
-        : undefined;
-    if (!token) throw unauthorized('Missing bearer token');
-    const session = await this.sessions.verify(token);
+  private async verifySession(request: Request) {
+    const secret = sessionSecret(request);
+    if (!secret) throw unauthorized('Missing session cookie');
+    const session = await this.sessions.verify(secret);
     if (!session) throw unauthorized('Invalid or expired session');
+    if (session.session) {
+      requireMatchingSession(request, session.session.id);
+      protectSessionMutation(request, secret);
+    }
     return session;
   }
 
-  async authenticate(authorization?: string): Promise<ActorContext['user']> {
-    const session = await this.verifySession(authorization);
+  async authenticate(request: Request) {
+    const session = await this.verifySession(request);
     const profile = await this.repository.findProfile(session.id);
     return {
-      id: session.id,
-      email: session.email,
-      fullName: profile?.fullName ?? null,
-      avatarUrl: profile?.avatarUrl ?? null,
+      session: session.session,
+      user: { id: session.id, email: session.email, fullName: profile?.fullName ?? null, avatarUrl: profile?.avatarUrl ?? null },
     };
   }
 
   async resolve(input: {
-    authorization?: string;
+    request: Request;
     shopId?: string;
   }): Promise<Pick<ActorContext, 'user' | 'shop' | 'role'>> {
-    const session = await this.verifySession(input.authorization);
+    const session = await this.verifySession(input.request);
 
     const requestedShopId = input.shopId;
     if (typeof requestedShopId !== 'string' || !requestedShopId.trim()) {

@@ -10,6 +10,7 @@ import { apiLogger } from '../lib/logger/index.js';
 import type { Logger } from '../lib/logger/types.js';
 import { ApiExceptionFilter } from './exception-filter.js';
 import { resolveTraceId, type HttpRequest } from './request-context.js';
+import { forbidden } from '../lib/errors.js';
 
 export interface HttpOptions {
   origins: string[];
@@ -36,6 +37,9 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     req.traceId = resolveTraceId(req.headers);
     req.log = (options.logger ?? apiLogger).child({ requestId: req.requestId, traceId: req.traceId, entryPoint: 'http' });
     res.setHeader('X-Trace-Id', req.traceId);
+    if (/^\/api\/v1\/(auth(?:\/|$)|session\/?$|profile\/password\/?$)/.test(req.path)) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
     res.once('finish', () => {
       const event = {
         event: 'http_request_completed', entryPoint: 'http', requestId: req.requestId,
@@ -50,11 +54,15 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
   app.use(helmet({ contentSecurityPolicy: { useDefaults: false, directives: {
     defaultSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"], formAction: ["'none'"],
   } } }));
-  app.enableCors({
-    origin: (origin, callback) => callback(origin && !options.origins.includes(origin) ? new Error('Origin not allowed') : null, true),
+  app.enableCors((request: HttpRequest, done) => done(null, {
+    origin: (origin, callback) => {
+      if (!origin || options.origins.includes(origin)) return callback(null, true);
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return callback(forbidden('Origin not allowed'));
+      return callback(new Error('Origin not allowed'));
+    },
     credentials: true, exposedHeaders: ['Retry-After', 'X-Trace-Id'],
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-  });
+  }));
   app.use(['/api/v1/auth/signup', '/api/v1/auth/signin', '/api/v1/profile/password'], rateLimit({
     windowMs: 60_000,
     limit: 12,

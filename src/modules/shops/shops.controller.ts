@@ -8,9 +8,14 @@ import {
   HttpCode,
   Inject,
   Query,
+  Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ShopGuard } from '../identity/shop.guard.js';
+import type { Response } from 'express';
+import type { HttpRequest } from '../../http/request-context.js';
+import { setSessionCookie } from '../identity/session-http.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import type { ActorContext } from '../identity/contracts.js';
 import {
@@ -60,11 +65,16 @@ export class ShopsController {
   ) {
     return this.shops.updateProfile(actor, updateProfileSchema.parse(body));
   }
-  @Post('profile/password') @HttpCode(200) @UseGuards(SessionGuard) password(
+  @Post('profile/password') @HttpCode(200) @UseGuards(SessionGuard) async password(
     @CurrentSession() actor: SessionActor,
     @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.shops.password(actor, passwordSchema.parse(body));
+    const { secret, session } = await this.shops.password(actor, passwordSchema.parse(body));
+    setSessionCookie(response, secret, session);
+    request.log.info({ event: 'session_replaced', userId: session.userId, sessionId: session.id }, 'Password changed and sessions revoked');
+    return { ok: true };
   }
   @Get('shop/delivery-preview') @UseGuards(ShopGuard) delivery(
     @CurrentActor() actor: ActorContext,

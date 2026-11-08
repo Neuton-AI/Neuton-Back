@@ -60,24 +60,34 @@ stays in current inventory balances. Start the updated API and worker
 after the migration. To restore deleted data and files, use the
 pre-migration database and storage backups.
 
-Set `NEUTON_JWT_SECRET` to a random 32-byte hex value on the server. Use the
-same value across API instances. Changing it expires every issued token.
-
-```sh
-node -p "require('node:crypto').randomBytes(32).toString('hex')"
-```
+Set `SESSION_ORIGIN` to the exact public HTTPS origin in production, including
+scheme and any non-default port. In development, the default allowed origins
+are `http://localhost:5173`, `http://127.0.0.1:5173` and `http://[::1]:5173`.
+For another loopback port, set `SESSION_ORIGIN` to that exact address before
+starting the API. Local HTTP uses a separate session cookie name.
 
 | Endpoint | Body | Success |
 | --- | --- | --- |
-| `POST /api/v1/auth/signup` | `{ email, password, fullName? }` | `201 { token, user }` |
-| `POST /api/v1/auth/signin` | `{ email, password }` | `200 { token, user }` |
-| `GET /api/v1/session` | Bearer token | `200 { user, memberships }` |
+| `POST /api/v1/auth/csrf` | Allowed origin | `200 { token }` with a browser-bound CSRF proof |
+| `POST /api/v1/auth/signup` | `{ email, password, fullName? }` | `201 { user }` and session cookie |
+| `POST /api/v1/auth/signin` | `{ email, password }` | `200 { user }` and session cookie |
+| `GET /api/v1/session` | Session cookie | `200 { user, memberships, session }` |
+| `POST /api/v1/auth/session/renew` | Session cookie and proof | `200` with current session metadata |
+| `GET /api/v1/auth/sessions` | Session cookie | `200 { sessions }` for the account |
+| `POST /api/v1/auth/logout`, `POST /api/v1/auth/logout-all` | Session cookie and proof | `204` and cleared cookie |
+| `DELETE /api/v1/auth/sessions/:id` | Session cookie and proof | `204` for an owned session |
+| `POST /api/v1/profile/password` | Session cookie, proof and current password | `200 { ok: true }` and replacement cookie |
 
 Signup trims and lowercases emails. New passwords must contain 8–128
 characters. Duplicate emails return `409`, and invalid sign-in credentials
 return `401`. Authentication and password changes share a per-IP limit of
-12 requests per minute. Send the one-hour JWT as `Authorization: Bearer <token>`.
-Shop-scoped routes still require `x-shop-id` and verify membership.
+12 requests per minute. Browser mutations send an exact allowed `Origin` and
+`X-CSRF-Token`. Shop-scoped routes still require `x-shop-id` and verify
+membership. Sessions expire after seven days idle or 30 days total.
+
+For cutover, apply the additive migration and release the API, frontend and
+same-origin `/api` route together. Existing accounts retain their credentials
+and shop memberships. Users sign in once to receive a session cookie.
 
 ## Backend verification
 

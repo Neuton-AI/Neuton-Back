@@ -12,6 +12,7 @@ import { UploadsModule } from './modules/uploads/uploads.module.js';
 import { ShopsModule } from './modules/shops/shops.module.js';
 import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { SyncModule } from './modules/sync/sync.module.js';
+import { sessionOrigins } from './modules/identity/session-http.js';
 @Controller()
 class HealthController {
   @Get('health') health() {
@@ -40,7 +41,7 @@ export interface BuildAppOptions {
 }
 export function buildApp(options: BuildAppOptions = {}) {
   return createHttpApplication(AppModule, {
-    origins: corsOrigins,
+    origins: [...corsOrigins, ...sessionOrigins],
     bodyLimit: env.MAX_UPLOAD_BYTES,
     rateLimit: { max: env.RATE_LIMIT_MAX, windowMs: env.RATE_LIMIT_WINDOW },
     trustProxy: env.TRUST_PROXY,

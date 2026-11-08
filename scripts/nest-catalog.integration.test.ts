@@ -46,7 +46,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     const database = drizzle(connection, { schema });
     app = await buildNestCatalogApp(database, 'member');
     const get = (path: string) => request(app!.app.getHttpServer()).get(`/api/v1${path}`)
-      .set({ authorization: 'Bearer test', 'x-shop-id': SHOP_ID });
+      .set({ cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID });
     const categories = await get('/categories');
     assert.equal(categories.status, 200);
     assert.deepEqual(categories.body.categories.map((row: { name: string }) => row.name), ['Alpha', 'Zulu']);

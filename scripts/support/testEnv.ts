@@ -17,7 +17,6 @@ process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = testDatabaseUrl ?? 'postgresql://unused@127.0.0.1:1/unused';
 
 const PLACEHOLDERS: Record<string, string> = {
-  NEUTON_JWT_SECRET: '01'.repeat(32),
   UPSTASH_REDIS_URL: 'redis://localhost:6379',
   R2_ACCOUNT_ID: 'placeholder-account',
   R2_ACCESS_KEY_ID: 'placeholder-access-key',
