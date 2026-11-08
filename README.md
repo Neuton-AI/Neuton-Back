@@ -45,12 +45,15 @@ Neuton stores credentials, display names, and avatars in `public.users`.
 The profile endpoints read and edit fields on that account row.
 
 Back up the database and stop the API and worker before running
-`npm run db:migrate`. Migration `0034` copies profile details for existing
-Neuton accounts and drops `public.profiles`. Memberships for Neuton accounts
-are kept. Legacy-only profiles and their memberships are removed, and
-nullable user references on their business records are cleared. Start the
-updated API and worker after the migration. To roll back, restore the
-pre-migration database snapshot and its matching app version.
+`npm run db:migrate`. Migration `0034` drops `public.profiles` and its
+dependent database objects, discarding the saved names and avatars in that
+table. Existing Neuton accounts keep their memberships.
+Legacy-only profiles lose their memberships, linked receipts, orders,
+uploads, audit entries, and retry records. The migration queues unshared
+shop-owned files for deletion. Stock already posted from deleted receipts
+stays in current inventory balances. Start the updated API and worker
+after the migration. To restore deleted data and files, use the
+pre-migration database and storage backups.
 
 Set `NEUTON_JWT_SECRET` to a random 32-byte hex value on the server. Use the
 same value across API instances. Changing it expires every issued token.
