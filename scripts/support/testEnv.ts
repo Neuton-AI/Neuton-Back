@@ -9,7 +9,9 @@
  */
 import { config as loadDotenv } from 'dotenv';
 
-loadDotenv();
+if (process.env.NEUTON_SKIP_ENV_FILES !== '1') {
+  loadDotenv();
+}
 
 process.env.NODE_ENV = 'test';
 

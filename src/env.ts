@@ -1,7 +1,9 @@
 import { config as loadDotenv } from 'dotenv';
 import { z } from 'zod';
 
-loadDotenv();
+if (process.env.NEUTON_SKIP_ENV_FILES !== '1') {
+  loadDotenv();
+}
 
 const boolish = z
   .union([z.boolean(), z.string()])
