@@ -1,14 +1,14 @@
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { profiles, shopMembers, shops } from '../../db/schema/index.js';
+import { shopMembers, shops, users } from '../../db/schema/index.js';
 import { IdentityRepository } from './identity.ports.js';
 
 export class DrizzleIdentityRepository extends IdentityRepository {
   constructor(private readonly db: Database) { super(); }
 
   override async findProfile(userId: string) {
-    const [profile] = await this.db.select({ fullName: profiles.fullName, avatarUrl: profiles.avatarUrl })
-      .from(profiles).where(eq(profiles.id, userId)).limit(1);
+    const [profile] = await this.db.select({ fullName: users.fullName, avatarUrl: users.avatarUrl })
+      .from(users).where(eq(users.id, userId)).limit(1);
     return profile ?? null;
   }
 

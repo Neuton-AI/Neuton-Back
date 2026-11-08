@@ -3,14 +3,13 @@ import { and, eq } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
 import {
   shops,
-  profiles,
   shopMembers,
+  users,
   type Shop,
-  type Profile,
 } from '../../db/schema/index.js';
 import { generateUniqueSlug } from '../../lib/slug.js';
 import { conflict, notFound } from '../../lib/errors.js';
-import type { AuthUser, ShopContext } from '../identity/contracts.js';
+import type { ShopContext } from '../identity/contracts.js';
 import type { z } from 'zod';
 import type {
   ShopDto,
@@ -37,7 +36,15 @@ export function mapShop(row: Shop): ShopDto {
     updatedAt: row.updatedAt.toISOString(),
   };
 }
-export function mapProfile(row: Profile): ProfileDto {
+const profileColumns = {
+  id: users.id,
+  fullName: users.fullName,
+  avatarUrl: users.avatarUrl,
+  createdAt: users.createdAt,
+  updatedAt: users.updatedAt,
+};
+
+function mapProfile(row: Pick<typeof users.$inferSelect, keyof typeof profileColumns>): ProfileDto {
   return {
     id: row.id,
     fullName: row.fullName,
@@ -64,19 +71,8 @@ export class ShopsPersistence {
       shop: mapShop(row.shop),
     }));
   }
-  async create(user: AuthUser, body: z.infer<typeof createShopSchema>) {
+  async create(userId: string, body: z.infer<typeof createShopSchema>) {
     return this.database.transaction(async (tx) => {
-      await tx
-        .insert(profiles)
-        .values({
-          id: user.id,
-          fullName: user.fullName,
-          avatarUrl: user.avatarUrl,
-        })
-        .onConflictDoUpdate({
-          target: profiles.id,
-          set: { updatedAt: new Date() },
-        });
       const slug = await generateUniqueSlug(
         body.name,
         tx as unknown as Database,
@@ -96,7 +92,7 @@ export class ShopsPersistence {
       if (!shop) throw new Error('Shop insert returned no row');
       await tx
         .insert(shopMembers)
-        .values({ shopId: shop.id, userId: user.id, role: 'owner' });
+        .values({ shopId: shop.id, userId, role: 'owner' });
       return mapShop(shop);
     });
   }
@@ -163,23 +159,24 @@ export class ShopsPersistence {
   }
   async profile(id: string) {
     const [row] = await this.database
-      .select()
-      .from(profiles)
-      .where(eq(profiles.id, id))
+      .select(profileColumns)
+      .from(users)
+      .where(eq(users.id, id))
       .limit(1);
     if (!row) throw notFound('Profile not found');
     return mapProfile(row);
   }
   async updateProfile(id: string, body: z.infer<typeof updateProfileSchema>) {
     const [row] = await this.database
-      .insert(profiles)
-      .values({ id, ...body })
-      .onConflictDoUpdate({
-        target: profiles.id,
-        set: { ...body, updatedAt: new Date() },
+      .update(users)
+      .set({
+        fullName: body.fullName,
+        avatarUrl: body.avatarUrl,
+        updatedAt: new Date(),
       })
-      .returning();
-    if (!row) throw new Error('Profile update returned no row');
+      .where(eq(users.id, id))
+      .returning(profileColumns);
+    if (!row) throw notFound('Profile not found');
     return mapProfile(row);
   }
 }

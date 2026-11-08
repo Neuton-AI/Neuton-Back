@@ -10,7 +10,7 @@ import { createShopSchema } from '../src/modules/shops/contracts.js';
 import { generateUniqueSlug } from '../src/lib/slug.js';
 const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
 test(
-  'onboarding rolls profile/shop/owner back together and renamed slugs exclude only their own shop',
+  'onboarding rolls shop and owner back together and renamed slugs exclude only their own shop',
   {
     skip: !url && 'requires disposable API_ALIGNMENT_TEST_DATABASE_URL',
     timeout: 20000,
@@ -22,24 +22,16 @@ test(
       onnotice() {},
       connection: { search_path: namespace },
     });
-    const user = {
-      id: randomUUID(),
-      email: null,
-      fullName: 'User',
-      avatarUrl: null,
-    };
+    const userId = randomUUID();
     try {
       await connection.unsafe(
-        `CREATE SCHEMA ${namespace};CREATE TABLE ${namespace}.profiles(LIKE public.profiles INCLUDING ALL);CREATE TABLE ${namespace}.shops(LIKE public.shops INCLUDING ALL);CREATE TABLE ${namespace}.shop_members(LIKE public.shop_members INCLUDING ALL);ALTER TABLE ${namespace}.shop_members ADD CONSTRAINT fail_owner CHECK(role <> 'owner');`,
+        `CREATE SCHEMA ${namespace};CREATE TABLE ${namespace}.users(LIKE public.users INCLUDING ALL);CREATE TABLE ${namespace}.shops(LIKE public.shops INCLUDING ALL);CREATE TABLE ${namespace}.shop_members(LIKE public.shop_members INCLUDING ALL);ALTER TABLE ${namespace}.shop_members ADD FOREIGN KEY (user_id) REFERENCES ${namespace}.users(id), ADD CONSTRAINT fail_owner CHECK(role <> 'owner');`,
       );
+      await connection`INSERT INTO users(id, email, password_hash) VALUES (${userId}, 'owner@example.test', 'unused-fixture-hash')`;
       const database = drizzle(connection, { schema });
       const persistence = new ShopsPersistence(database);
       const body = createShopSchema.parse({ name: 'Existing' });
-      await assert.rejects(persistence.create(user, body));
-      assert.equal(
-        (await connection`SELECT count(*)::int as n FROM profiles`)[0]?.n,
-        0,
-      );
+      await assert.rejects(persistence.create(userId, body));
       assert.equal(
         (await connection`SELECT count(*)::int as n FROM shops`)[0]?.n,
         0,
@@ -47,9 +39,9 @@ test(
       await connection.unsafe(
         'ALTER TABLE shop_members DROP CONSTRAINT fail_owner',
       );
-      const first = await persistence.create(user, body);
+      const first = await persistence.create(userId, body);
       const second = await persistence.create(
-        user,
+        userId,
         createShopSchema.parse({ name: 'Another' }),
       );
       assert.equal(first.slug, 'existing');

@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { check, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { profiles, shops } from './identity.js';
+import { shops, users } from './identity.js';
 import { receipts } from './receipts.js';
 import { recipes } from './catalog.js';
 import { orders } from './orders.js';
@@ -25,7 +25,7 @@ export interface UploadSource {
 export const mediaUploads = pgTable('media_uploads', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'cascade' }),
-  uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
+  uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'set null' }),
   kind: text('kind', { enum: ['receipt', 'recipe', 'product', 'order'] }).notNull(),
   sources: jsonb('sources').$type<UploadSource[]>().notNull(),
   receiptId: uuid('receipt_id').references(() => receipts.id, { onDelete: 'cascade' }),

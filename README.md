@@ -41,12 +41,16 @@ See [migration and rollout notes](docs/nestjs-migration.md) and the
 
 ## Account authentication
 
-Run `npm run db:migrate` to create Neuton accounts and switch the profile
-foreign key. Plain PostgreSQL is supported. Existing profiles and shop records
-are preserved, and the Neuton user list starts empty. Existing shop memberships
-remain attached to their original profile IDs. Back up the database before
-cutover and deploy the API and web client together. To roll back, restore the
-pre-cutover database snapshot and the matching API and web versions.
+Neuton stores credentials, display names, and avatars in `public.users`.
+The profile endpoints read and edit fields on that account row.
+
+Back up the database and stop the API and worker before running
+`npm run db:migrate`. Migration `0034` copies profile details for existing
+Neuton accounts and drops `public.profiles`. Memberships for Neuton accounts
+are kept. Legacy-only profiles and their memberships are removed, and
+nullable user references on their business records are cleared. Start the
+updated API and worker after the migration. To roll back, restore the
+pre-migration database snapshot and its matching app version.
 
 Set `NEUTON_JWT_SECRET` to a random 32-byte hex value on the server. Use the
 same value across API instances. Changing it expires every issued token.

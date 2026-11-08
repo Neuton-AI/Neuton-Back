@@ -42,7 +42,6 @@ test(
       await db.execute(
         sql`insert into public.users(id,email, password_hash) VALUES (${userId}::uuid, 'base@example.test', 'unused-fixture-hash')`,
       );
-      await db.execute(sql`insert into profiles(id) values (${userId}::uuid)`);
       await db.execute(
         sql`insert into shops(id,name,slug) values (${shopId}::uuid,'Base fixture',${shopId})`,
       );

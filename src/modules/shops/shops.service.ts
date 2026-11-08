@@ -56,7 +56,7 @@ export class ShopsService {
     );
   }
   async create(actor: SessionActor, body: z.infer<typeof createShopSchema>) {
-    const shop = await this.persistence.create(actor.user, body);
+    const shop = await this.persistence.create(actor.user.id, body);
     await this.audit(actor, shop.id, 'SHOP_CREATED', { slug: shop.slug });
     return { shop };
   }

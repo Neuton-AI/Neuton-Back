@@ -24,9 +24,6 @@ test(
         sql`insert into public.users(id,email, password_hash) VALUES (${userId}::uuid, 'sync@example.com', 'unused-fixture-hash')`,
       );
       await db.execute(
-        sql`insert into profiles(id) values (${userId}::uuid) on conflict do nothing`,
-      );
-      await db.execute(
         sql`insert into shops(id,name,slug) values (${shopId}::uuid,'Sync fixture',${shopId})`,
       );
       await db.execute(

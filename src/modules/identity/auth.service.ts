@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { profiles, users } from '../../db/schema/index.js';
+import { users } from '../../db/schema/index.js';
 import { badRequest, conflict, unauthorized } from '../../lib/errors.js';
 import type { NeutonJwt } from './neuton-jwt.js';
 import { hashPassword, verifyPassword } from './password-hash.js';
@@ -12,16 +12,15 @@ export class AuthService {
 
   async signup({ email, password, fullName }: Credentials & { fullName?: string }) {
     const passwordHash = await hashPassword(password);
-    const user = await this.db.transaction(async (tx) => {
-      const [account] = await tx.insert(users).values({ email, passwordHash })
-        .onConflictDoNothing({ target: users.email })
-        .returning({ id: users.id, email: users.email });
-      if (!account) throw conflict('Email is already registered');
-
-      const name = fullName ?? null;
-      await tx.insert(profiles).values({ id: account.id, fullName: name });
-      return { ...account, fullName: name, avatarUrl: null };
-    });
+    const [user] = await this.db.insert(users).values({ email, passwordHash, fullName })
+      .onConflictDoNothing({ target: users.email })
+      .returning({
+        id: users.id,
+        email: users.email,
+        fullName: users.fullName,
+        avatarUrl: users.avatarUrl,
+      });
+    if (!user) throw conflict('Email is already registered');
     return { token: await this.jwt.issue(user), user };
   }
 
@@ -30,9 +29,9 @@ export class AuthService {
       id: users.id,
       email: users.email,
       passwordHash: users.passwordHash,
-      fullName: profiles.fullName,
-      avatarUrl: profiles.avatarUrl,
-    }).from(users).leftJoin(profiles, eq(profiles.id, users.id)).where(eq(users.email, email));
+      fullName: users.fullName,
+      avatarUrl: users.avatarUrl,
+    }).from(users).where(eq(users.email, email));
 
     const valid = await verifyPassword(password, account?.passwordHash);
     if (!account || !valid) throw unauthorized('Invalid email or password');

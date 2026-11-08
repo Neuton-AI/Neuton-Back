@@ -11,7 +11,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
-import { profiles, shops } from './identity.js';
+import { shops, users } from './identity.js';
 
 /**
  * Where the *worker* is up to, not where the receipt is in its lifecycle.
@@ -39,7 +39,7 @@ export const receipts = pgTable('receipts', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  uploadedBy: uuid('uploaded_by').references(() => profiles.id, { onDelete: 'set null' }),
+  uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'set null' }),
   storagePath: text('storage_path'),
   contentType: text('content_type'),
   originalFilename: text('original_filename'),
@@ -57,7 +57,7 @@ export const receipts = pgTable('receipts', {
   processingDeadline: timestamp('processing_deadline', { withTimezone: true }),
   errorMessage: text('error_message'),
   processedAt: timestamp('processed_at', { withTimezone: true }),
-  verifiedBy: uuid('verified_by').references(() => profiles.id, { onDelete: 'set null' }),
+  verifiedBy: uuid('verified_by').references(() => users.id, { onDelete: 'set null' }),
   verifiedAt: timestamp('verified_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

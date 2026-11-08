@@ -10,7 +10,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { recipes } from './catalog.js';
-import { profiles, shops } from './identity.js';
+import { shops, users } from './identity.js';
 
 export const orders = pgTable('orders', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
@@ -26,7 +26,7 @@ export const orders = pgTable('orders', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').references(() => profiles.id, { onDelete: 'set null' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   customerName: text('customer_name'),
   orderDate: timestamp('order_date', { withTimezone: true }).notNull().defaultNow(),
   destinationAddress: text('destination_address'),

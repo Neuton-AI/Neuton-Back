@@ -88,7 +88,7 @@ test('session/profile require authentication but no selected shop; profile field
         },
       ],
     ],
-    'select:profiles': [
+    'select:users': [
       [
         {
           id: USER_ID,
@@ -96,7 +96,7 @@ test('session/profile require authentication but no selected shop; profile field
           avatarUrl: null,
           createdAt: date,
           updatedAt: date,
-          secret: 'hidden',
+          passwordHash: 'hidden',
         },
       ],
     ],
@@ -117,7 +117,7 @@ test('session/profile require authentication but no selected shop; profile field
       .set('authorization', 'Bearer test');
     assert.equal(profile.status, 200);
     assert.equal(profile.body.profile.createdAt, date.toISOString());
-    assert.equal('secret' in profile.body.profile, false);
+    assert.equal('passwordHash' in profile.body.profile, false);
     assert.equal(
       (
         await request(h.app.getHttpServer())

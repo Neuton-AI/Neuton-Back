@@ -63,7 +63,6 @@ test('verified purchases accumulate total base units and serialize concurrent SM
   const userId = randomUUID();
   try {
     await connection`INSERT INTO public.users(id,email, password_hash) VALUES (${userId}, 'receipt-inventory-test@example.com', 'unused-fixture-hash')`;
-    await db.insert(schema.profiles).values({ id: userId });
     await db.insert(schema.shops).values({ id: shopId, name: 'Receipt inventory regression', slug: shopId });
     async function purchase(cost: number, quantity: number, accepted = true) {
       const [receipt] = await db.insert(schema.receipts).values({ shopId, status: 'unverified', storagePath: `${shopId}/receipts/${randomUUID()}.png` }).returning();
@@ -97,7 +96,6 @@ test('verified purchases accumulate total base units and serialize concurrent SM
     assert.equal(after?.currentQuantity, '236.000');
   } finally {
     await db.delete(schema.shops).where(eq(schema.shops.id, shopId));
-    await db.delete(schema.profiles).where(eq(schema.profiles.id, userId));
     await connection`DELETE FROM public.users WHERE id=${userId}`;
     await connection.end();
   }

@@ -20,7 +20,6 @@ import { db } from '../src/db/client.js';
 import {
   inventoryItems,
   orders,
-  profiles,
   recipeIngredients,
   recipes,
   shops,
@@ -41,11 +40,9 @@ const skip = databaseBacked
  */
 async function seedShop(): Promise<string> {
   await db.delete(shops).where(eq(shops.id, SHOP_ID));
-  await db.delete(profiles).where(eq(profiles.id, USER_ID));
   await db.execute(sql`delete from public.users where id = ${USER_ID}`);
 
   await db.execute(sql`insert into public.users (id, email, password_hash) VALUES (${USER_ID}, 'n105@example.com', 'unused-fixture-hash') on conflict do nothing`);
-  await db.insert(profiles).values({ id: USER_ID });
   await db.insert(shops).values({
     id: SHOP_ID,
     name: 'N105 sequence shop',
@@ -82,7 +79,6 @@ async function seedShop(): Promise<string> {
 /** The shop goes first so its orders, lines, recipes and stock cascade with it. */
 async function dropShop(): Promise<void> {
   await db.delete(shops).where(eq(shops.id, SHOP_ID));
-  await db.delete(profiles).where(eq(profiles.id, USER_ID));
   await db.execute(sql`delete from public.users where id = ${USER_ID}`);
 }
 

@@ -21,6 +21,8 @@ test('app accounts sign up, own shops, sign in and reject invalid credentials an
   const password = 'testpass';
   let shopId: string | undefined;
   try {
+    const [schema] = await connection`SELECT to_regclass('public.profiles') AS old_profiles`;
+    assert.equal(schema?.old_profiles, null);
     const signup = (candidate = password) => api.post('/api/v1/auth/signup').send({
       email: ` ${email.toUpperCase()} `, password: candidate, fullName: 'Neuton Tester',
     });
@@ -37,6 +39,15 @@ test('app accounts sign up, own shops, sign in and reject invalid credentials an
     const profile = await api.get('/api/v1/profile').set(auth);
     assert.equal(profile.status, 200);
     assert.equal(profile.body.profile.fullName, 'Neuton Tester');
+    const edited = await api.patch('/api/v1/profile').set(auth).send({
+      fullName: 'Updated Name',
+      avatarUrl: 'https://example.com/avatar.png',
+      email: 'untrusted@example.com',
+      passwordHash: 'untrusted',
+    });
+    assert.equal(edited.status, 200);
+    assert.equal(edited.body.profile.fullName, 'Updated Name');
+    assert.equal('passwordHash' in edited.body.profile, false);
 
     const shop = await api.post('/api/v1/shops').set(auth).send({ name: email });
     assert.equal(shop.status, 201);
@@ -45,12 +56,15 @@ test('app accounts sign up, own shops, sign in and reject invalid credentials an
     assert.equal((await api.get('/api/v1/shop').set(headers)).status, 200);
     assert.equal((await api.get('/api/v1/shop').set({ ...headers, 'x-shop-id': randomUUID() })).status, 403);
     const session = await api.get('/api/v1/session').set(auth);
+    assert.equal(session.body.user.fullName, 'Updated Name');
     assert.deepEqual(session.body.memberships, [{ shop: shop.body.shop, role: 'owner' }]);
 
     const signIn = (candidate: string) => api.post('/api/v1/auth/signin').send({ email, password: candidate });
     const login = await signIn(password);
     assert.equal(login.status, 200);
     assert.equal(login.body.user.id, user.id);
+    assert.equal(login.body.user.email, email);
+    assert.equal(login.body.user.avatarUrl, 'https://example.com/avatar.png');
     assert.equal((await signIn('wrong')).status, 401);
     assert.equal((await api.post('/api/v1/auth/signin').send({ email: 'absent@example.com', password })).status, 401);
 

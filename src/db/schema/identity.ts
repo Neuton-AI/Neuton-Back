@@ -19,6 +19,10 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   email: text('email').notNull(),
   passwordHash: text('password_hash').notNull(),
+  fullName: text('full_name'),
+  avatarUrl: text('avatar_url'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   emailUnique: uniqueIndex('users_email_unique').on(t.email),
   emailNormalized: check('users_email_normalized', sql`${t.email} = lower(btrim(${t.email}))`),
@@ -58,14 +62,6 @@ export const shops = pgTable('shops', {
   slugUnique: uniqueIndex('shops_slug_unique').on(t.slug),
 }));
 
-export const profiles = pgTable('profiles', {
-  id: uuid('id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
-  fullName: text('full_name'),
-  avatarUrl: text('avatar_url'),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
-
 export const shopMembers = pgTable('shop_members', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   shopId: uuid('shop_id')
@@ -73,7 +69,7 @@ export const shopMembers = pgTable('shop_members', {
     .references(() => shops.id, { onDelete: 'cascade' }),
   userId: uuid('user_id')
     .notNull()
-    .references(() => profiles.id, { onDelete: 'cascade' }),
+    .references(() => users.id, { onDelete: 'cascade' }),
   role: text('role', { enum: SHOP_ROLES }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
@@ -86,7 +82,7 @@ export const auditLogs = pgTable('audit_logs', {
   shopId: uuid('shop_id')
     .notNull()
     .references(() => shops.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').references(() => profiles.id, { onDelete: 'set null' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   ipAddress: varchar('ip_address', { length: 45 }),
   eventType: text('event_type').notNull(),
   resourceId: uuid('resource_id'),
@@ -98,7 +94,5 @@ export const auditLogs = pgTable('audit_logs', {
 
 export type Shop = typeof shops.$inferSelect;
 export type NewShop = typeof shops.$inferInsert;
-export type Profile = typeof profiles.$inferSelect;
-export type NewProfile = typeof profiles.$inferInsert;
 export type ShopMember = typeof shopMembers.$inferSelect;
 export type NewShopMember = typeof shopMembers.$inferInsert;
