@@ -19,11 +19,11 @@ import { SyncEventsController } from './sync-events.controller.js';
       provide: SyncEventSource,
       inject: [SyncEvents],
       useFactory: (events: SyncEvents) => new PostgresSyncEvents(
-        env.DATABASE_LISTEN_URL ?? env.DATABASE_URL, events,
+        env.DATABASE_URL, events,
       ),
     },
     { provide: SYNC_DATABASE, useValue: db },
   ],
   exports: [SyncService],
 })
-export class SyncModule {}
+export class SyncModule { }

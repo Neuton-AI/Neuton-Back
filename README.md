@@ -19,10 +19,15 @@ inventory data through the existing tenant-scoped queries.
 
 See [the module separation decision](docs/decisions/0001-separate-inventory-recipes.md).
 
-Run `npm run build`, then `npm start` and `npm run start:worker` as separate
-processes. Apply all pending migrations, including
-`0030_storage_object_deletions.sql`, before deploying. Start and stop storage
-cleanup with the API process; leased cleanup work survives restarts.
+Set `DATABASE_URL` to the [direct Neon PostgreSQL connection string](https://neon.com/docs/connect/connect-from-any-app)
+for the API, worker, and database tools. In Neon’s Connect dialog, turn off
+connection pooling when copying the URL so live sync can use `LISTEN`.
+Keep the connection string in the backend environment.
+
+Run `npm run db:migrate` to initialize an empty database or apply pending
+migrations before deployment. Run `npm run build`, then `npm start` and
+`npm run start:worker` as separate processes. Storage cleanup runs with the API
+process, and leased cleanup work survives restarts.
 
 Query parameters use camelCase only. Delivery preview uses `distanceKm`.
 Catalog boolean flags accept `true`/`false`; the string `false` keeps filters
@@ -169,16 +174,13 @@ conversion, fallback, editor, and worker suites cover pricing and persistence.
 # Live document synchronization (#183)
 
 Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
-`GET /api/v1/sync/events` SSE endpoint. It does not use Supabase Realtime.
-The database hosting provider can change without changing the sync protocol.
+`GET /api/v1/sync/events` SSE endpoint.
 
 Apply `0031_native_document_events.sql` with the normal migration runner before
-enabling the updated frontend. Set `DATABASE_LISTEN_URL` to a direct or
-session-pooled PostgreSQL connection. It defaults to `DATABASE_URL` for direct
-database deployments; **transaction-pooled URLs cannot be used for LISTEN**.
-The listener needs permission to connect and LISTEN; migrations require the
-normal owner privileges. No replication slot, publication or provider extension
-is required. Keep database credentials on the backend.
+enabling the updated frontend. The API opens a dedicated session using
+`DATABASE_URL` for `LISTEN`. Use a direct Neon connection so the session stays
+attached to the same database connection. Migrations require the normal owner
+privileges.
 
 Proxies must allow streaming responses, disable SSE buffering and permit an idle
 connection for longer than the 15-second heartbeat interval. Browser fetch uses
