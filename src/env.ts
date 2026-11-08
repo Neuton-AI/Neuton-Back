@@ -48,7 +48,6 @@ const envSchema = z.object({
   SCRAPY_API_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5000),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  DATABASE_LISTEN_URL: emptyToUndefined(z.string().min(1)),
   NEUTON_JWT_SECRET: z.string().regex(/^[0-9a-f]{64}$/i, 'Expected a 32-byte hex signing key'),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
 
