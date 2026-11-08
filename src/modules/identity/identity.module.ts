@@ -7,7 +7,7 @@ import { ShopGuard } from './shop.guard.js';
 import { SessionGuard } from './session.guard.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
-import { NeutonJwt } from './neuton-jwt.js';
+import { SessionService } from './session.service.js';
 
 const defaultProviders: Provider[] = [
   {
@@ -15,14 +15,23 @@ const defaultProviders: Provider[] = [
     useFactory: async () => new DrizzleIdentityRepository((await import('../../db/client.js')).db),
   },
   {
-    provide: NeutonJwt,
-    useFactory: async () => new NeutonJwt(Buffer.from((await import('../../env.js')).env.NEUTON_JWT_SECRET, 'hex')),
+    provide: SessionService,
+    useFactory: async () => new SessionService((await import('../../db/client.js')).db),
   },
-  { provide: SessionVerifier, useExisting: NeutonJwt },
+  {
+    provide: SessionVerifier,
+    inject: [SessionService],
+    useFactory: (sessions: SessionService): SessionVerifier => ({
+      async verify(secret) {
+        const session = await sessions.resolve(secret);
+        return session && { id: session.userId, email: session.email, session };
+      },
+    }),
+  },
   {
     provide: AuthService,
-    inject: [NeutonJwt],
-    useFactory: async (jwt: NeutonJwt) => new AuthService((await import('../../db/client.js')).db, jwt),
+    inject: [SessionService],
+    useFactory: async (sessions: SessionService) => new AuthService((await import('../../db/client.js')).db, sessions),
   },
 ];
 

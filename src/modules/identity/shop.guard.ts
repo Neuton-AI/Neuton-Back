@@ -11,7 +11,7 @@ export class ShopGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<ActorRequest>();
     const shopHeader = request.headers['x-shop-id'];
     const identity = await this.identity.resolve({
-      authorization: request.headers.authorization,
+      request,
       shopId: typeof shopHeader === 'string' ? shopHeader : undefined,
     });
     request.log = request.log.child({ userId: identity.user.id, shopId: identity.shop.id });

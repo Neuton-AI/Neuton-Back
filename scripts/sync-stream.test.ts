@@ -40,15 +40,15 @@ test(
         IdentityService,
         {
           resolve: async ({
-            authorization,
+            request,
             shopId,
           }: {
-            authorization?: string;
+            request: Request;
             shopId?: string;
           }) => {
             if (
               !allowed ||
-              authorization !== 'Bearer fixture' ||
+              request.headers.cookie !== '__Host-neuton-session=fixture' ||
               shopId !== 'shop-a'
             )
               throw forbidden('Access denied');
@@ -64,7 +64,7 @@ test(
     await app.listen(0, '127.0.0.1');
     const address = app.getHttpServer().address() as { port: number };
     const url = `http://127.0.0.1:${address.port}/api/v1/sync/events`;
-    const headers = { Authorization: 'Bearer fixture', 'x-shop-id': 'shop-a' };
+    const headers = { cookie: '__Host-neuton-session=fixture', 'x-shop-id': 'shop-a' };
     const abort = new AbortController();
     try {
       const denied = await fetch(url, {
@@ -123,7 +123,7 @@ async function streamHarness(t: TestContext, enableTimers = true) {
   );
   await controller.stream(
     { shop: { id: 'shop-a' } } as ActorContext,
-    { headers: { authorization: 'Bearer fixture' } } as Request,
+    { headers: { cookie: '__Host-neuton-session=fixture' } } as Request,
     response as unknown as Response,
   );
   t.after(() => response.emit('close'));
@@ -135,7 +135,7 @@ async function streamHarness(t: TestContext, enableTimers = true) {
   return { frames, response, resolve, events, tick };
 }
 
-test('idle heartbeats skip identity checks and cannot flush a jittered hint early', async (t) => {
+test('idle heartbeats reauthorize and cannot flush a jittered hint early', async (t) => {
   t.mock.method(Math, 'random', () => 0.999999);
   const h = await streamHarness(t);
   assert.equal(h.resolve.mock.callCount(), 1);
@@ -143,16 +143,16 @@ test('idle heartbeats skip identity checks and cannot flush a jittered hint earl
   h.events.changed('shop-a');
   await h.tick(1000); // Heartbeat during the 4.249 second change window.
   assert.deepEqual(h.frames, ['event: reconcile\ndata: {}\n\n', ': heartbeat\n\n']);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
   h.events.changed('shop-a'); // Does not restart the existing timer.
   await h.tick(3248);
   assert.equal(h.frames.length, 2);
   await h.tick(2);
   assert.equal(h.frames.length, 3);
-  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.resolve.mock.callCount(), 3);
   await h.tick(11750);
   assert.equal(h.frames.at(-1), ': heartbeat\n\n');
-  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.resolve.mock.callCount(), 4);
 });
 
 test('minimum batching is 250 ms and a hint during authorization gets a trailing send', async (t) => {
@@ -200,15 +200,24 @@ test('disconnect detaches listeners and cancels delayed hints', async (t) => {
   assert.equal(h.response.end.mock.callCount(), 1);
 });
 
-test('slow heartbeat clients are closed without another identity check', async (t) => {
+test('slow heartbeat clients are closed after the heartbeat identity check', async (t) => {
   const h = await streamHarness(t);
   h.response.write = () => false;
   await h.tick(15000);
   assert.equal(h.response.end.mock.callCount(), 1);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
   h.events.changed('shop-a');
   await h.tick(60000);
-  assert.equal(h.resolve.mock.callCount(), 1);
+  assert.equal(h.resolve.mock.callCount(), 2);
+});
+
+test('an idle stream closes at its next authorization check after revocation', async (t) => {
+  const h = await streamHarness(t);
+  h.resolve.mock.mockImplementation(async () => { throw forbidden('Revoked'); });
+  await h.tick(15000);
+  assert.equal(h.resolve.mock.callCount(), 2);
+  assert.equal(h.response.end.mock.callCount(), 1);
+  assert.equal(h.frames.length, 1);
 });
 
 test('separate connections independently sample jitter for each new batch', async (t) => {

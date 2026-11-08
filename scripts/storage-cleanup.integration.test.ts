@@ -1,4 +1,4 @@
-import "./support/testEnv.js";
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
@@ -12,11 +12,11 @@ import {
 import { RecipeDeletionPersistence } from "../src/modules/recipes/recipe-deletion.persistence.js";
 import { LoggerImpl } from "../src/lib/logger/index.js";
 
-const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
+const url = testDatabaseUrl;
 test(
   "durable cleanup rolls back with deletion, leases competing workers, retries and recovers crashes",
   {
-    skip: !url && "requires disposable API_ALIGNMENT_TEST_DATABASE_URL",
+    skip: skipWithoutDisposableDatabase,
     timeout: 30000,
   },
   async () => {

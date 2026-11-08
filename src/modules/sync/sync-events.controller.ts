@@ -43,7 +43,7 @@ export class SyncEventsController {
       try {
         // Recheck membership/session before forwarding any hint, including recovery.
         await this.identity.resolve({
-          authorization: request.headers.authorization,
+          request,
           shopId: actor.shop.id,
         });
         if (closed) return;
@@ -67,7 +67,7 @@ export class SyncEventsController {
       if (closed) return;
       response.set({
         'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
+        'Cache-Control': 'no-store, no-transform',
         'X-Accel-Buffering': 'no',
       });
       response.flushHeaders();
@@ -82,10 +82,11 @@ export class SyncEventsController {
       pending = true;
       await send(); // Initial reconciliation starts only after LISTEN and subscription are active.
       if (!closed)
-        heartbeat = setInterval(() => {
-          // Keepalive bytes do not require identity/database work or consume hints.
+        heartbeat = setInterval(async () => {
           if (closed) return;
           try {
+            await this.identity.resolve({ request, shopId: actor.shop.id });
+            if (closed) return;
             if (!response.write(': heartbeat\n\n')) stop();
           } catch {
             stop();

@@ -60,27 +60,49 @@ stays in current inventory balances. Start the updated API and worker
 after the migration. To restore deleted data and files, use the
 pre-migration database and storage backups.
 
-Set `NEUTON_JWT_SECRET` to a random 32-byte hex value on the server. Use the
-same value across API instances. Changing it expires every issued token.
-
-```sh
-node -p "require('node:crypto').randomBytes(32).toString('hex')"
-```
+Set `SESSION_ORIGIN` to the exact public HTTPS origin in production, including
+scheme and any non-default port. In development, the default allowed origins
+are `http://localhost:5173`, `http://127.0.0.1:5173` and `http://[::1]:5173`.
+For another loopback port, set `SESSION_ORIGIN` to that exact address before
+starting the API. Local HTTP uses a separate session cookie name.
 
 | Endpoint | Body | Success |
 | --- | --- | --- |
-| `POST /api/v1/auth/signup` | `{ email, password, fullName? }` | `201 { token, user }` |
-| `POST /api/v1/auth/signin` | `{ email, password }` | `200 { token, user }` |
-| `GET /api/v1/session` | Bearer token | `200 { user, memberships }` |
+| `POST /api/v1/auth/csrf` | Allowed origin | `200 { token }` with a browser-bound CSRF proof |
+| `POST /api/v1/auth/signup` | `{ email, password, fullName? }` | `201 { user }` and session cookie |
+| `POST /api/v1/auth/signin` | `{ email, password }` | `200 { user }` and session cookie |
+| `GET /api/v1/session` | Session cookie | `200 { user, memberships, session }` |
+| `POST /api/v1/auth/session/renew` | Session cookie and proof | `200` with current session metadata |
+| `GET /api/v1/auth/sessions` | Session cookie | `200 { sessions }` for the account |
+| `POST /api/v1/auth/logout`, `POST /api/v1/auth/logout-all` | Session cookie and proof | `204` and cleared cookie |
+| `DELETE /api/v1/auth/sessions/:id` | Session cookie and proof | `204` for an owned session |
+| `POST /api/v1/profile/password` | Session cookie, proof and current password | `200 { ok: true }` and replacement cookie |
 
 Signup trims and lowercases emails. New passwords must contain 8–128
 characters. Duplicate emails return `409`, and invalid sign-in credentials
 return `401`. Authentication and password changes share a per-IP limit of
-12 requests per minute. Send the one-hour JWT as `Authorization: Bearer <token>`.
-Shop-scoped routes still require `x-shop-id` and verify membership.
+12 requests per minute. Browser mutations send an exact allowed `Origin` and
+`X-CSRF-Token`. Shop-scoped routes still require `x-shop-id` and verify
+membership. Sessions expire after seven days idle or 30 days total.
 
-Set `AUTH_TEST_DATABASE_URL` to a migrated disposable PostgreSQL database to
-run the account and tenant-access integration test.
+For cutover, apply the additive migration and release the API, frontend and
+same-origin `/api` route together. Existing accounts retain their credentials
+and shop memberships. Users sign in once to receive a session cookie.
+
+## Backend verification
+
+Run `npm run verify` for type checking, tests without PostgreSQL, and the
+build. Run `npm run test:postgres` to include the database-backed tests. Put
+PostgreSQL's `initdb` and `pg_ctl` on `PATH` before running this command.
+
+The runner creates a loopback-only PostgreSQL cluster in the workspace's
+`Temp` folder, applies the migration chain, runs the tests, and removes the
+cluster on completion. It supplies `DATABASE_URL` to child processes for
+that run. The tests skip environment-file loading and use the runner's
+disposable database. No database URL needs to be configured by the developer.
+
+To run specific tests against the disposable database, pass file paths, for
+example `npm run test:postgres -- scripts/neuton-auth.integration.test.ts`.
 
 ## Verification endpoints
 
@@ -209,10 +231,9 @@ without stable identity remain conservative conflict units. Conflicts require an
 explicit local/server choice; accepting a remote deletion discards its pending
 queue, so export a retained draft first if a copy is needed.
 
-Verification: `npm run verify` and `npm run db:validate`. On a disposable migrated
-database, set `SYNC_TEST_DATABASE_URL` for base-version/integration checks and
-`NATIVE_SYNC_TEST_DATABASE_URL` for native commit/rollback/fan-out/reconnect tests.
-Never point these fixture variables at production. See
+Run `npm run verify`, `npm run db:validate`, and `npm run test:postgres`.
+The PostgreSQL suite includes base-version checks and notification commit,
+rollback, fan-out, and reconnection. See
 [SPEC-183-live-document-sync.md](./SPEC-183-live-document-sync.md) for acceptance
 criteria. Roll back frontend/backend together to restore the old comparison
 triggers; the additive notification trigger may remain, or remove it and

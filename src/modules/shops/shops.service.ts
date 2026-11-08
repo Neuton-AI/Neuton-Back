@@ -13,6 +13,8 @@ import type {
 } from './contracts.js';
 import { recordAudit, type AuditEvent } from '../../lib/audit.js';
 import { toNumber } from '../../lib/money.js';
+import { unauthorized } from '../../lib/errors.js';
+import { sessionMetadata } from '../identity/session.service.js';
 export const SHOPS_AUDIT = Symbol('SHOPS_AUDIT');
 @Injectable()
 export class ShopsService {
@@ -27,6 +29,7 @@ export class ShopsService {
     return {
       user: actor.user,
       memberships: await this.persistence.memberships(actor.user.id),
+      session: actor.session && sessionMetadata(actor.session),
     };
   }
   private async audit(
@@ -87,7 +90,8 @@ export class ShopsService {
     };
   }
   password(actor: SessionActor, body: z.infer<typeof passwordSchema>) {
-    return this.auth.changePassword(actor.user.id, body);
+    if (!actor.session) throw unauthorized();
+    return this.auth.changePassword(actor.session, body);
   }
   delivery(actor: ActorContext, distanceKm: number) {
     requireActorRole(actor, ['owner', 'admin', 'member']);

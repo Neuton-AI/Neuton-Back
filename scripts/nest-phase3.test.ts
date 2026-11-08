@@ -15,7 +15,7 @@ import {
   SHOPS_DATABASE,
 } from '../src/modules/shops/shops.persistence.js';
 import { AuthService } from '../src/modules/identity/auth.service.js';
-import { NeutonJwt } from '../src/modules/identity/neuton-jwt.js';
+import { SessionService } from '../src/modules/identity/session.service.js';
 import { AnalyticsController } from '../src/modules/analytics/analytics.controller.js';
 import { AnalyticsService } from '../src/modules/analytics/analytics.service.js';
 import {
@@ -64,7 +64,7 @@ async function fixture(db: FakeDb, role = 'owner') {
         provide: AuthService,
         useValue: new AuthService(
           passwords as unknown as ConstructorParameters<typeof AuthService>[0],
-          new NeutonJwt(new Uint8Array(32)),
+          new SessionService(passwords as unknown as ConstructorParameters<typeof AuthService>[0]),
         ),
       },
     ],
@@ -77,7 +77,7 @@ async function fixture(db: FakeDb, role = 'owner') {
   });
   return { app, passwordCalls: passwords.calls };
 }
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID };
 test('session/profile require authentication but no selected shop; profile fields are explicit', async () => {
   const db = new FakeDb({
     'select:shopMembers': [
@@ -109,12 +109,12 @@ test('session/profile require authentication but no selected shop; profile field
     );
     const session = await request(h.app.getHttpServer())
       .get('/api/v1/session')
-      .set('authorization', 'Bearer test');
+      .set('Cookie', '__Host-neuton-session=test');
     assert.equal(session.status, 200);
     assert.equal(session.body.memberships[0].shop.id, SHOP_ID);
     const profile = await request(h.app.getHttpServer())
       .get('/api/v1/profile')
-      .set('authorization', 'Bearer test');
+      .set('Cookie', '__Host-neuton-session=test');
     assert.equal(profile.status, 200);
     assert.equal(profile.body.profile.createdAt, date.toISOString());
     assert.equal('passwordHash' in profile.body.profile, false);
@@ -122,7 +122,7 @@ test('session/profile require authentication but no selected shop; profile field
       (
         await request(h.app.getHttpServer())
           .get('/api/v1/shop')
-          .set('authorization', 'Bearer test')
+          .set('Cookie', '__Host-neuton-session=test')
       ).status,
       400,
     );
@@ -136,7 +136,7 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
   try {
     const response = await request(h.app.getHttpServer())
       .post('/api/v1/shops')
-      .set('authorization', 'Bearer test')
+      .set('Cookie', '__Host-neuton-session=test')
       .send({ name: 'Shop' });
     assert.equal(response.status, 201);
     assert.equal(response.body.shop.targetProfitMargin, '30.00');
@@ -187,12 +187,12 @@ test('tenant/role and password identity checks reject writes before persistence'
       (
         await request(h.app.getHttpServer())
           .post('/api/v1/profile/password')
-          .set('authorization', 'Bearer test')
+          .set('Cookie', '__Host-neuton-session=test')
           .send({ currentPassword: 'private', newPassword: 'a new long password' })
       ).status,
-      400,
+      401,
     );
-    assert.equal(h.passwordCalls.length, 1);
+    assert.equal(h.passwordCalls.length, 0);
     assert.equal(db.calls.length, 0);
   } finally {
     await h.app.close();

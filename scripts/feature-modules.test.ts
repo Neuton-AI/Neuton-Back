@@ -12,7 +12,7 @@ import { FakeDb } from './support/fakeDb.js';
 import { httpClient, testApplication } from './support/httpClient.js';
 import { SHOP_ID, TEST_SHOP } from './support/domainApp.js';
 
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID };
 
 for (const feature of [
   { module: InventoryModule, database: INVENTORY_DATABASE, path: 'inventory', table: 'inventoryItems', envelope: 'items' },

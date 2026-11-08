@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -8,12 +8,9 @@ test(
   'sync retries, conflicts, tombstones and order create completion preserve commit and rollback effects',
   {
     timeout: 60_000,
-    skip:
-      !process.env.SYNC_TEST_DATABASE_URL &&
-      'Set SYNC_TEST_DATABASE_URL to a migrated disposable database',
+    skip: skipWithoutDisposableDatabase,
   },
   async () => {
-    process.env.DATABASE_URL = process.env.SYNC_TEST_DATABASE_URL;
     const [{db,sql:connection},{sql},{buildSyncApplication}]=await Promise.all([import('../src/db/client.js'),import('drizzle-orm'),import('./support/syncApp.js')]);
     const shopId = randomUUID();
     const userId = randomUUID();
@@ -30,7 +27,7 @@ test(
         sql`insert into recipes(id,shop_id,name,status) values (${recipeId}::uuid,${shopId}::uuid,'Original','unverified')`,
       );
       const headers = {
-        authorization: 'Bearer test-session',
+        cookie: '__Host-neuton-session=test-session',
         'x-shop-id': shopId,
       };
       const check = () =>

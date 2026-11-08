@@ -4,18 +4,13 @@
  * `scripts/orders.test.ts` pins the statements the routes send; this file pins
  * what only a real database can prove — that parallel creates come out as one
  * gapless sequence, and that cancelling an order keeps its number out of
- * circulation instead of freeing it. Each case seeds its own shop and drops it
- * afterwards, so running it against a developer database leaves nothing behind.
- *
- * Like `signed-download.test.ts`, both cases skip themselves when the suite
- * placeholder filled in `DATABASE_URL` (CI, a fresh clone) instead of hanging
- * on a refused connection.
+ * circulation instead of freeing it. Each case seeds its own shop in the
+ * disposable PostgreSQL database and drops it afterwards.
  */
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { asc, eq, sql } from 'drizzle-orm';
-import { isPlaceholder } from './support/testEnv.js';
 import { db } from '../src/db/client.js';
 import {
   inventoryItems,
@@ -26,10 +21,7 @@ import {
 } from '../src/db/schema/index.js';
 import { buildOrdersApp, SHOP_ID, USER_ID } from './support/ordersApp.js';
 
-const databaseBacked = !isPlaceholder('DATABASE_URL');
-const skip = databaseBacked
-  ? false
-  : 'no real DATABASE_URL configured (CI) — order-numbering cases skipped';
+const skip = skipWithoutDisposableDatabase;
 
 /**
  * A shop with one orderable recipe, starting from an empty sequence.

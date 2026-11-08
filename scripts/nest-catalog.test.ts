@@ -21,7 +21,7 @@ const inventory = {
   currentQuantity: '2.000', reorderLevel: '2.000', lastUnitCost: '2.0000',
   averageUnitCost: '1.5000', isActive: true, createdAt, updatedAt: createdAt,
 } satisfies InventoryItem;
-const headers = { authorization: 'Bearer test', 'x-shop-id': SHOP_ID };
+const headers = { cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID };
 const recipe = {
   id: '66666666-6666-6666-6666-666666666666', shopId: SHOP_ID,
   categoryId: category.id, name: 'Reviewed bread', description: null,

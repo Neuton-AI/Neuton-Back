@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -67,11 +67,11 @@ function observe(
     },
   });
 }
-const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
+const url = testDatabaseUrl;
 test(
   'receipt deletion and grouped worker agree on document-before-upload locks',
   {
-    skip: !url && 'requires disposable API_ALIGNMENT_TEST_DATABASE_URL',
+    skip: skipWithoutDisposableDatabase,
     timeout: 15000,
   },
   async () => {
@@ -153,12 +153,11 @@ test(
           ?.count,
         0,
       );
-      assert.equal(
-        (
-          await connection`select count(*)::int as count from storage_object_deletions`
-        )[0]?.count,
-        1,
-      );
+      const deletions = await connection`select storage_path from storage_object_deletions order by storage_path`;
+      assert.deepEqual(deletions.map(({ storage_path }) => storage_path), [
+        storagePath,
+        `${storagePath}.preview-v1.webp`,
+      ]);
     } finally {
       await connection.unsafe(`drop schema if exists ${namespace} cascade`);
       await connection.end({ timeout: 5 });

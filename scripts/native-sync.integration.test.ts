@@ -1,3 +1,4 @@
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -9,13 +10,11 @@ import { PostgresSyncEvents } from '../src/modules/sync/postgres-sync-events.js'
 test(
   'native PostgreSQL notifications commit, roll back, fan out and recover without a provider',
   {
-    skip:
-      !process.env.NATIVE_SYNC_TEST_DATABASE_URL &&
-      'Requires a disposable NATIVE_SYNC_TEST_DATABASE_URL',
+    skip: skipWithoutDisposableDatabase,
     timeout: 20000,
   },
   async () => {
-    const url = process.env.NATIVE_SYNC_TEST_DATABASE_URL!;
+    const url = testDatabaseUrl!;
     const writer = new Client({ connectionString: url });
     const hubs = [new SyncEvents(), new SyncEvents()];
     const sources = hubs.map((hub) => new PostgresSyncEvents(url, hub));

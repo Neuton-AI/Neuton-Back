@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -8,7 +8,7 @@ import { generalPrices, recipeIngredients } from '../src/db/schema/catalog.js';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 
 // Explicit disposable database only; never migrate a developer or shared database.
-const databaseUrl = process.env.RECIPE_CONTRACT_TEST_DATABASE_URL;
+const databaseUrl = testDatabaseUrl;
 test('recipe extraction schema is valid JSON and preserves ordered steps and renamed fields', () => {
   const schema = JSON.parse(RECIPE_SCHEMA);
   assert.ok(schema.properties.steps);
@@ -33,7 +33,7 @@ test('general prices expose only the agreed columns and receipt-compatible decim
   assert.equal(generalPrices.baseUnitCost.notNull, false);
 });
 
-test('forward migration preserves IDs, references, instructions and only proven conversions', { skip: !databaseUrl && 'requires RECIPE_CONTRACT_TEST_DATABASE_URL' }, async () => {
+test('forward migration preserves IDs, references, instructions and only proven conversions', { skip: skipWithoutDisposableDatabase }, async () => {
   const connection = postgres(databaseUrl!, { max: 1 });
   try {
     await connection.begin(async (tx) => {

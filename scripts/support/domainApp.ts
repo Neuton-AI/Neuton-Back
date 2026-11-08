@@ -133,7 +133,7 @@ export async function domainHarness(
     ],
   ]);
   const client = httpClient(app, {
-    authorization: 'Bearer test',
+    cookie: '__Host-neuton-session=test',
     'x-shop-id': SHOP_ID,
   });
   return {

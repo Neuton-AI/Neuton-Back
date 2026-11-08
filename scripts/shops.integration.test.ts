@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -8,11 +8,11 @@ import * as schema from '../src/db/schema/index.js';
 import { ShopsPersistence } from '../src/modules/shops/shops.persistence.js';
 import { createShopSchema } from '../src/modules/shops/contracts.js';
 import { generateUniqueSlug } from '../src/lib/slug.js';
-const url = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
+const url = testDatabaseUrl;
 test(
   'onboarding rolls shop and owner back together and renamed slugs exclude only their own shop',
   {
-    skip: !url && 'requires disposable API_ALIGNMENT_TEST_DATABASE_URL',
+    skip: skipWithoutDisposableDatabase,
     timeout: 20000,
   },
   async () => {
