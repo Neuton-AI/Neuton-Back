@@ -11,7 +11,7 @@ import {
 } from '../src/lib/dbErrors.js';
 
 /**
- * N-110: transient DB failures (Supabase cold-start, dropped connection, server
+ * N-110: transient DB failures (database cold start, dropped connection, server
  * starting up) must answer 503 + `Retry-After` with a `traceId`, not a generic
  * 500. The detector runs over real driver error shapes, the HTTP behaviour is
  * asserted through the real `buildApp`, and the log capture is verified against

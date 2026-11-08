@@ -1,11 +1,9 @@
 /**
  * Transient database failures (issue N-110).
  *
- * Supabase pauses an idle project; the first query after that — and the
- * reconnect window that follows — fails at the socket, or is refused by the
- * server while it is still resuming. Those are not application faults, so the
- * API answers 503 + `Retry-After` instead of a generic 500 that tells a client
- * nothing and hides a condition that clears on its own.
+ * Connections can fail while PostgreSQL resumes or restarts. The API answers
+ * these temporary failures with 503 and `Retry-After` so clients know when to
+ * retry.
  *
  * Detection is deliberately narrow: a wrong "transient" verdict would paper over
  * a real 500, so it keys off the codes postgres.js / libpq actually emit for a
