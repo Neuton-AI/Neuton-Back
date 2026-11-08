@@ -61,7 +61,7 @@ node -p "require('node:crypto').randomBytes(32).toString('hex')"
 | `POST /api/v1/auth/signin` | `{ email, password }` | `200 { token, user }` |
 | `GET /api/v1/session` | Bearer token | `200 { user, memberships }` |
 
-Signup trims and lowercases emails. New passwords must contain 15–128
+Signup trims and lowercases emails. New passwords must contain 8–128
 characters. Duplicate emails return `409`, and invalid sign-in credentials
 return `401`. Authentication and password changes share a per-IP limit of
 12 requests per minute. Send the one-hour JWT as `Authorization: Bearer <token>`.

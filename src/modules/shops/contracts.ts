@@ -37,7 +37,7 @@ export const updateProfileSchema = z.object({
 
 export const passwordSchema = z.object({
   currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(15).max(128),
+  newPassword: z.string().min(8).max(128),
 });
 export const deliverySchema = z
   .object({ distanceKm: z.coerce.number().finite().min(0) })

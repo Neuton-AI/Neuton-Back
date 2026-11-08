@@ -9,7 +9,7 @@ const signinSchema = z.object({
 });
 
 const signupSchema = signinSchema.extend({
-  password: z.string().min(15).max(128),
+  password: z.string().min(8).max(128),
   fullName: htmlFree(z.string().trim().min(1).max(120)).optional(),
 });
 

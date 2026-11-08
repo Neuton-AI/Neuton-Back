@@ -18,12 +18,13 @@ test('app accounts sign up, own shops, sign in and reject invalid credentials an
   const app = await buildApp({ logger: false });
   const api = request(app.getHttpServer());
   const email = `auth-${randomUUID()}@example.com`;
-  const password = 'a long test password';
+  const password = 'testpass';
   let shopId: string | undefined;
   try {
-    const signup = () => api.post('/api/v1/auth/signup').send({
-      email: ` ${email.toUpperCase()} `, password, fullName: 'Neuton Tester',
+    const signup = (candidate = password) => api.post('/api/v1/auth/signup').send({
+      email: ` ${email.toUpperCase()} `, password: candidate, fullName: 'Neuton Tester',
     });
+    assert.equal((await signup('testpas')).status, 400);
     const attempts = await Promise.all([signup(), signup()]);
     assert.deepEqual(attempts.map((result) => result.status).sort(), [201, 409]);
     const created = attempts.find((result) => result.status === 201)!;
@@ -61,12 +62,15 @@ test('app accounts sign up, own shops, sign in and reject invalid credentials an
       assert.equal((await api.get('/api/v1/session').set('Authorization', `Bearer ${invalid}`)).status, 401);
     }
 
-    const newPassword = 'a different test password';
-    const changed = await api.post('/api/v1/profile/password').set(auth).send({ currentPassword: password, newPassword });
+    const changePassword = (newPassword: string) =>
+      api.post('/api/v1/profile/password').set(auth).send({ currentPassword: password, newPassword });
+    assert.equal((await changePassword('nextpas')).status, 400);
+    const newPassword = 'nextpass';
+    const changed = await changePassword(newPassword);
     assert.equal(changed.status, 200);
     assert.equal((await signIn(password)).status, 401);
     assert.equal((await signIn(newPassword)).status, 200);
-    for (let remaining = 4; remaining > 0; remaining--) {
+    for (let remaining = 2; remaining > 0; remaining--) {
       assert.equal((await signIn('wrong')).status, 401);
     }
     assert.equal((await signIn(newPassword)).status, 429);
