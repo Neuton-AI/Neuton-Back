@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -10,8 +10,8 @@ import * as schema from '../src/db/schema/index.js';
 import { verifyReceipt } from '../src/lib/verifyReceipt.js';
 
 // Opt in with a disposable database; never repoint the normal developer database.
-const databaseUrl = process.env.RECEIPT_INVENTORY_TEST_DATABASE_URL;
-const skip = !databaseUrl && 'requires RECEIPT_INVENTORY_TEST_DATABASE_URL';
+const databaseUrl = testDatabaseUrl;
+const skip = skipWithoutDisposableDatabase;
 
 test('migration converts package amounts and backfills the latest 20 verified costs', { skip }, async () => {
   const connection = postgres(databaseUrl!, { max: 1 });

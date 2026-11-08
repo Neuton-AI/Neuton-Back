@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -14,10 +14,10 @@ import type { ActorContext } from '../src/modules/identity/contracts.js';
 import { LoggerImpl } from '../src/lib/logger/index.js';
 import { recipeSchema } from '../src/modules/recipes/contracts.js';
 
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
+const databaseUrl = testDatabaseUrl;
 
 test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle filters', {
-  skip: !databaseUrl && 'requires migrated disposable API_ALIGNMENT_TEST_DATABASE_URL',
+  skip: skipWithoutDisposableDatabase,
   timeout: 30_000,
 }, async () => {
   const namespace = `catalog_${randomUUID().replaceAll('-', '')}`;

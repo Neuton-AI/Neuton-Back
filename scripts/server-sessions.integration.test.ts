@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -8,8 +8,8 @@ import * as schema from '../src/db/schema/index.js';
 import { AppError } from '../src/lib/errors.js';
 import { SessionService } from '../src/modules/identity/session.service.js';
 
-const url = process.env.AUTH_TEST_DATABASE_URL;
-const skip = !url && 'requires a migrated disposable AUTH_TEST_DATABASE_URL';
+const url = testDatabaseUrl;
+const skip = skipWithoutDisposableDatabase;
 const day = 86_400_000;
 
 test('opaque sessions use the account version and both strict expiry boundaries', { skip }, async () => {

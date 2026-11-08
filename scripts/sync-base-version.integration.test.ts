@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -6,13 +6,10 @@ import { randomUUID } from 'node:crypto';
 test(
   'base revisions prevent future client timestamps from overwriting intervening edits and preserve replay',
   {
-    skip:
-      !process.env.SYNC_TEST_DATABASE_URL &&
-      'Requires a migrated disposable SYNC_TEST_DATABASE_URL',
+    skip: skipWithoutDisposableDatabase,
     timeout: 20000,
   },
   async () => {
-    process.env.DATABASE_URL = process.env.SYNC_TEST_DATABASE_URL;
     const [{ db, sql: connection }, { sql }, { buildSyncApplication }] =
       await Promise.all([
         import('../src/db/client.js'),

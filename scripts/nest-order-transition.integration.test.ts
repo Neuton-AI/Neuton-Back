@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -9,7 +9,7 @@ import type { Database } from '../src/db/client.js';
 import { buildNestOrdersApp, actorFor, SHOP_ID } from './support/nestOrdersApp.js';
 import request from 'supertest';
 import { OrdersService } from '../src/modules/orders/orders.service.js';
-const databaseUrl = process.env.ORDER_TRANSITION_TEST_DATABASE_URL;
+const databaseUrl = testDatabaseUrl;
 const ORDER_ID = '44444444-4444-4444-4444-444444444444';
 function deferred() {
   let resolve!: () => void;
@@ -39,7 +39,7 @@ function pauseAfterSelect(target: object, selected: ReturnType<typeof deferred>,
   });
 }
 test('Nest order verification preserves concurrent outcomes and defers effects until outer commit', {
-  skip: !databaseUrl && 'requires ORDER_TRANSITION_TEST_DATABASE_URL pointing at disposable PostgreSQL',
+  skip: skipWithoutDisposableDatabase,
 }, async () => {
   const connection = postgres(databaseUrl!, { max: 1 });
   const database = drizzle(connection, { schema });

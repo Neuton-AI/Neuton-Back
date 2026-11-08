@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -10,8 +10,8 @@ import { costRecipe } from '../src/modules/recipes/recipe.costing.js';
 import { recipes } from '../src/db/schema/index.js';
 import * as tables from '../src/db/schema/index.js';
 
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
-test('real database rejects foreign links on all catalog write paths and accepts owned links', { skip: !databaseUrl && 'requires migrated disposable API_ALIGNMENT_TEST_DATABASE_URL' }, async () => {
+const databaseUrl = testDatabaseUrl;
+test('real database rejects foreign links on all catalog write paths and accepts owned links', { skip: skipWithoutDisposableDatabase }, async () => {
   const namespace = `links_${randomUUID().replaceAll('-', '')}`;
   const connection = postgres(databaseUrl!, { max: 2, onnotice() {}, connection: { search_path: namespace } });
   const h = await buildCatalogApp();

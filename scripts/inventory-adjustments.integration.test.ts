@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
@@ -8,8 +8,8 @@ import { buildCatalogApp, SHOP_ID, USER_ID } from './support/catalogApp.js';
 import { adjustInventory } from '../src/lib/inventoryAdjustments.js';
 import * as tables from '../src/db/schema/index.js';
 
-const databaseUrl = process.env.API_ALIGNMENT_TEST_DATABASE_URL;
-test('stock batches rollback, serialize retries, reject payload reuse and foreign IDs', { skip: !databaseUrl && 'requires disposable API_ALIGNMENT_TEST_DATABASE_URL' }, async () => {
+const databaseUrl = testDatabaseUrl;
+test('stock batches rollback, serialize retries, reject payload reuse and foreign IDs', { skip: skipWithoutDisposableDatabase }, async () => {
   const schema = `adjustments_${randomUUID().replaceAll('-', '')}`;
   const connection = postgres(databaseUrl!, { max: 4, onnotice() {}, connection: { search_path: schema } });
   const first = randomUUID();

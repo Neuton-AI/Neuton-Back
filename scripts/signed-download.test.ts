@@ -1,10 +1,11 @@
+import { skipWithoutDisposableDatabase } from './support/testEnv.js';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { isPlaceholder } from './support/testEnv.js';
 import { db } from '../src/db/client.js';
-import { receipts } from '../src/db/schema/index.js';
+import { receipts, shops } from '../src/db/schema/index.js';
 import { createPresignedDownloadUrl } from '../src/lib/storage.js';
-import { sql, and, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 function tenantPrefix(shopId: string, path: string) {
   return `${shopId}/${path}`;
@@ -22,15 +23,7 @@ test('download-url rejects cross-tenant path', async () => {
   }, { message: /forbidden/i });
 });
 
-/**
- * The two cases below are database-backed. When no real `DATABASE_URL` is
- * configured — CI, or a fresh clone — the suite placeholder fills one in, so
- * they are skipped explicitly instead of hanging on a refused connection.
- */
-const databaseBacked = !isPlaceholder('DATABASE_URL');
-const skip = databaseBacked
-  ? false
-  : 'no real DATABASE_URL configured (CI) — database-backed signed-download cases skipped';
+const skip = skipWithoutDisposableDatabase;
 
 test('download-url rejects unknown path for tenant', { skip }, async () => {
   const shopId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
@@ -46,21 +39,20 @@ test('download-url rejects unknown path for tenant', { skip }, async () => {
 });
 
 test('download-url returns signed URL for owned path', { skip }, async () => {
-  const shopId = 'dddddddd-dddd-dddd-dddd-dddddddddddd';
+  const shopId = randomUUID();
   const path = tenantPrefix(shopId, 'receipts/owned.png');
 
-  const rows = await db
-    .select({ id: receipts.id })
-    .from(receipts)
-    .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, path)))
-    .limit(1);
-
-  if (rows.length === 0) {
-    console.log('Test skipped: no matching receipt row in DB');
-    return;
+  await db.insert(shops).values({ id: shopId, name: 'Signed download fixture', slug: shopId });
+  try {
+    await db.insert(receipts).values({ shopId, storagePath: path });
+    const [owned] = await db.select({ storagePath: receipts.storagePath }).from(receipts)
+      .where(and(eq(receipts.shopId, shopId), eq(receipts.storagePath, path)));
+    assert.equal(owned?.storagePath, path);
+    const url = new URL(await createPresignedDownloadUrl(owned.storagePath));
+    assert.equal(url.protocol, 'https:');
+    assert.ok(url.pathname.endsWith(`/${path}`));
+    assert.ok(url.searchParams.has('X-Amz-Signature'));
+  } finally {
+    await db.delete(shops).where(eq(shops.id, shopId));
   }
-
-  const url = await createPresignedDownloadUrl(path);
-  assert.ok(url.startsWith('http'));
-  assert.ok(url.includes(path));
 });

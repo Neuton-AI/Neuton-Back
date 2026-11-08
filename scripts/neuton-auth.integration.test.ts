@@ -1,4 +1,4 @@
-import './support/testEnv.js';
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
@@ -6,11 +6,10 @@ import request from 'supertest';
 import postgres from 'postgres';
 import { SignJWT } from 'jose';
 
-const url = process.env.AUTH_TEST_DATABASE_URL;
+const url = testDatabaseUrl;
 test('app accounts sign up, own shops, sign in and reject invalid credentials and JWTs', {
-  skip: !url && 'requires a migrated disposable AUTH_TEST_DATABASE_URL',
+  skip: skipWithoutDisposableDatabase,
 }, async () => {
-  process.env.DATABASE_URL = url!;
   const { buildApp } = await import('../src/app.js');
   const { env } = await import('../src/env.js');
   const { sql } = await import('../src/db/client.js');

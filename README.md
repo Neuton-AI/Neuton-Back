@@ -79,8 +79,20 @@ return `401`. Authentication and password changes share a per-IP limit of
 12 requests per minute. Send the one-hour JWT as `Authorization: Bearer <token>`.
 Shop-scoped routes still require `x-shop-id` and verify membership.
 
-Set `AUTH_TEST_DATABASE_URL` to a migrated disposable PostgreSQL database to
-run the account and tenant-access integration test.
+## Backend verification
+
+Run `npm run verify` for type checking, tests without PostgreSQL, and the
+build. Run `npm run test:postgres` to include the database-backed tests. Put
+PostgreSQL's `initdb` and `pg_ctl` on `PATH` before running this command.
+
+The runner creates a loopback-only PostgreSQL cluster in the workspace's
+`Temp` folder, applies the migration chain, runs the tests, and removes the
+cluster on completion. It supplies `DATABASE_URL` to child processes for
+that run. The tests skip environment-file loading and use the runner's
+disposable database. No database URL needs to be configured by the developer.
+
+To run specific tests against the disposable database, pass file paths, for
+example `npm run test:postgres -- scripts/neuton-auth.integration.test.ts`.
 
 ## Verification endpoints
 
@@ -209,10 +221,9 @@ without stable identity remain conservative conflict units. Conflicts require an
 explicit local/server choice; accepting a remote deletion discards its pending
 queue, so export a retained draft first if a copy is needed.
 
-Verification: `npm run verify` and `npm run db:validate`. On a disposable migrated
-database, set `SYNC_TEST_DATABASE_URL` for base-version/integration checks and
-`NATIVE_SYNC_TEST_DATABASE_URL` for native commit/rollback/fan-out/reconnect tests.
-Never point these fixture variables at production. See
+Run `npm run verify`, `npm run db:validate`, and `npm run test:postgres`.
+The PostgreSQL suite includes base-version checks and notification commit,
+rollback, fan-out, and reconnection. See
 [SPEC-183-live-document-sync.md](./SPEC-183-live-document-sync.md) for acceptance
 criteria. Roll back frontend/backend together to restore the old comparison
 triggers; the additive notification trigger may remain, or remove it and

@@ -2,21 +2,21 @@
  * Test bootstrap. Import this **first** in every test file: it runs before the
  * application modules, which validate their environment at import time.
  *
- * A real `.env` is honoured so the database-backed tests still reach a real
- * database locally, but anything still missing is filled with an inert
- * placeholder so `npm test` never needs a secret to run. Tests that require a
- * real service check `placeholderKeys` rather than silently passing.
+ * The PostgreSQL runner supplies a disposable database. All other database
+ * URLs are replaced before the application can import its configuration.
  */
-import { config as loadDotenv } from 'dotenv';
+const suppliedDatabaseUrl = process.env.DATABASE_URL;
+export const testDatabaseUrl = suppliedDatabaseUrl &&
+  /^postgresql:\/\/neuton_test_runner:[0-9a-f]{48}@127\.0\.0\.1:[1-9]\d{0,4}\/neuton_disposable$/.test(suppliedDatabaseUrl)
+  ? suppliedDatabaseUrl
+  : undefined;
+export const skipWithoutDisposableDatabase = !testDatabaseUrl && 'run npm run test:postgres';
 
-if (process.env.NEUTON_SKIP_ENV_FILES !== '1') {
-  loadDotenv();
-}
-
+process.env.NEUTON_SKIP_ENV_FILES = '1';
 process.env.NODE_ENV = 'test';
+process.env.DATABASE_URL = testDatabaseUrl ?? 'postgresql://unused@127.0.0.1:1/unused';
 
 const PLACEHOLDERS: Record<string, string> = {
-  DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/neuton_test',
   NEUTON_JWT_SECRET: '01'.repeat(32),
   UPSTASH_REDIS_URL: 'redis://localhost:6379',
   R2_ACCOUNT_ID: 'placeholder-account',
@@ -26,27 +26,7 @@ const PLACEHOLDERS: Record<string, string> = {
   GEMINI_API_KEY: 'placeholder-gemini-key',
 };
 
-/** Config keys that had to be faked, so no test can talk to a real service. */
-export const placeholderKeys: string[] = [];
-
-const definedBeforeFaking = new Set(Object.keys(process.env));
-
 for (const [key, value] of Object.entries(PLACEHOLDERS)) {
   if (process.env[key]) continue;
   process.env[key] = value;
-  placeholderKeys.push(key);
-}
-
-/**
- * True when `key` was set by whoever ran the suite, not by the placeholders
- * above. A test that needs a live service asserts on this instead of on the
- * presence of the variable, which is always set after the loop above.
- */
-export function wasConfigured(key: string): boolean {
-  return definedBeforeFaking.has(key) && !placeholderKeys.includes(key);
-}
-
-/** True when no `.env` or shell export supplied `key` — i.e. nothing real. */
-export function isPlaceholder(key: string): boolean {
-  return placeholderKeys.includes(key);
 }

@@ -1,3 +1,4 @@
+import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { drizzle } from 'drizzle-orm/pg-proxy';
@@ -33,8 +34,8 @@ test('recipe matching is exact, normalized, material-first, deterministic and sh
 
 // Use a dedicated test URL only. Temporary tables shadow production names and
 // disappear on commit; this test never applies a migration to application tables.
-const databaseUrl = process.env.RECIPE_CONTRACT_TEST_DATABASE_URL;
-test('repeated recipe lines survive the migration without merging amounts or units', { skip: !databaseUrl && 'requires RECIPE_CONTRACT_TEST_DATABASE_URL' }, async () => {
+const databaseUrl = testDatabaseUrl;
+test('repeated recipe lines survive the migration without merging amounts or units', { skip: skipWithoutDisposableDatabase }, async () => {
   const { default: postgres } = await import('postgres');
   const { readFileSync } = await import('node:fs');
   const connection = postgres(databaseUrl!, { max: 1 });
