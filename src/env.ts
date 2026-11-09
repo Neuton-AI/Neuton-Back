@@ -52,6 +52,10 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   DIRECT_DATABASE_URL: emptyToUndefined(z.string()),
   SESSION_ORIGIN: emptyToUndefined(z.string().url()),
+  GOOGLE_OAUTH_CLIENT_ID: emptyToUndefined(z.string()),
+  GOOGLE_OAUTH_CLIENT_SECRET: emptyToUndefined(z.string()),
+  GOOGLE_OAUTH_REDIRECT_URI: emptyToUndefined(z.string()),
+  GOOGLE_OAUTH_FLOW_KEY: emptyToUndefined(z.string()),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
   AUTH_RATE_LIMIT_KEY_SECRET: emptyToUndefined(z.string().min(32)),
 
