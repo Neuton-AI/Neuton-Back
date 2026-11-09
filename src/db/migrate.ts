@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sql } from './client.js';
+import { directSql as sql } from './direct-client.js';
 
 const migrationsDir = join(process.cwd(), 'drizzle');
 const BREAKPOINT = '--> statement-breakpoint';

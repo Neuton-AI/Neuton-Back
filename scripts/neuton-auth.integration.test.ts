@@ -5,6 +5,7 @@ import test from 'node:test';
 import request from 'supertest';
 import postgres from 'postgres';
 import { SignJWT } from 'jose';
+import { pino } from 'pino';
 
 const origin = 'https://app.example.test';
 process.env.SESSION_ORIGIN = origin;
@@ -23,8 +24,22 @@ test('cookie auth preserves account/shop access and enforces session ownership a
 }, async () => {
   const { buildApp } = await import('../src/app.js');
   const { sql } = await import('../src/db/client.js');
+  const { LoggerImpl } = await import('../src/lib/logger/index.js');
   const connection = postgres(testDatabaseUrl!);
-  const app = await buildApp({ logger: false });
+  const lines: Record<string, unknown>[] = [];
+  const sink = pino({ base: null }, { write: (line) => { lines.push(JSON.parse(line)); } });
+  let failedWrites = 0;
+  let failDelivery = false;
+  const logger = new LoggerImpl({ write: (level, message, meta) => {
+    if (failDelivery) {
+      failedWrites++;
+      throw new Error('Test transport unavailable');
+    }
+    sink[level](meta, message);
+  } }, {}, 'info');
+  const securityEvents = () => lines.filter(({ event }) =>
+    event === 'session_replaced' || event === 'session_revoked' || event === 'sessions_revoked');
+  const app = await buildApp({ http: { logger } });
   await app.listen(0, '127.0.0.1');
   const api = request(app.getHttpServer());
   const email = `auth-${randomUUID()}@example.test`;
@@ -115,9 +130,11 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await revoke(foreign, randomUUID())).status, 404);
     assert.equal((await api.post('/api/v1/auth/logout').set({ ...headers(second), Origin: 'https://foreign.example.test' })).status, 403);
     assert.equal((await read(second)).status, 200);
+    assert.equal(securityEvents().length, 0);
     assert.equal((await revoke(current, secondId)).status, 204);
     assert.equal((await revoke(current, secondId)).status, 204);
     assert.equal((await read(second)).status, 401);
+    assert.equal(securityEvents().length, 1);
 
     const renew = () => api.post('/api/v1/auth/session/renew').set(headers(current));
     assert.deepEqual((await renew()).body, inspection.body.session);
@@ -133,7 +150,14 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await api.post('/api/v1/auth/logout').set(headers(signOutOnly))).status, 204);
     assert.equal((await read(signOutOnly)).status, 401);
     assert.equal((await read(current)).status, 200);
-    const changed = await api.post('/api/v1/profile/password').set(headers(current)).send({ currentPassword: password, newPassword });
+    const changePassword = (currentPassword: string) => api.post('/api/v1/profile/password')
+      .set({ ...headers(current), 'x-trace-id': 'd4a56d3002264485a58cf67368cdcaa7' }).send({ currentPassword, newPassword });
+    const rejected = await changePassword('incorrect-password');
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.error.message, 'Current password is incorrect');
+    assert.equal(rejected.headers['set-cookie'], undefined);
+    assert.equal(securityEvents().length, 2);
+    const changed = await changePassword(password);
     assert.equal(changed.status, 200);
     assert.deepEqual(changed.body, { ok: true });
     const replacement = await authenticated(changed);
@@ -146,7 +170,28 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await api.post('/api/v1/auth/logout-all').set(headers(latest))).status, 204);
     assert.equal((await read(latest)).status, 401);
     assert.equal((await read(replacement)).status, 401);
+    const events = securityEvents();
+    assert.deepEqual(events.map(({ event }) => event), ['session_revoked', 'session_revoked', 'session_replaced', 'sessions_revoked']);
+    for (const { event, time, userId, traceId, requestId, sessionId, reason, level, msg, ...extra } of events) {
+      assert.ok(typeof time === 'number');
+      assert.equal(userId, user.id);
+      assert.match(String(traceId), /^[\da-f-]+$/i);
+      assert.match(String(requestId), /^[\da-f-]+$/i);
+      assert.equal(typeof sessionId, 'string');
+      assert.equal(level, 30);
+      assert.equal(typeof msg, 'string');
+      assert.deepEqual(extra, { entryPoint: 'http' });
+      if (event === 'session_replaced') assert.equal(traceId, changed.headers['x-trace-id']);
+    }
+    assert.deepEqual(events.map(({ reason }) => reason), ['targeted', 'current', undefined, undefined]);
+    const captured = JSON.stringify(events);
+    for (const secret of [password, newPassword, current.cookie.split('=')[1]!, current.proof, replacement.cookie.split('=')[1]!, replacement.proof]) {
+      assert.ok(!captured.includes(secret), 'Security event exposed credentials');
+    }
+    failDelivery = true;
     assert.equal((await api.post('/api/v1/auth/logout').set(headers(foreign))).status, 204);
+    failDelivery = false;
+    assert.ok(failedWrites > 0);
     assert.equal((await read(foreign)).status, 401);
   } finally {
     if (shopId) await connection`DELETE FROM shops WHERE id = ${shopId}`;

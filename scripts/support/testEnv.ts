@@ -5,16 +5,19 @@
  * The PostgreSQL runner supplies a disposable database. All other database
  * URLs are replaced before the application can import its configuration.
  */
-const suppliedDatabaseUrl = process.env.DATABASE_URL;
-export const testDatabaseUrl = suppliedDatabaseUrl &&
-  /^postgresql:\/\/neuton_test_runner:[0-9a-f]{48}@127\.0\.0\.1:[1-9]\d{0,4}\/neuton_disposable$/.test(suppliedDatabaseUrl)
-  ? suppliedDatabaseUrl
-  : undefined;
+function disposableUrl(url: string | undefined) {
+  return url && /^postgresql:\/\/neuton_test_runner:[0-9a-f]{48}@127\.0\.0\.1:[1-9]\d{0,4}\/neuton_disposable$/.test(url)
+    ? url
+    : undefined;
+}
+
+export const testDatabaseUrl = disposableUrl(process.env.DATABASE_URL);
 export const skipWithoutDisposableDatabase = !testDatabaseUrl && 'run npm run test:postgres';
 
 process.env.NEUTON_SKIP_ENV_FILES = '1';
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = testDatabaseUrl ?? 'postgresql://unused@127.0.0.1:1/unused';
+process.env.DIRECT_DATABASE_URL = disposableUrl(process.env.DIRECT_DATABASE_URL) ?? process.env.DATABASE_URL;
 
 const PLACEHOLDERS: Record<string, string> = {
   UPSTASH_REDIS_URL: 'redis://localhost:6379',

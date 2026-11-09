@@ -72,8 +72,10 @@ try {
   }
 
   const url = new URL('/neuton_disposable', adminUrl).href;
-  const env = { ...childEnv, DATABASE_URL: url };
-  await run(process.execPath, ['--import', 'tsx', '--import', './scripts/support/testEnv.ts', 'src/db/migrate.ts'], env);
+  const env = { ...childEnv, DATABASE_URL: url, DIRECT_DATABASE_URL: url };
+  // The app URL is inert for the migration process so this checks the direct connection wiring.
+  const migrationEnv = { ...childEnv, DIRECT_DATABASE_URL: url };
+  await run(process.execPath, ['--import', 'tsx', '--import', './scripts/support/testEnv.ts', 'src/db/migrate.ts'], migrationEnv);
   const testFiles = requestedTests.length ? requestedTests : (await readdir(join(backend, 'scripts')))
     .filter((name) => name.endsWith('.test.ts')).map((name) => `scripts/${name}`);
   await run(process.execPath, ['--import', 'tsx', '--import', './scripts/support/testEnv.ts', '--test', '--', ...testFiles], env);

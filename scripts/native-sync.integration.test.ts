@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { NestFactory } from '@nestjs/core';
 import { Client } from 'pg';
-import { SyncEvents } from '../src/modules/sync/sync-events.js';
+import { SyncEvents, SyncEventSource } from '../src/modules/sync/sync-events.js';
 import { PostgresSyncEvents } from '../src/modules/sync/postgres-sync-events.js';
 
 test(
@@ -16,8 +17,13 @@ test(
   async () => {
     const url = testDatabaseUrl!;
     const writer = new Client({ connectionString: url });
-    const hubs = [new SyncEvents(), new SyncEvents()];
-    const sources = hubs.map((hub) => new PostgresSyncEvents(url, hub));
+    // Use different settings to prove the Nest listener takes the direct URL.
+    process.env.DATABASE_URL = 'postgresql://unused@127.0.0.1:1/unused';
+    const { SyncModule } = await import('../src/modules/sync/sync.module.js');
+    const app = await NestFactory.createApplicationContext(SyncModule, { logger: false, abortOnError: false });
+    const hubs = [app.get(SyncEvents), new SyncEvents()];
+    const secondSource = new PostgresSyncEvents(url, hubs[1]!);
+    const sources = [app.get(SyncEventSource), secondSource];
     const schema = `sync_${randomUUID().replaceAll('-', '')}`;
     const shop = randomUUID();
     const received: string[][] = [[], []];
@@ -28,8 +34,8 @@ test(
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     };
-    await writer.connect();
     try {
+      await writer.connect();
       await writer.query(
         `CREATE SCHEMA ${schema}; SET search_path TO ${schema}`,
       );
@@ -83,7 +89,7 @@ test(
       await Promise.all(sources.map((source) => source.ready()));
       assert.ok(received.every((events) => events.includes('reconcile')));
     } finally {
-      await Promise.all(sources.map((source) => source.close()));
+      await Promise.all([app.close(), secondSource.close()]);
       await writer.query(`DROP SCHEMA ${schema} CASCADE`);
       await writer.end();
     }

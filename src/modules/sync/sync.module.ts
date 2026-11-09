@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { db } from '../../db/client.js';
+import { resolveDirectDatabaseUrl } from '../../db/direct-database-url.js';
 import { IdentityModule } from '../identity/identity.module.js';
 import { SyncController } from './sync.controller.js';
 import { SyncService } from './sync.service.js';
@@ -19,7 +20,7 @@ import { SyncEventsController } from './sync-events.controller.js';
       provide: SyncEventSource,
       inject: [SyncEvents],
       useFactory: (events: SyncEvents) => new PostgresSyncEvents(
-        env.DATABASE_URL, events,
+        resolveDirectDatabaseUrl(env.DATABASE_URL, env.DIRECT_DATABASE_URL), events,
       ),
     },
     { provide: SYNC_DATABASE, useValue: db },
