@@ -1,5 +1,7 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import type { Redis } from 'ioredis';
+import { Redis } from 'ioredis';
+
+export const SIGN_IN_LIMITER = Symbol('SIGN_IN_LIMITER');
 
 const windowMs = 300_000;
 const accountLimit = 10;
@@ -37,6 +39,27 @@ export interface SignInReservation {
 
 export interface SignInLimiter {
   reserve(normalizedEmail: string, sourceIp: string): Promise<SignInReservation | null>;
+}
+
+export function createSignInLimiter(url: string, namespace: string, secret?: string) {
+  if (!secret) {
+    return { reserve: async () => { throw new Error('AUTH_RATE_LIMIT_KEY_SECRET is required for sign-in'); } };
+  }
+  const redis = new Redis(url, {
+    enableOfflineQueue: false,
+    enableReadyCheck: false,
+    autoResendUnfulfilledCommands: false,
+    maxRetriesPerRequest: 0,
+    connectTimeout: 1000,
+    commandTimeout: 1000,
+  });
+  // ioredis otherwise writes unhandled connection errors to stderr.
+  redis.on('error', () => {});
+  const limiter = new RedisSignInLimiter(redis, namespace, secret);
+  return {
+    reserve: limiter.reserve.bind(limiter),
+    onModuleDestroy: () => redis.disconnect(),
+  };
 }
 
 export class RedisSignInLimiter implements SignInLimiter {

@@ -65,6 +65,7 @@ async function fixture(db: FakeDb, role = 'owner') {
         useValue: new AuthService(
           passwords as unknown as ConstructorParameters<typeof AuthService>[0],
           new SessionService(passwords as unknown as ConstructorParameters<typeof AuthService>[0]),
+          { reserve: async () => { throw new Error('Unexpected sign-in'); } },
         ),
       },
     ],

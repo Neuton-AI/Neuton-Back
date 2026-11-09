@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { randomUUID } from 'node:crypto';
+import { MIMEType } from 'node:util';
 import type { Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
@@ -10,7 +11,31 @@ import { apiLogger } from '../lib/logger/index.js';
 import type { Logger } from '../lib/logger/types.js';
 import { ApiExceptionFilter } from './exception-filter.js';
 import { resolveTraceId, type HttpRequest } from './request-context.js';
-import { forbidden } from '../lib/errors.js';
+import { AppError, forbidden, tooLarge } from '../lib/errors.js';
+
+const credentialRoute = /^\/api\/v1\/(?:auth\/(?:signup|signin)|profile\/password)\/?$/i;
+const credentialBodyLimit = 32_768;
+const isCredentialPost = (request: HttpRequest) =>
+  request.method === 'POST' && credentialRoute.test(request.path);
+
+function supportsCredentialJson(request: HttpRequest) {
+  const encoding = request.headers['content-encoding']?.toLowerCase() ?? 'identity';
+  if (encoding !== 'identity' || !request.is('application/json')) return false;
+  const charset = new MIMEType(request.headers['content-type']!).params.get('charset');
+  return !charset || charset.toLowerCase() === 'utf-8';
+}
+
+async function rejectUnsupportedCredentialBody(request: HttpRequest) {
+  let bytes = 0;
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+    bytes += (chunk as Buffer).length;
+    if (bytes > credentialBodyLimit) {
+      request.resume();
+      return tooLarge('Request body too large');
+    }
+  }
+  return new AppError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Expected uncompressed UTF-8 JSON');
+}
 
 export interface HttpOptions {
   origins: string[];
@@ -63,15 +88,17 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     credentials: true, exposedHeaders: ['Retry-After', 'X-Trace-Id'],
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   }));
-  app.use(['/api/v1/auth/signup', '/api/v1/auth/signin', '/api/v1/profile/password'], rateLimit({
-    windowMs: 60_000,
-    limit: 12,
-    standardHeaders: 'draft-8',
-    legacyHeaders: false,
-    handler: (req, res) => res.status(429).json({ error: {
-      code: 'RATE_LIMIT_EXCEEDED', message: 'Too many authentication attempts', traceId: (req as HttpRequest).traceId,
-    } }),
-  }));
+  for (const path of ['/api/v1/auth/signup', '/api/v1/profile/password']) {
+    app.use(path, rateLimit({
+      windowMs: 60_000,
+      limit: 12,
+      standardHeaders: 'draft-8',
+      legacyHeaders: false,
+      handler: (req, res) => res.status(429).json({ error: {
+        code: 'RATE_LIMIT_EXCEEDED', message: 'Too many authentication attempts', traceId: (req as HttpRequest).traceId,
+      } }),
+    }));
+  }
   app.use(rateLimit({
     windowMs: options.rateLimit.windowMs, limit: options.rateLimit.max,
     standardHeaders: 'draft-8', legacyHeaders: false,
@@ -79,6 +106,24 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
       code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests', traceId: (req as HttpRequest).traceId,
     } }),
   }));
+  app.use((req: HttpRequest, _res: Response, next: NextFunction) => {
+    if (!isCredentialPost(req)) return next();
+    if (Number(req.headers['content-length']) > credentialBodyLimit) {
+      req.resume();
+      return next(tooLarge('Request body too large'));
+    }
+    if (req.is('application/json') !== null && !supportsCredentialJson(req)) {
+      // Count unsupported bodies without buffering or decoding them.
+      void rejectUnsupportedCredentialBody(req).then(next, next);
+      return;
+    }
+    next();
+  });
+  app.useBodyParser('json', {
+    limit: credentialBodyLimit,
+    inflate: false,
+    type: (request) => isCredentialPost(request as HttpRequest),
+  });
   app.useBodyParser('json', { limit: options.bodyLimit });
   app.useGlobalFilters(new ApiExceptionFilter());
   await app.init();

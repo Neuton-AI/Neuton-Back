@@ -53,6 +53,7 @@ const envSchema = z.object({
   DIRECT_DATABASE_URL: emptyToUndefined(z.string()),
   SESSION_ORIGIN: emptyToUndefined(z.string().url()),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
+  AUTH_RATE_LIMIT_KEY_SECRET: emptyToUndefined(z.string().min(32)),
 
   R2_ACCOUNT_ID: z.string().min(1, 'R2_ACCOUNT_ID is required'),
   R2_ACCESS_KEY_ID: z.string().min(1, 'R2_ACCESS_KEY_ID is required'),

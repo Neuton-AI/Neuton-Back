@@ -140,8 +140,8 @@ test('version changes serialize issuance and renewal and roll back with password
     let overlapping: Promise<PromiseSettledResult<unknown>[]> | undefined;
     await sessions.transaction(async (tx) => {
       const { now } = await sessions.lockCurrent(tx, session);
-      overlapping = Promise.allSettled([competing.issue(account, now), competing.renew(session)]);
-      await sessions.advanceVersion(tx, session, now, 'sign_out_all');
+      overlapping = Promise.allSettled([competing.issue(account, now, 'stale-rehash'), competing.renew(session)]);
+      await sessions.advanceVersion(tx, session, now, 'password_change', 'new-password-hash');
     });
     const [login, renewal] = (await overlapping)!;
     assert.deepEqual(login, { status: 'fulfilled', value: null });
@@ -149,6 +149,8 @@ test('version changes serialize issuance and renewal and roll back with password
     assert.ok(renewal.reason instanceof AppError);
     assert.equal(renewal.reason.statusCode, 401);
     assert.equal(await competing.resolve(issued.secret), null);
+    const [changed] = await connection`SELECT password_hash FROM users WHERE id = ${id}`;
+    assert.equal(changed?.password_hash, 'new-password-hash');
   } finally {
     await connection`DELETE FROM users WHERE id = ${id}`;
     await connection.end();

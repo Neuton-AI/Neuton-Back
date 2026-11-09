@@ -1,11 +1,13 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
+import { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 import { AuthService } from './auth.service.js';
 import type { HttpRequest } from '../../http/request-context.js';
 import { forbidden, unauthorized } from '../../lib/errors.js';
 import { SessionService, sessionMetadata } from './session.service.js';
+import { existingPasswordSchema, newPasswordSchema } from './password-policy.js';
 import {
   clearContextCookie, clearSessionCookie, contextSecret, csrfProof, protectSessionMutation,
   requireJson, requireMatchingSession, requireOrigin, requireProof, sessionSecret, setContextCookie, setSessionCookie,
@@ -13,11 +15,11 @@ import {
 
 const signinSchema = z.object({
   email: z.string().trim().toLowerCase().max(254).email(),
-  password: z.string().min(1).max(128),
+  password: existingPasswordSchema,
 });
 
 const signupSchema = signinSchema.extend({
-  password: z.string().min(8).max(128),
+  password: newPasswordSchema,
   fullName: htmlFree(z.string().trim().min(1).max(120)).optional(),
 });
 
@@ -78,7 +80,10 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   async signin(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response, @Body() body: unknown) {
     await this.credentialProof(request);
-    const { user, secret, session } = await this.auth.signin(signinSchema.parse(body));
+    const sourceIp = request.ip ?? request.socket.remoteAddress;
+    const { user, secret, session } = await this.auth.signin(
+      signinSchema.parse(body), sourceIp && ipKeyGenerator(sourceIp, 128),
+    );
     setSessionCookie(response, secret, session);
     clearContextCookie(response);
     request.log.info({ event: 'session_created', userId: user.id, sessionId: session.id }, 'Session created');
