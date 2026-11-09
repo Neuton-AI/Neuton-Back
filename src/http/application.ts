@@ -13,7 +13,7 @@ import { ApiExceptionFilter } from './exception-filter.js';
 import { resolveTraceId, type HttpRequest } from './request-context.js';
 import { AppError, forbidden, tooLarge } from '../lib/errors.js';
 
-const credentialRoute = /^\/api\/v1\/(?:auth\/(?:signup|signin)|profile\/password)\/?$/i;
+const credentialRoute = /^\/api\/v1\/(?:auth\/(?:signup|signin|google\/(?:start|complete))|profile\/password)\/?$/i;
 const credentialBodyLimit = 32_768;
 const isCredentialPost = (request: HttpRequest) =>
   request.method === 'POST' && credentialRoute.test(request.path);
@@ -62,7 +62,7 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     req.traceId = resolveTraceId(req.headers);
     req.log = (options.logger ?? apiLogger).child({ requestId: req.requestId, traceId: req.traceId, entryPoint: 'http' });
     res.setHeader('X-Trace-Id', req.traceId);
-    if (/^\/api\/v1\/(auth(?:\/|$)|session\/?$|profile\/password\/?$)/.test(req.path)) {
+    if (/^\/api\/v1\/(auth(?:\/|$)|session\/?$|profile\/password\/?$)/i.test(req.path)) {
       res.setHeader('Cache-Control', 'no-store');
     }
     res.once('finish', () => {

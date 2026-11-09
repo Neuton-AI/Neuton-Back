@@ -12,6 +12,7 @@ import { countPasswordHashSettings } from './password-hash-report.js';
 
 const origin = 'https://app.example.test';
 process.env.SESSION_ORIGIN = origin;
+delete process.env.GOOGLE_CLIENT_ID;
 
 type Browser = { cookie: string; proof: string };
 
@@ -95,6 +96,9 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await signin(expiredContext)).status, 403);
 
     const preAuth = await anonymous();
+    assert.equal((await getProof(preAuth.cookie)).body.googleEnabled, undefined);
+    await api.post('/api/v1/auth/google/start').set(headers(preAuth)).send({ purpose: 'sign_in' }).expect(503);
+    await api.get('/api/v1/auth/google/callback').expect(303).expect('Location', '/signin?google=unavailable');
     const signup = (candidate = signupPassword) => api.post('/api/v1/auth/signup').set(headers(preAuth)).send({
       email: ` ${email.toUpperCase()} `, password: candidate, fullName: 'Neuton Tester',
     });

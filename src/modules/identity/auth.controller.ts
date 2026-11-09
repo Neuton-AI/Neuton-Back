@@ -1,13 +1,15 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 import { AuthService } from './auth.service.js';
 import type { HttpRequest } from '../../http/request-context.js';
-import { forbidden, unauthorized } from '../../lib/errors.js';
+import { AppError, forbidden, unauthorized } from '../../lib/errors.js';
 import { SessionService, sessionMetadata } from './session.service.js';
 import { existingPasswordSchema, newPasswordSchema } from './password-policy.js';
+import { GoogleFlowService } from './google-flow.service.js';
+import type { GoogleAttemptBinding } from './google-attempts.js';
 import {
   clearContextCookie, clearSessionCookie, contextSecret, csrfProof, protectSessionMutation,
   requireJson, requireMatchingSession, requireOrigin, requireProof, sessionSecret, setContextCookie, setSessionCookie,
@@ -23,23 +25,98 @@ const signupSchema = signinSchema.extend({
   fullName: htmlFree(z.string().trim().min(1).max(120)).optional(),
 });
 
+const googleStartSchema = z.object({ purpose: z.enum(['sign_in', 'link']) }).strict();
+const googleCallbackSchema = z.object({
+  state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  code: z.string().min(1).max(2048).optional(),
+  error: z.string().min(1).max(128).optional(),
+});
+
 @Controller('api/v1/auth')
 export class AuthController {
   constructor(
     @Inject(AuthService) private readonly auth: AuthService,
     @Inject(SessionService) private readonly sessions: SessionService,
+    @Inject(GoogleFlowService) private readonly google: GoogleFlowService | null,
   ) {}
 
   @Post('csrf') @HttpCode(200)
   async csrf(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response) {
     requireOrigin(request);
+    const availability = this.google ? { googleEnabled: true } : {};
     const session = sessionSecret(request);
-    if (session && await this.sessions.resolve(session)) return { token: csrfProof(session, 'session') };
+    if (session && await this.sessions.resolve(session)) return { token: csrfProof(session, 'session'), ...availability };
     const context = contextSecret(request);
-    if (context && await this.sessions.contextExists(context)) return { token: csrfProof(context, 'context') };
+    if (context && await this.sessions.contextExists(context)) return { token: csrfProof(context, 'context'), ...availability };
     const created = await this.sessions.createContext();
     setContextCookie(response, created.secret, created.expires);
-    return { token: csrfProof(created.secret, 'context') };
+    return { token: csrfProof(created.secret, 'context'), ...availability };
+  }
+
+  @Post('google/start') @HttpCode(200)
+  async startGoogle(@Req() request: HttpRequest, @Body() body: unknown) {
+    requireOrigin(request);
+    requireJson(request);
+    if (!this.google) throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Google sign-in is temporarily unavailable');
+    const { purpose } = googleStartSchema.parse(body);
+    if (purpose === 'link') {
+      const { session } = await this.current(request);
+      return this.google.start({ purpose, session });
+    }
+    return this.google.start(await this.googleSignInBinding(request));
+  }
+
+  @Get('google/callback')
+  @Header('Cache-Control', 'no-store')
+  @Header('Referrer-Policy', 'no-referrer')
+  async googleCallback(@Req() request: HttpRequest, @Res() response: Response, @Query() query: unknown) {
+    if (request.method !== 'GET') {
+      response.status(405).set('Allow', 'GET').end();
+      return;
+    }
+    let page = '/signin';
+    let outcome = 'retry';
+    let completionId: string | undefined;
+    const parsed = googleCallbackSchema.safeParse(query);
+    try {
+      if (!this.google) {
+        outcome = 'unavailable';
+      } else if (parsed.success) {
+        const session = await this.sessions.resolve(sessionSecret(request));
+        const context = contextSecret(request);
+        let binding: GoogleAttemptBinding | undefined;
+        if (session) {
+          page = '/profile';
+          binding = { purpose: 'link', session };
+        } else if (context) {
+          binding = { purpose: 'sign_in', contextSecret: context };
+        }
+        if (binding) {
+          const result = await this.google.callback(binding, parsed.data);
+          if ('completionId' in result) {
+            outcome = 'ready';
+            completionId = result.completionId;
+          } else {
+            outcome = result.error;
+          }
+        }
+      }
+    } catch (error) {
+      outcome = error instanceof AppError && error.statusCode < 500 ? 'retry' : 'unavailable';
+    }
+    request.log.info({ event: 'google_callback', outcome }, 'Google callback processed');
+    const destination = completionId ? `/auth/complete#completionId=${completionId}` : `${page}?google=${outcome}`;
+    response.status(303).set('Location', destination).end();
+  }
+
+  private async googleSignInBinding(request: HttpRequest) {
+    if (await this.sessions.resolve(sessionSecret(request))) {
+      throw new AppError(409, 'GOOGLE_SESSION_CHANGED', 'Your session changed. Start Google sign-in again.');
+    }
+    const secret = contextSecret(request);
+    if (!secret) throw forbidden('Browser context expired');
+    requireProof(request, secret, 'context');
+    return { purpose: 'sign_in' as const, contextSecret: secret };
   }
 
   private async credentialProof(request: HttpRequest) {
