@@ -38,7 +38,7 @@ export const googleIdentities = pgTable('google_identities', {
 }, (t) => ({
   issuerSubjectUnique: uniqueIndex('google_identities_issuer_subject_unique').on(t.issuer, t.subject),
   canonicalIssuer: check('google_identities_canonical_issuer', sql`${t.issuer} = 'https://accounts.google.com'`),
-}));
+})).enableRLS();
 
 export const shops = pgTable('shops', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),

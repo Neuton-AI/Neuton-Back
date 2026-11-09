@@ -21,11 +21,11 @@ export const userSessions = pgTable('user_sessions', {
   signInMethodCheck: check('user_sessions_sign_in_method_check', sql`${t.signInMethod} IN ('password', 'google')`),
   expiryIdx: index('user_sessions_effective_expiry_idx')
     .on(sql`least(${t.idleExpiresAt}, ${t.absoluteExpiresAt}, ${t.revokedAt})`),
-}));
+})).enableRLS();
 
 export const preAuthContexts = pgTable('pre_auth_contexts', {
   secretDigest: varchar('secret_digest', { length: 64 }).primaryKey(),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 }, (t) => ({
   expiryIdx: index('pre_auth_contexts_expires_at_idx').on(t.expiresAt),
-}));
+})).enableRLS();

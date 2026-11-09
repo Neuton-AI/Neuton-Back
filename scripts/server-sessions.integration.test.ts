@@ -105,7 +105,7 @@ test('Google links enforce a canonical issuer and one-to-one account ownership',
   }
 });
 
-test('cleanup removes expired contexts and old sessions in repeatable batches', { skip }, async () => {
+test('cleanup removes expired contexts, old sessions, and expired Google attempts in repeatable batches', { skip }, async () => {
   const connection = postgres(url!);
   const now = new Date('2026-01-01T00:00:00Z');
   const timestamp = now.toISOString();
@@ -127,15 +127,22 @@ test('cleanup removes expired contexts and old sessions in repeatable batches', 
         ${timestamp}::timestamptz - interval '1 day', ${timestamp}::timestamptz - interval '1 day',
         CASE WHEN n <= 101 THEN ${timestamp}::timestamptz - interval '30 days' END
       FROM generate_series(1, 102) AS n`;
-    assert.deepEqual(await sessions.cleanup(), { sessions: 100, preAuthContexts: 100 });
-    assert.deepEqual(await sessions.cleanup(), { sessions: 1, preAuthContexts: 1 });
-    assert.deepEqual(await sessions.cleanup(), { sessions: 0, preAuthContexts: 0 });
+    const activeContext = `${prefix}${'102'.padStart(32, '0')}`;
+    await connection`INSERT INTO google_attempts (state_digest, context_digest, expires_at) VALUES
+      (${`${prefix}${'1'.padStart(32, '0')}`}, ${activeContext}, ${timestamp}),
+      (${`${prefix}${'2'.padStart(32, '0')}`}, ${activeContext}, ${timestamp}::timestamptz + interval '1 second')`;
+    assert.deepEqual(await sessions.cleanup(), { sessions: 100, preAuthContexts: 100, googleAttempts: 1 });
+    assert.deepEqual(await sessions.cleanup(), { sessions: 1, preAuthContexts: 1, googleAttempts: 0 });
+    assert.deepEqual(await sessions.cleanup(), { sessions: 0, preAuthContexts: 0, googleAttempts: 0 });
     const retained = await connection`SELECT id FROM user_sessions WHERE user_id = ${userId}`;
     assert.equal(retained.length, 1);
     const contexts = await connection`
       SELECT expires_at > ${timestamp}::timestamptz AS active
       FROM pre_auth_contexts WHERE secret_digest LIKE ${`${prefix}%`}`;
     assert.deepEqual(contexts.map(({ active }) => active), [true]);
+    const attempts = await connection`SELECT expires_at > ${timestamp}::timestamptz AS active
+      FROM google_attempts WHERE context_digest = ${activeContext}`;
+    assert.deepEqual(attempts.map(({ active }) => active), [true]);
   } finally {
     await connection`DELETE FROM pre_auth_contexts WHERE secret_digest LIKE ${`${prefix}%`}`;
     await connection`DELETE FROM users WHERE id = ${userId}`;

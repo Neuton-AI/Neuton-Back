@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { preAuthContexts, userSessions, users } from '../../db/schema/index.js';
+import { googleAttempts, preAuthContexts, userSessions, users } from '../../db/schema/index.js';
 import { AppError, notFound, unauthorized } from '../../lib/errors.js';
 import { apiLogger } from '../../lib/logger/index.js';
 
@@ -15,7 +15,7 @@ const CONTEXT_MS = 30 * 60_000;
 
 type SessionAccount = Pick<typeof users.$inferSelect, 'id' | 'securityVersion'>;
 type VerifiedPasswordAccount = SessionAccount & { passwordHash: string };
-type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type SessionRecord = Pick<typeof userSessions.$inferSelect,
   'id' | 'userId' | 'securityVersion' | 'signInMethod' | 'createdAt' | 'lastActivityAt' | 'idleExpiresAt' | 'absoluteExpiresAt'>;
 
@@ -40,11 +40,11 @@ const sessionFields = {
   absoluteExpiresAt: userSessions.absoluteExpiresAt,
 };
 
-function digest(secret: string) {
+export function digest(secret: string) {
   return createHash('sha256').update(secret).digest('hex');
 }
 
-const validSecret = (secret: string | undefined): secret is string => Boolean(secret && /^[A-Za-z0-9_-]{43}$/.test(secret));
+export const validSecret = (secret: string | undefined): secret is string => Boolean(secret && /^[A-Za-z0-9_-]{43}$/.test(secret));
 
 function liveAt(now: Date) {
   return and(isNull(userSessions.revokedAt), gt(userSessions.idleExpiresAt, now), gt(userSessions.absoluteExpiresAt, now));
@@ -53,7 +53,9 @@ function liveAt(now: Date) {
 export class SessionService {
   private cleanupTimer?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly db: Database, private readonly now: () => Date = () => new Date()) {}
+  constructor(private readonly db: Database, private readonly clock?: () => Date) {}
+
+  private now() { return this.clock?.() ?? new Date(); }
 
   onModuleInit() {
     this.cleanupTimer = setInterval(() => {
@@ -127,11 +129,12 @@ export class SessionService {
     return { secret, expires };
   }
 
-  async lockCurrent(tx: Transaction, session: SessionRecord) {
-    const [account] = await tx.select({ id: users.id, securityVersion: users.securityVersion, passwordHash: users.passwordHash })
+  async lockCurrent(tx: Transaction, session: SessionRecord, clock?: () => Promise<Date>) {
+    const [account] = await tx.select({ id: users.id, securityVersion: users.securityVersion, passwordHash: users.passwordHash,
+      googleLinkRevision: users.googleLinkRevision })
       .from(users).where(eq(users.id, session.userId)).for('update');
     if (account?.securityVersion !== session.securityVersion) throw unauthorized();
-    const now = this.now();
+    const now = clock ? await clock() : this.now();
     const [current] = await tx.select(sessionFields).from(userSessions)
       .where(and(eq(userSessions.id, session.id), eq(userSessions.userId, session.userId), liveAt(now))).for('update');
     if (!current) throw unauthorized();
@@ -200,11 +203,17 @@ export class SessionService {
       const staleContexts = tx.select({ digest: preAuthContexts.secretDigest }).from(preAuthContexts)
         .where(lte(preAuthContexts.expiresAt, now)).orderBy(preAuthContexts.expiresAt, preAuthContexts.secretDigest)
         .limit(CLEANUP_BATCH_SIZE).for('update', { skipLocked: true });
+      const staleAttempts = tx.select({ digest: googleAttempts.stateDigest }).from(googleAttempts)
+        .where(lte(googleAttempts.expiresAt, this.clock ? now : sql`statement_timestamp()`))
+        .orderBy(googleAttempts.expiresAt, googleAttempts.stateDigest)
+        .limit(CLEANUP_BATCH_SIZE).for('update', { skipLocked: true });
       const removedSessions = await tx.delete(userSessions).where(inArray(userSessions.id, staleSessions))
         .returning({ id: userSessions.id });
       const removedContexts = await tx.delete(preAuthContexts).where(inArray(preAuthContexts.secretDigest, staleContexts))
         .returning({ digest: preAuthContexts.secretDigest });
-      return { sessions: removedSessions.length, preAuthContexts: removedContexts.length };
+      const removedAttempts = await tx.delete(googleAttempts).where(inArray(googleAttempts.stateDigest, staleAttempts))
+        .returning({ digest: googleAttempts.stateDigest });
+      return { sessions: removedSessions.length, preAuthContexts: removedContexts.length, googleAttempts: removedAttempts.length };
     }));
   }
 
