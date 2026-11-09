@@ -8,6 +8,7 @@ import { SessionGuard } from './session.guard.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { SessionService } from './session.service.js';
+import { createSignInLimiter, SIGN_IN_LIMITER, type SignInLimiter } from './signin-limiter.js';
 
 const defaultProviders: Provider[] = [
   {
@@ -29,9 +30,17 @@ const defaultProviders: Provider[] = [
     }),
   },
   {
+    provide: SIGN_IN_LIMITER,
+    useFactory: async () => {
+      const { env } = await import('../../env.js');
+      return createSignInLimiter(env.UPSTASH_REDIS_URL, env.NODE_ENV, env.AUTH_RATE_LIMIT_KEY_SECRET);
+    },
+  },
+  {
     provide: AuthService,
-    inject: [SessionService],
-    useFactory: async (sessions: SessionService) => new AuthService((await import('../../db/client.js')).db, sessions),
+    inject: [SessionService, SIGN_IN_LIMITER],
+    useFactory: async (sessions: SessionService, limiter: SignInLimiter) =>
+      new AuthService((await import('../../db/client.js')).db, sessions, limiter),
   },
 ];
 

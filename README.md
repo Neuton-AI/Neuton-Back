@@ -81,10 +81,27 @@ starting the API. Local HTTP uses a separate session cookie name.
 | `DELETE /api/v1/auth/sessions/:id` | Session cookie and proof | `204` for an owned session |
 | `POST /api/v1/profile/password` | Session cookie, proof and current password | `200 { ok: true }` and replacement cookie |
 
-Signup trims and lowercases emails. New passwords must contain 8–128
-characters. Duplicate emails return `409`, and invalid sign-in credentials
-return `401`. Authentication and password changes share a per-IP limit of
-12 requests per minute. Browser mutations send an exact allowed `Origin` and
+Signup and sign-in trim and lowercase emails. Newly set passwords must be
+10–128 UTF-16 code units. Existing passwords keep their original length range.
+Signup, sign-in, and password change accept up to 32 KiB of uncompressed JSON. Larger
+bodies return `413`. Duplicate emails return `409`, and invalid sign-in
+credentials return `401`.
+
+Sign-in shares a five-minute Redis window across API instances. It permits ten
+failed or pending attempts per account and 60 admitted attempts per source IP.
+Exhausted limits return `429`. If Redis cannot determine admission, sign-in
+returns `503`. Signup and password change each retain a separate per-IP limit
+of 12 requests per minute. Set `AUTH_RATE_LIMIT_KEY_SECRET` to a shared,
+random secret of at least 32 characters on all API instances in the same
+environment. They must also share `UPSTASH_REDIS_URL`.
+
+New password hashes use three-pass Argon2id. A successful sign-in upgrades an
+older Neuton two-pass hash and preserves other sessions. With database settings
+and `NEUTON_SKIP_ENV_FILES=1` supplied through the process environment, a developer can run
+`npm exec -- tsx scripts/password-hash-report.ts` from the backend directory to
+see aggregate counts by hash settings.
+
+Browser mutations send an exact allowed `Origin` and
 `X-CSRF-Token`. Shop-scoped routes still require `x-shop-id` and verify
 membership. Sessions expire after seven days idle or 30 days total.
 

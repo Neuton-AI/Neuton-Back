@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { existingPasswordSchema, newPasswordSchema } from '../identity/password-policy.js';
 import { htmlFree } from '../../lib/safeText.js';
 export const shopSettingsSchema = z.object({
   name: htmlFree(z.string().trim().min(2).max(120)).optional(),
@@ -36,8 +37,8 @@ export const updateProfileSchema = z.object({
 });
 
 export const passwordSchema = z.object({
-  currentPassword: z.string().min(1).max(128),
-  newPassword: z.string().min(8).max(128),
+  currentPassword: existingPasswordSchema,
+  newPassword: newPasswordSchema,
 });
 export const deliverySchema = z
   .object({ distanceKm: z.coerce.number().finite().min(0) })

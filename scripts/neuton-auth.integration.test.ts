@@ -6,6 +6,9 @@ import request from 'supertest';
 import postgres from 'postgres';
 import { SignJWT } from 'jose';
 import { pino } from 'pino';
+import { argon2id, hash } from 'argon2';
+import { SIGN_IN_LIMITER } from '../src/modules/identity/signin-limiter.js';
+import { countPasswordHashSettings } from './password-hash-report.js';
 
 const origin = 'https://app.example.test';
 process.env.SESSION_ORIGIN = origin;
@@ -22,8 +25,9 @@ function cookieFrom(response: request.Response, name: string) {
 test('cookie auth preserves account/shop access and enforces session ownership and revocation', {
   skip: skipWithoutDisposableDatabase,
 }, async () => {
-  const { buildApp } = await import('../src/app.js');
-  const { sql } = await import('../src/db/client.js');
+  const { AppModule } = await import('../src/app.js');
+  const { testApplication } = await import('./support/httpClient.js');
+  const { db, sql } = await import('../src/db/client.js');
   const { LoggerImpl } = await import('../src/lib/logger/index.js');
   const connection = postgres(testDatabaseUrl!);
   const lines: Record<string, unknown>[] = [];
@@ -39,11 +43,14 @@ test('cookie auth preserves account/shop access and enforces session ownership a
   } }, {}, 'info');
   const securityEvents = () => lines.filter(({ event }) =>
     event === 'session_replaced' || event === 'session_revoked' || event === 'sessions_revoked');
-  const app = await buildApp({ http: { logger } });
+  const app = await testApplication(AppModule, [[SIGN_IN_LIMITER, {
+    reserve: async () => ({ releaseAccount: async () => {} }),
+  }]], { origins: [origin], logger });
   await app.listen(0, '127.0.0.1');
   const api = request(app.getHttpServer());
   const email = `auth-${randomUUID()}@example.test`;
   const otherEmail = `other-${randomUUID()}@example.test`;
+  const signupPassword = 'testpass10';
   const password = 'testpass';
   let shopId: string | undefined;
   const getProof = (cookie = '') => api.post('/api/v1/auth/csrf').set({ Origin: origin, Cookie: cookie });
@@ -75,10 +82,11 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await signin(expiredContext)).status, 403);
 
     const preAuth = await anonymous();
-    const signup = (candidate = password) => api.post('/api/v1/auth/signup').set(headers(preAuth)).send({
+    const signup = (candidate = signupPassword) => api.post('/api/v1/auth/signup').set(headers(preAuth)).send({
       email: ` ${email.toUpperCase()} `, password: candidate, fullName: 'Neuton Tester',
     });
-    assert.equal((await signup('testpas')).status, 400);
+    assert.equal((await signup('testpass9')).status, 400);
+    assert.equal((await signup('😀'.repeat(64) + 'a')).status, 400);
     const attempts = await Promise.all([signup(), signup()]);
     assert.deepEqual(attempts.map((result) => result.status).sort(), [201, 409]);
     const created = attempts.find((result) => result.status === 201)!;
@@ -86,7 +94,9 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.deepEqual(created.body, { user: { id: user.id, email, fullName: 'Neuton Tester', avatarUrl: null } });
     const current = await authenticated(created);
     const [stored] = await connection`SELECT password_hash FROM users WHERE id = ${user.id}`;
-    assert.match(stored?.password_hash, /^\$argon2id\$/);
+    assert.match(stored?.password_hash, /^\$argon2id\$v=19\$m=19456,t=3,p=1\$/);
+    const legacy = await hash(password, { type: argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 });
+    await connection`UPDATE users SET password_hash = ${legacy} WHERE id = ${user.id}`;
     assert.equal((await api.get('/api/v1/profile').set('Cookie', current.cookie)).status, 200);
     assert.equal((await api.patch('/api/v1/profile').set('Cookie', current.cookie).send({ fullName: 'No' })).status, 403);
     const edited = await api.patch('/api/v1/profile').set(headers(current)).send({
@@ -113,15 +123,29 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await api.get('/api/v1/session').set('Authorization', `Bearer ${jwt}`)).status, 401);
     assert.equal((await read({ cookie: `__Host-neuton-session=${inspection.body.session.id}`, proof: '' })).status, 401);
 
+    assert.equal((await signin(await anonymous(), 'wrong password')).status, 401);
+    const [before] = await connection`SELECT password_hash FROM users WHERE id = ${user.id}`;
+    assert.equal(before?.password_hash, legacy);
+    const reportBefore = await countPasswordHashSettings(db);
+    assert.ok(reportBefore.some((row) => row.settings === 'argon2id$v=19$m=19456,t=2,p=1'));
+    assert.ok(reportBefore.every((row) => Object.keys(row).sort().join(',') === 'count,settings'));
     const login = await signin(await anonymous());
     assert.equal(login.status, 200);
     assert.equal(login.body.user.id, user.id);
     const second = await authenticated(login);
+    const [upgraded] = await connection`SELECT password_hash, security_version FROM users WHERE id = ${user.id}`;
+    assert.match(upgraded?.password_hash, /^\$argon2id\$v=19\$m=19456,t=3,p=1\$/);
+    assert.notEqual(upgraded?.password_hash.split('$')[4], legacy.split('$')[4]);
+    assert.equal(upgraded?.security_version, 0);
+    const reportAfter = await countPasswordHashSettings(db);
+    assert.equal(reportAfter.find((row) => row.settings === 'argon2id$v=19$m=19456,t=2,p=1')?.count ?? 0,
+      reportBefore.find((row) => row.settings === 'argon2id$v=19$m=19456,t=2,p=1')!.count - 1);
     const secondId = (await read(second)).body.session.id;
     assert.equal((await api.get('/api/v1/session').set({ Cookie: second.cookie,
       'X-Session-Id': inspection.body.session.id })).status, 401);
+    const unicodePassword = '😀'.repeat(64);
     const foreign = await authenticated(await api.post('/api/v1/auth/signup').set(headers(await anonymous()))
-      .send({ email: otherEmail, password }));
+      .send({ email: otherEmail, password: unicodePassword }));
     const list = await api.get('/api/v1/auth/sessions').set('Cookie', current.cookie);
     assert.equal(list.body.sessions.length, 2);
     assert.equal(list.body.sessions.filter((session: { current: boolean }) => session.current).length, 1);
@@ -144,14 +168,18 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.deepEqual(renewals[0]!.body, renewals[1]!.body);
     assert.equal(renewals[0]!.body.absoluteExpiresAt, inspection.body.session.absoluteExpiresAt);
 
-    const newPassword = 'nextpass';
+    const newPassword = '😀'.repeat(64);
     const peer = await authenticated(await signin(await anonymous()));
     const signOutOnly = await authenticated(await signin(await anonymous()));
+    const [afterRepeat] = await connection`SELECT password_hash FROM users WHERE id = ${user.id}`;
+    assert.equal(afterRepeat?.password_hash, upgraded?.password_hash);
     assert.equal((await api.post('/api/v1/auth/logout').set(headers(signOutOnly))).status, 204);
     assert.equal((await read(signOutOnly)).status, 401);
     assert.equal((await read(current)).status, 200);
-    const changePassword = (currentPassword: string) => api.post('/api/v1/profile/password')
-      .set({ ...headers(current), 'x-trace-id': 'd4a56d3002264485a58cf67368cdcaa7' }).send({ currentPassword, newPassword });
+    const changePassword = (currentPassword: string, candidate = newPassword) => api.post('/api/v1/profile/password')
+      .set({ ...headers(current), 'x-trace-id': 'd4a56d3002264485a58cf67368cdcaa7' }).send({ currentPassword, newPassword: candidate });
+    assert.equal((await changePassword(password, 'testpass9')).status, 400);
+    assert.equal((await changePassword(password, newPassword + 'a')).status, 400);
     const rejected = await changePassword('incorrect-password');
     assert.equal(rejected.status, 400);
     assert.equal(rejected.body.error.message, 'Current password is incorrect');
@@ -193,6 +221,11 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     failDelivery = false;
     assert.ok(failedWrites > 0);
     assert.equal((await read(foreign)).status, 401);
+    const unicodeLogin = await api.post('/api/v1/auth/signin').set(headers(await anonymous()))
+      .send({ email: otherEmail, password: unicodePassword });
+    const unicodeBrowser = await authenticated(unicodeLogin);
+    await api.post('/api/v1/profile/password').set(headers(unicodeBrowser))
+      .send({ currentPassword: unicodePassword, newPassword: signupPassword }).expect(200);
   } finally {
     if (shopId) await connection`DELETE FROM shops WHERE id = ${shopId}`;
     await connection`DELETE FROM users WHERE email IN (${email}, ${otherEmail})`;

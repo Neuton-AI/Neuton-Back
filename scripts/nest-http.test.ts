@@ -1,6 +1,9 @@
 import './support/testEnv.js';
 import 'reflect-metadata';
 import assert from 'node:assert/strict';
+import { request as streamRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { gzipSync } from 'node:zlib';
 import test from 'node:test';
 import { Controller, Get, Module, Post, Req } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
@@ -13,6 +16,8 @@ import { LoggerImpl } from '../src/lib/logger/index.js';
 
 @Controller()
 class ProbeController {
+  @Post(['/api/v1/auth/signup', '/api/v1/auth/signin', '/api/v1/profile/password'])
+  credential(@Req() req: Request) { return { size: req.body.value.length }; }
   @Get('/health') health() { return { ok: true, service: 'neuton-api' }; }
   @Get('/validation') validation() { return z.string().parse(42); }
   @Get('/conflict') conflict() { throw conflict('Already applied'); }
@@ -24,6 +29,61 @@ class ProbeController {
 }
 @Module({ controllers: [ProbeController] })
 class ProbeModule {}
+
+test('credential requests cap streamed bodies and reject compressed JSON', async () => {
+  const app = await createHttpApplication(ProbeModule, {
+    origins: [], bodyLimit: 100_000, rateLimit: { max: 100, windowMs: 60_000 },
+  });
+  try {
+    await app.listen(0, '127.0.0.1');
+    const server = app.getHttpServer();
+    const { port } = server.address() as AddressInfo;
+    const postStream = (path: string, body: string | Buffer, headers: Record<string, string>) =>
+      new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+        const req = streamRequest({ hostname: '127.0.0.1', port, path, method: 'POST', headers }, (res) => {
+          res.setEncoding('utf8');
+          let responseBody = '';
+          res.on('data', (chunk: string) => { responseBody += chunk; });
+          res.on('end', () => resolve({ status: res.statusCode, body: responseBody }));
+          res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.write(body.slice(0, 16));
+        req.end(body.slice(16));
+      });
+    const exact = JSON.stringify({ value: 'a'.repeat(32_768 - '{"value":""}'.length) });
+    assert.equal(Buffer.byteLength(exact), 32_768);
+    for (const path of ['/api/v1/auth/signup', '/api/v1/auth/signin', '/api/v1/profile/password']) {
+      await request(server).post(path).type('json').send(exact).expect(201);
+      const large = await request(server).post(path).type('json').send(exact + '!').expect(413);
+      assert.equal(large.body.error.code, 'PAYLOAD_TOO_LARGE');
+      assert.ok(large.body.error.traceId);
+      const streamed = await postStream(path, exact + '!', { 'Content-Type': 'application/json' });
+      assert.equal(streamed.status, 413);
+      assert.equal(JSON.parse(streamed.body).error.code, 'PAYLOAD_TOO_LARGE');
+    }
+    await request(server).post('/API/v1/auth/signin/?probe=1').type('json').send(exact + '!').expect(413);
+    await request(server).post('/api/v1/auth/signin').type('form').send('value=wrong-type').expect(415);
+    await request(server).post('/api/v1/auth/signin').type('form').send('value=' + 'a'.repeat(32_768)).expect(413);
+    const path = '/api/v1/auth/signin';
+    const compressed = gzipSync('{"value":"a"}');
+    const gzipHeaders = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' };
+    assert.equal((await postStream(path, compressed, gzipHeaders)).status, 415);
+    const gzipHeader = Buffer.from(compressed.subarray(0, 10));
+    gzipHeader[3] = 8;
+    const oversizedGzip = Buffer.concat([
+      gzipHeader, Buffer.alloc(32_768, 'a'), Buffer.from([0]), compressed.subarray(10),
+    ]);
+    assert.equal((await postStream(path, oversizedGzip, gzipHeaders)).status, 413);
+    assert.equal((await postStream(path, oversizedGzip, {
+      ...gzipHeaders, 'Content-Length': String(oversizedGzip.length),
+    })).status, 413);
+    assert.equal((await postStream(path, exact + '!', { 'Content-Type': 'application/json; charset=latin1' })).status, 413);
+    await request(server).post('/raw').type('json').send(exact + ' ').expect(201);
+  } finally {
+    await app.close();
+  }
+});
 
 test('Nest HTTP foundation preserves errors, correlation, security and raw webhook bytes', async () => {
   const events: Record<string, unknown>[] = [];

@@ -62,7 +62,7 @@ export class SessionService {
 
   onModuleDestroy() { clearInterval(this.cleanupTimer); }
 
-  async issue(account: VerifiedAccount, proofAt: Date) {
+  async issue(account: VerifiedAccount, proofAt: Date, upgradedHash?: string) {
     return this.transaction(async (tx) => {
       // Password proof happens outside the transaction. Recheck it under the same user lock as revocation.
       const [verified] = await tx.select({ id: users.id }).from(users).where(and(
@@ -71,6 +71,9 @@ export class SessionService {
         eq(users.securityVersion, account.securityVersion),
       )).for('update');
       if (!verified || proofAt.getTime() + IDLE_MS <= this.now().getTime()) return null;
+      if (upgradedHash) {
+        await tx.update(users).set({ passwordHash: upgradedHash }).where(eq(users.id, verified.id));
+      }
       return this.insert(tx, account, proofAt);
     });
   }
