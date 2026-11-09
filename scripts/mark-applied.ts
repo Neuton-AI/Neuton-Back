@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sql } from '../src/db/client.js';
+import { directSql as sql } from '../src/db/direct-client.js';
 
 /**
  * Marks a migration as applied without executing it.

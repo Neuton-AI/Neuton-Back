@@ -19,10 +19,13 @@ inventory data through the existing tenant-scoped queries.
 
 See [the module separation decision](docs/decisions/0001-separate-inventory-recipes.md).
 
-Set `DATABASE_URL` to the [direct Neon PostgreSQL connection string](https://neon.com/docs/connect/connect-from-any-app)
-for the API, worker, and database tools. In Neon’s Connect dialog, turn off
-connection pooling when copying the URL so live sync can use `LISTEN`.
-Keep the connection string in the backend environment.
+Set `DATABASE_URL` to the Neon connection string for regular API and worker
+queries. It can use the pooled endpoint. Set `DIRECT_DATABASE_URL` to the
+[direct connection string](https://neon.com/docs/connect/connect-from-any-app)
+for the same database and branch. In Neon’s Connect dialog, turn off connection
+pooling when copying this URL. Migration tools and the live-sync listener use
+the direct connection. Existing direct-only setups can keep using `DATABASE_URL`
+for both paths.
 
 Run `npm run db:migrate` to initialize an empty database or apply pending
 migrations before deployment. Run `npm run build`, then `npm start` and
@@ -97,7 +100,7 @@ PostgreSQL's `initdb` and `pg_ctl` on `PATH` before running this command.
 
 The runner creates a loopback-only PostgreSQL cluster in the workspace's
 `Temp` folder, applies the migration chain, runs the tests, and removes the
-cluster on completion. It supplies `DATABASE_URL` to child processes for
+cluster on completion. It supplies disposable database URLs to child processes for
 that run. The tests skip environment-file loading and use the runner's
 disposable database. No database URL needs to be configured by the developer.
 
@@ -200,7 +203,7 @@ Sync uses native PostgreSQL `LISTEN`/`NOTIFY` and our authenticated
 
 Apply `0031_native_document_events.sql` with the normal migration runner before
 enabling the updated frontend. The API opens a dedicated session using
-`DATABASE_URL` for `LISTEN`. Use a direct Neon connection so the session stays
+`DIRECT_DATABASE_URL` for `LISTEN`. Use a direct Neon connection so the session stays
 attached to the same database connection. Migrations require the normal owner
 privileges.
 

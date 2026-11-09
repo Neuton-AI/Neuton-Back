@@ -50,6 +50,7 @@ const envSchema = z.object({
   SCRAPY_API_TIMEOUT_MS: z.coerce.number().int().positive().max(60_000).default(5000),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  DIRECT_DATABASE_URL: emptyToUndefined(z.string()),
   SESSION_ORIGIN: emptyToUndefined(z.string().url()),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
 
