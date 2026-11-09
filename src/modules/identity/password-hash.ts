@@ -30,9 +30,9 @@ export function hashPassword(password: string): Promise<string> {
   return runHashOperation(() => hash(password, options));
 }
 
-export async function verifyPassword(password: string, passwordHash?: string): Promise<boolean> {
+export async function verifyPassword(password: string, passwordHash: string | null = null): Promise<boolean> {
   const matches = await runHashOperation(() => verify(passwordHash ?? dummyHash, password));
-  return passwordHash !== undefined && matches;
+  return passwordHash !== null && matches;
 }
 
 export function isLegacyPasswordHash(passwordHash: string): boolean {

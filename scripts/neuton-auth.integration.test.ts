@@ -50,6 +50,7 @@ test('cookie auth preserves account/shop access and enforces session ownership a
   const api = request(app.getHttpServer());
   const email = `auth-${randomUUID()}@example.test`;
   const otherEmail = `other-${randomUUID()}@example.test`;
+  const googleOnlyEmail = `google-${randomUUID()}@example.test`;
   const signupPassword = 'testpass10';
   const password = 'testpass';
   let shopId: string | undefined;
@@ -74,6 +75,18 @@ test('cookie auth preserves account/shop access and enforces session ownership a
   const signin = (browser: Browser, candidate = password) =>
     api.post('/api/v1/auth/signin').set(headers(browser)).send({ email, password: candidate });
   try {
+    await connection`WITH account AS (INSERT INTO users (email) VALUES (${googleOnlyEmail}) RETURNING id)
+      INSERT INTO google_identities (user_id, issuer, subject)
+      SELECT id, 'https://accounts.google.com', ${randomUUID()} FROM account`;
+    const missingPassword = await api.post('/api/v1/auth/signin').set(headers(await anonymous()))
+      .send({ email: googleOnlyEmail, password });
+    const unknownAccount = await signin(await anonymous());
+    assert.equal(missingPassword.status, 401);
+    assert.equal(unknownAccount.status, 401);
+    assert.equal(missingPassword.body.error.code, unknownAccount.body.error.code);
+    assert.equal(missingPassword.body.error.message, unknownAccount.body.error.message);
+    assert.equal(missingPassword.headers['set-cookie'], undefined);
+
     assert.equal((await api.post('/api/v1/auth/csrf')).status, 403);
     assert.equal((await api.post('/api/v1/auth/csrf').set('Origin', 'null')).status, 403);
     const expiredContext = await anonymous();
@@ -228,7 +241,7 @@ test('cookie auth preserves account/shop access and enforces session ownership a
       .send({ currentPassword: unicodePassword, newPassword: signupPassword }).expect(200);
   } finally {
     if (shopId) await connection`DELETE FROM shops WHERE id = ${shopId}`;
-    await connection`DELETE FROM users WHERE email IN (${email}, ${otherEmail})`;
+    await connection`DELETE FROM users WHERE email IN (${email}, ${otherEmail}, ${googleOnlyEmail})`;
     await app.close();
     await connection.end();
     await sql.end();

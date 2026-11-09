@@ -13,10 +13,11 @@ const CLEANUP_BATCH_SIZE = 100;
 const RENEWAL_MS = 300_000;
 const CONTEXT_MS = 30 * 60_000;
 
-type VerifiedAccount = Pick<typeof users.$inferSelect, 'id' | 'passwordHash' | 'securityVersion'>;
+type SessionAccount = Pick<typeof users.$inferSelect, 'id' | 'securityVersion'>;
+type VerifiedPasswordAccount = SessionAccount & { passwordHash: string };
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type SessionRecord = Pick<typeof userSessions.$inferSelect,
-  'id' | 'userId' | 'securityVersion' | 'createdAt' | 'lastActivityAt' | 'idleExpiresAt' | 'absoluteExpiresAt'>;
+  'id' | 'userId' | 'securityVersion' | 'signInMethod' | 'createdAt' | 'lastActivityAt' | 'idleExpiresAt' | 'absoluteExpiresAt'>;
 
 export function sessionMetadata(session: SessionRecord) {
   return {
@@ -32,6 +33,7 @@ const sessionFields = {
   id: userSessions.id,
   userId: userSessions.userId,
   securityVersion: userSessions.securityVersion,
+  signInMethod: userSessions.signInMethod,
   createdAt: userSessions.createdAt,
   lastActivityAt: userSessions.lastActivityAt,
   idleExpiresAt: userSessions.idleExpiresAt,
@@ -62,7 +64,7 @@ export class SessionService {
 
   onModuleDestroy() { clearInterval(this.cleanupTimer); }
 
-  async issue(account: VerifiedAccount, proofAt: Date, upgradedHash?: string) {
+  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string) {
     return this.transaction(async (tx) => {
       // Password proof happens outside the transaction. Recheck it under the same user lock as revocation.
       const [verified] = await tx.select({ id: users.id }).from(users).where(and(
@@ -74,15 +76,16 @@ export class SessionService {
       if (upgradedHash) {
         await tx.update(users).set({ passwordHash: upgradedHash }).where(eq(users.id, verified.id));
       }
-      return this.insert(tx, account, proofAt);
+      return this.insert(tx, account, proofAt, 'password');
     });
   }
 
-  async insert(tx: Transaction, account: Pick<VerifiedAccount, 'id' | 'securityVersion'>, proofAt: Date) {
+  async insert(tx: Transaction, account: SessionAccount, proofAt: Date, signInMethod: SessionRecord['signInMethod']) {
     const secret = randomBytes(32).toString('base64url');
     const [session] = await tx.insert(userSessions).values({
       userId: account.id,
       securityVersion: account.securityVersion,
+      signInMethod,
       secretDigest: digest(secret),
       createdAt: proofAt,
       lastActivityAt: proofAt,

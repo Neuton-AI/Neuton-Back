@@ -30,7 +30,7 @@ export class AuthService {
         });
       if (!account) throw conflict('Email is already registered');
       const { securityVersion, ...user } = account;
-      return { user, ...await this.sessions.insert(tx, { id: user.id, securityVersion }, proofAt) };
+      return { user, ...await this.sessions.insert(tx, { id: user.id, securityVersion }, proofAt, 'password') };
     });
   }
 
@@ -54,15 +54,17 @@ export class AuthService {
     }).from(users).where(eq(users.email, email)));
 
     const valid = await verifyPassword(password, account?.passwordHash);
-    if (!account || !valid) throw unauthorized('Invalid email or password');
+    if (!account || account.passwordHash === null || !valid) {
+      throw unauthorized('Invalid email or password');
+    }
     // On a Redis failure, the reservation expires on its original deadline.
     await reservation.releaseAccount().catch(() => {});
 
-    const { id, fullName, avatarUrl } = account;
-    const user = { id, email: account.email, fullName, avatarUrl };
+    const { id, email: accountEmail, fullName, avatarUrl, passwordHash, securityVersion } = account;
+    const user = { id, email: accountEmail, fullName, avatarUrl };
     const proofAt = new Date();
-    const upgradedHash = isLegacyPasswordHash(account.passwordHash) ? await hashPassword(password) : undefined;
-    const issued = await this.sessions.issue(account, proofAt, upgradedHash);
+    const upgradedHash = isLegacyPasswordHash(passwordHash) ? await hashPassword(password) : undefined;
+    const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash);
     if (!issued) throw unauthorized('Credentials changed. Sign in again.');
     return { user, ...issued };
   }
@@ -79,7 +81,7 @@ export class AuthService {
       const { account: locked, now } = await this.sessions.lockCurrent(tx, session);
       if (locked.passwordHash !== account.passwordHash) throw conflict('Password changed. Try again.');
       const securityVersion = await this.sessions.advanceVersion(tx, session, now, 'password_change', passwordHash);
-      return this.sessions.insert(tx, { id: session.userId, securityVersion }, proofAt);
+      return this.sessions.insert(tx, { id: session.userId, securityVersion }, proofAt, 'password');
     });
   }
 }

@@ -18,8 +18,10 @@ import { SHOP_ROLES } from './enums.js';
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   email: text('email').notNull(),
-  passwordHash: text('password_hash').notNull(),
+  passwordHash: text('password_hash'),
   securityVersion: integer('security_version').notNull().default(0),
+  // Increment on link and unlink in the same transaction that locks the account.
+  googleLinkRevision: integer('google_link_revision').notNull().default(0),
   fullName: text('full_name'),
   avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -27,6 +29,15 @@ export const users = pgTable('users', {
 }, (t) => ({
   emailUnique: uniqueIndex('users_email_unique').on(t.email),
   emailNormalized: check('users_email_normalized', sql`${t.email} = lower(btrim(${t.email}))`),
+}));
+
+export const googleIdentities = pgTable('google_identities', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  issuer: text('issuer').notNull(),
+  subject: text('subject').notNull(),
+}, (t) => ({
+  issuerSubjectUnique: uniqueIndex('google_identities_issuer_subject_unique').on(t.issuer, t.subject),
+  canonicalIssuer: check('google_identities_canonical_issuer', sql`${t.issuer} = 'https://accounts.google.com'`),
 }));
 
 export const shops = pgTable('shops', {
