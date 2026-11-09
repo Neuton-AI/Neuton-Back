@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
-import { googleAttempts, preAuthContexts, type GoogleCompletionProof } from '../../db/schema/index.js';
+import { googleAttempts, type GoogleCompletionProof } from '../../db/schema/index.js';
 import { AppError } from '../../lib/errors.js';
 import { digest, SessionService, validSecret, type SessionRecord, type Transaction } from './session.service.js';
 
@@ -105,14 +105,12 @@ export class GoogleAttemptStore {
         expiresAt: new Date(Math.min(current.idleExpiresAt.getTime(), current.absoluteExpiresAt.getTime())),
       };
     }
-    if (!validSecret(binding.contextSecret)) return null;
-    const contextDigest = digest(binding.contextSecret);
-    const [context] = await tx.select({ expiresAt: preAuthContexts.expiresAt }).from(preAuthContexts)
-      .where(eq(preAuthContexts.secretDigest, contextDigest)).for('update');
+    const context = await this.sessions.lockContext(tx, binding.contextSecret);
     if (!context) return null;
     const now = await this.currentTime(tx);
     if (context.expiresAt <= now) return null;
-    return { now, match: eq(googleAttempts.contextDigest, contextDigest), values: { contextDigest }, expiresAt: context.expiresAt };
+    return { now, match: eq(googleAttempts.contextDigest, context.secretDigest),
+      values: { contextDigest: context.secretDigest }, expiresAt: context.expiresAt };
   }
 
   private async currentTime(tx: Transaction) {

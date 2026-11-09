@@ -15,10 +15,11 @@ export class AuthService {
     private readonly signInLimiter: SignInLimiter,
   ) {}
 
-  async signup({ email, password, fullName }: Credentials & { fullName?: string }) {
+  async signup({ email, password, fullName }: Credentials & { fullName?: string }, contextSecret?: string) {
     const passwordHash = await hashPassword(password);
     const proofAt = new Date();
     return this.sessions.transaction(async (tx) => {
+      const context = await this.sessions.lockPasswordContext(tx, contextSecret);
       const [account] = await tx.insert(users).values({ email, passwordHash, fullName })
         .onConflictDoNothing({ target: users.email })
         .returning({
@@ -29,12 +30,13 @@ export class AuthService {
           securityVersion: users.securityVersion,
         });
       if (!account) throw conflict('Email is already registered');
+      await this.sessions.consumeContext(tx, context?.secretDigest);
       const { securityVersion, ...user } = account;
       return { user, ...await this.sessions.insert(tx, { id: user.id, securityVersion }, proofAt, 'password') };
     });
   }
 
-  async signin({ email, password }: Credentials, sourceIp: string | undefined) {
+  async signin({ email, password }: Credentials, sourceIp: string | undefined, contextSecret?: string) {
     let reservation: SignInReservation | null;
     try {
       if (!sourceIp) throw new Error('Missing source IP');
@@ -64,7 +66,7 @@ export class AuthService {
     const user = { id, email: accountEmail, fullName, avatarUrl };
     const proofAt = new Date();
     const upgradedHash = isLegacyPasswordHash(passwordHash) ? await hashPassword(password) : undefined;
-    const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash);
+    const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash, contextSecret);
     if (!issued) throw unauthorized('Credentials changed. Sign in again.');
     return { user, ...issued };
   }

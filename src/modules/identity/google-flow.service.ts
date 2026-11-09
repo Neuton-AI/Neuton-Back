@@ -4,13 +4,14 @@ import { googleIdentities, users } from '../../db/schema/index.js';
 import { AppError, forbidden } from '../../lib/errors.js';
 import { GoogleAttemptStore, type GoogleAttemptBinding } from './google-attempts.js';
 import type { GoogleOidc } from './google-oidc.js';
-
-export const GOOGLE_OIDC = Symbol('GOOGLE_OIDC');
+import { googleSignInAccount, invalidGoogleFlow } from './google-account.js';
+import { digest, SessionService } from './session.service.js';
 
 type CallbackOutcome = { completionId: string } | { error: 'retry' | 'canceled' | 'unavailable' };
 
 export class GoogleFlowService {
-  constructor(private readonly db: Database, private readonly attempts: GoogleAttemptStore, private readonly oidc: GoogleOidc) {}
+  constructor(private readonly db: Database, private readonly attempts: GoogleAttemptStore,
+    private readonly oidc: GoogleOidc, private readonly sessions: SessionService) {}
 
   async start(binding: GoogleAttemptBinding) {
     const attempt = await this.attempts.start(binding);
@@ -41,5 +42,25 @@ export class GoogleFlowService {
       await this.attempts.finish(binding, claim, null);
       return { error: error instanceof AppError && error.statusCode < 500 ? 'retry' : 'unavailable' };
     }
+  }
+
+  async completeSignIn(binding: Extract<GoogleAttemptBinding, { purpose: 'sign_in' }>, completionId: string) {
+    const result = await this.attempts.consume(binding, completionId, async (tx, proof) => {
+      try {
+        // A savepoint rolls back a losing signup without making the proof reusable.
+        return await tx.transaction(async (accountTx) => {
+          const { account, outcome } = await googleSignInAccount(accountTx, proof);
+          const issued = await this.sessions.insert(accountTx, account, new Date(), 'google');
+          await this.sessions.consumeContext(accountTx, digest(binding.contextSecret));
+          return { ...issued, outcome };
+        });
+      } catch (error) {
+        if (error instanceof AppError && error.statusCode < 500) return error;
+        throw error;
+      }
+    });
+    if (!result) throw invalidGoogleFlow();
+    if (result instanceof AppError) throw result;
+    return result;
   }
 }

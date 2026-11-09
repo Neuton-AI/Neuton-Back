@@ -66,8 +66,9 @@ export class SessionService {
 
   onModuleDestroy() { clearInterval(this.cleanupTimer); }
 
-  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string) {
+  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string, contextSecret?: string) {
     return this.transaction(async (tx) => {
+      const context = await this.lockPasswordContext(tx, contextSecret);
       // Password proof happens outside the transaction. Recheck it under the same user lock as revocation.
       const [verified] = await tx.select({ id: users.id }).from(users).where(and(
         eq(users.id, account.id),
@@ -78,6 +79,7 @@ export class SessionService {
       if (upgradedHash) {
         await tx.update(users).set({ passwordHash: upgradedHash }).where(eq(users.id, verified.id));
       }
+      await this.consumeContext(tx, context?.secretDigest);
       return this.insert(tx, account, proofAt, 'password');
     });
   }
@@ -120,6 +122,23 @@ export class SessionService {
         .where(and(eq(preAuthContexts.secretDigest, digest(secret)), gt(preAuthContexts.expiresAt, this.now())));
       return Boolean(context);
     });
+  }
+
+  async lockContext(tx: Transaction, secret: string | undefined) {
+    if (!validSecret(secret)) return null;
+    const [context] = await tx.select().from(preAuthContexts)
+      .where(eq(preAuthContexts.secretDigest, digest(secret))).for('update');
+    return context ?? null;
+  }
+
+  async lockPasswordContext(tx: Transaction, secret: string | undefined) {
+    const context = await this.lockContext(tx, secret);
+    if (secret && !context) throw new AppError(409, 'AUTH_CONTEXT_CHANGED', 'Your browser sign-in changed. Try again.');
+    return context;
+  }
+
+  async consumeContext(tx: Transaction, contextDigest?: string) {
+    if (contextDigest) await tx.delete(preAuthContexts).where(eq(preAuthContexts.secretDigest, contextDigest));
   }
 
   async createContext() {

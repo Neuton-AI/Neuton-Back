@@ -6,6 +6,7 @@ import { AppError } from '../../lib/errors.js';
 
 export const GOOGLE_ISSUER = 'https://accounts.google.com';
 export const GOOGLE_CALLBACK_PATH = '/api/v1/auth/google/callback';
+export const GOOGLE_OIDC = Symbol('GOOGLE_OIDC');
 const acceptedIssuers = [GOOGLE_ISSUER, 'accounts.google.com'];
 
 type GoogleSettings = Pick<Env, 'APP_ORIGIN' | 'SESSION_ORIGIN' | 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET'

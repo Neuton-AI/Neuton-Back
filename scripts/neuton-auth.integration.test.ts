@@ -96,7 +96,7 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await signin(expiredContext)).status, 403);
 
     const preAuth = await anonymous();
-    assert.equal((await getProof(preAuth.cookie)).body.googleEnabled, undefined);
+    assert.deepEqual((await api.get('/api/v1/auth/google/status').expect(200)).body, { enabled: false });
     await api.post('/api/v1/auth/google/start').set(headers(preAuth)).send({ purpose: 'sign_in' }).expect(503);
     await api.get('/api/v1/auth/google/callback').expect(303).expect('Location', '/signin?google=unavailable');
     const signup = (candidate = signupPassword) => api.post('/api/v1/auth/signup').set(headers(preAuth)).send({

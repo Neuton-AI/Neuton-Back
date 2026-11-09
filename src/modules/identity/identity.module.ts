@@ -9,8 +9,8 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { SessionService } from './session.service.js';
 import { createSignInLimiter, SIGN_IN_LIMITER, type SignInLimiter } from './signin-limiter.js';
-import { GOOGLE_OIDC, GoogleFlowService } from './google-flow.service.js';
-import { createGoogleOidc, readGoogleConfig, type GoogleOidc } from './google-oidc.js';
+import { GoogleFlowService } from './google-flow.service.js';
+import { createGoogleOidc, GOOGLE_OIDC, readGoogleConfig, type GoogleOidc } from './google-oidc.js';
 import { GoogleAttemptStore } from './google-attempts.js';
 
 const defaultProviders: Provider[] = [
@@ -59,7 +59,7 @@ const defaultProviders: Provider[] = [
       const config = readGoogleConfig((await import('../../env.js')).env);
       if (!oidc || !config) return null;
       const { db } = await import('../../db/client.js');
-      return new GoogleFlowService(db, new GoogleAttemptStore(sessions, config.flowKey), oidc);
+      return new GoogleFlowService(db, new GoogleAttemptStore(sessions, config.flowKey), oidc, sessions);
     },
   },
 ];

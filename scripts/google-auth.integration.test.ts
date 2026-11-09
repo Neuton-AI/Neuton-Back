@@ -5,8 +5,7 @@ import test from 'node:test';
 import postgres from 'postgres';
 import request from 'supertest';
 import { AppError } from '../src/lib/errors.js';
-import { GOOGLE_ISSUER, type GoogleOidc } from '../src/modules/identity/google-oidc.js';
-import { GOOGLE_OIDC } from '../src/modules/identity/google-flow.service.js';
+import { GOOGLE_ISSUER, GOOGLE_OIDC, type GoogleOidc } from '../src/modules/identity/google-oidc.js';
 import { SIGN_IN_LIMITER } from '../src/modules/identity/signin-limiter.js';
 
 const origin = 'https://app.example.test';
@@ -55,9 +54,11 @@ test('Google start and callback bind to the initiating browser, use safe redirec
     reserve: async () => ({ releaseAccount: async () => {} }),
   }]], { origins: [origin], logger, observe: (event) => observed.push(event) });
   const api = request(app.getHttpServer());
+  const status = await api.get(`${base}/google/status`).expect(200).expect('Cache-Control', 'no-store');
+  assert.deepEqual(status.body, { enabled: true });
+  assert.equal(status.headers['set-cookie'], undefined);
   async function browser() {
     const response = await api.post(`${base}/csrf`).set('Origin', origin).expect(200);
-    assert.equal(response.body.googleEnabled, true);
     return { Origin: origin, Cookie: cookieFrom(response, contextCookie), 'X-CSRF-Token': response.body.token as string };
   }
   const first = await browser();
