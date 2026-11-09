@@ -1,11 +1,11 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
-import { env } from '../../env.js';
+import { env, sessionOrigin } from '../../env.js';
 import { AppError, forbidden, unauthorized } from '../../lib/errors.js';
 import type { SessionRecord } from './session.service.js';
 
-export const sessionOrigins = env.SESSION_ORIGIN ? [env.SESSION_ORIGIN] : [];
-if (env.NODE_ENV === 'development' && !env.SESSION_ORIGIN) {
+export const sessionOrigins = sessionOrigin ? [sessionOrigin] : [];
+if (env.NODE_ENV === 'development' && !sessionOrigin) {
   sessionOrigins.push('http://localhost:5173', 'http://127.0.0.1:5173', 'http://[::1]:5173');
 }
 const secure = !sessionOrigins.some((origin) => origin.startsWith('http://'));

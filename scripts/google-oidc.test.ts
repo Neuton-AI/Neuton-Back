@@ -6,10 +6,10 @@ import { OAuth2Client } from 'google-auth-library';
 import { createGoogleOidc, readGoogleConfig } from '../src/modules/identity/google-oidc.js';
 
 const settings = {
-  SESSION_ORIGIN: 'https://app.example.test',
-  GOOGLE_OAUTH_CLIENT_ID: 'google-client',
-  GOOGLE_OAUTH_CLIENT_SECRET: 'google-client-secret',
-  GOOGLE_OAUTH_REDIRECT_URI: 'https://app.example.test/api/v1/auth/google/callback',
+  APP_ORIGIN: 'https://app.example.test',
+  GOOGLE_CLIENT_ID: 'google-client',
+  GOOGLE_CLIENT_SECRET: 'google-client-secret',
+  GOOGLE_REDIRECT_URI: 'https://app.example.test/api/v1/auth/google/callback',
   GOOGLE_OAUTH_FLOW_KEY: Buffer.alloc(32, 1).toString('base64url'),
 };
 const issuer = 'https://accounts.google.com';
@@ -17,11 +17,13 @@ const proof = { state: 'test-state', nonce: 'test-nonce', verifier: 'v'.repeat(4
 
 test('Google requires complete settings and the exact same-origin callback', () => {
   assert.ok(readGoogleConfig(settings));
-  assert.equal(readGoogleConfig({ ...settings, SESSION_ORIGIN: undefined }), null);
-  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_CLIENT_SECRET: undefined }), null);
+  assert.ok(readGoogleConfig({ ...settings, SESSION_ORIGIN: settings.APP_ORIGIN }));
+  assert.equal(readGoogleConfig({ ...settings, APP_ORIGIN: undefined }), null);
+  assert.equal(readGoogleConfig({ ...settings, SESSION_ORIGIN: 'https://other.example.test' }), null);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_CLIENT_SECRET: undefined }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: 'invalid' }), null);
-  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_REDIRECT_URI: `${settings.GOOGLE_OAUTH_REDIRECT_URI}?next=/` }), null);
-  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_REDIRECT_URI: 'https://other.example.test/api/v1/auth/google/callback' }), null);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_REDIRECT_URI: `${settings.GOOGLE_REDIRECT_URI}?next=/` }), null);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_REDIRECT_URI: 'https://other.example.test/api/v1/auth/google/callback' }), null);
 });
 
 test('Google authorization sends only the configured callback, requested scopes, and S256 proof', () => {
@@ -29,8 +31,8 @@ test('Google authorization sends only the configured callback, requested scopes,
   const url = new URL(adapter.authorizationUrl(proof));
   assert.equal(url.origin + url.pathname, `${issuer}/o/oauth2/v2/auth`);
   assert.deepEqual(Object.fromEntries(url.searchParams), {
-    client_id: settings.GOOGLE_OAUTH_CLIENT_ID,
-    redirect_uri: settings.GOOGLE_OAUTH_REDIRECT_URI,
+    client_id: settings.GOOGLE_CLIENT_ID,
+    redirect_uri: settings.GOOGLE_REDIRECT_URI,
     response_type: 'code',
     scope: 'openid email profile',
     state: proof.state,
@@ -46,7 +48,7 @@ test('Google exchange checks the actual token signature, claims and PKCE exchang
   const key = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const otherKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
   const now = Math.floor(Date.now() / 1000);
-  const claims = { iss: issuer, aud: settings.GOOGLE_OAUTH_CLIENT_ID, iat: now, exp: now + 3600,
+  const claims = { iss: issuer, aud: settings.GOOGLE_CLIENT_ID, iat: now, exp: now + 3600,
     sub: 'google-subject', nonce: proof.nonce, email: 'Example@example.test', email_verified: true, name: 'Test User' };
   function token(payload: Record<string, unknown>, privateKey = key.privateKey, alg = 'RS256') {
     const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -63,8 +65,8 @@ test('Google exchange checks the actual token signature, claims and PKCE exchang
     if (url.href === 'https://oauth2.googleapis.com/token') {
       tokenRequests++;
       const body = new URLSearchParams(String(init?.body));
-      assert.equal(body.get('client_secret'), settings.GOOGLE_OAUTH_CLIENT_SECRET);
-      assert.equal(body.get('redirect_uri'), settings.GOOGLE_OAUTH_REDIRECT_URI);
+      assert.equal(body.get('client_secret'), settings.GOOGLE_CLIENT_SECRET);
+      assert.equal(body.get('redirect_uri'), settings.GOOGLE_REDIRECT_URI);
       assert.equal(body.get('grant_type'), 'authorization_code');
       if (body.get('code_verifier') !== proof.verifier || body.get('code') !== 'test-code') {
         return Response.json({ error: 'invalid_grant' }, { status: 400 });

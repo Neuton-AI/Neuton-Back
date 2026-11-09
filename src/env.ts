@@ -52,9 +52,10 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   DIRECT_DATABASE_URL: emptyToUndefined(z.string()),
   SESSION_ORIGIN: emptyToUndefined(z.string().url()),
-  GOOGLE_OAUTH_CLIENT_ID: emptyToUndefined(z.string()),
-  GOOGLE_OAUTH_CLIENT_SECRET: emptyToUndefined(z.string()),
-  GOOGLE_OAUTH_REDIRECT_URI: emptyToUndefined(z.string()),
+  APP_ORIGIN: emptyToUndefined(z.string()),
+  GOOGLE_CLIENT_ID: emptyToUndefined(z.string()),
+  GOOGLE_CLIENT_SECRET: emptyToUndefined(z.string()),
+  GOOGLE_REDIRECT_URI: emptyToUndefined(z.string()),
   GOOGLE_OAUTH_FLOW_KEY: emptyToUndefined(z.string()),
   UPSTASH_REDIS_URL: z.string().min(1, 'UPSTASH_REDIS_URL is required'),
   AUTH_RATE_LIMIT_KEY_SECRET: emptyToUndefined(z.string().min(32)),
@@ -164,14 +165,15 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.superRefine((settings, context) => {
-  const origin = settings.SESSION_ORIGIN;
+  const origin = settings.SESSION_ORIGIN ?? settings.APP_ORIGIN;
   if (!origin && settings.NODE_ENV !== 'production') return;
   const url = origin && URL.canParse(origin) ? new URL(origin) : null;
   const localHttp = url?.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url?.origin === origin && (url?.protocol === 'https:' || (settings.NODE_ENV !== 'production' && localHttp))) {
     return;
   }
-  context.addIssue({ code: 'custom', path: ['SESSION_ORIGIN'], message: 'Expected an exact HTTPS origin or an explicit localhost development origin' });
+  const setting = settings.SESSION_ORIGIN || !settings.APP_ORIGIN ? 'SESSION_ORIGIN' : 'APP_ORIGIN';
+  context.addIssue({ code: 'custom', path: [setting], message: 'Expected an exact HTTPS origin or an explicit localhost development origin' });
 }).safeParse(process.env);
 
 if (!parsed.success) {
@@ -184,6 +186,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+export const sessionOrigin = env.SESSION_ORIGIN ?? env.APP_ORIGIN;
 
 export type Env = typeof env;
 

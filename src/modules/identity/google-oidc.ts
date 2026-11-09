@@ -8,8 +8,8 @@ export const GOOGLE_ISSUER = 'https://accounts.google.com';
 export const GOOGLE_CALLBACK_PATH = '/api/v1/auth/google/callback';
 const acceptedIssuers = [GOOGLE_ISSUER, 'accounts.google.com'];
 
-type GoogleSettings = Pick<Env, 'SESSION_ORIGIN' | 'GOOGLE_OAUTH_CLIENT_ID' | 'GOOGLE_OAUTH_CLIENT_SECRET'
-  | 'GOOGLE_OAUTH_REDIRECT_URI' | 'GOOGLE_OAUTH_FLOW_KEY'>;
+type GoogleSettings = Pick<Env, 'APP_ORIGIN' | 'SESSION_ORIGIN' | 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET'
+  | 'GOOGLE_REDIRECT_URI' | 'GOOGLE_OAUTH_FLOW_KEY'>;
 
 type GoogleConfig = { clientId: string; clientSecret: string; redirectUri: string; flowKey: Buffer };
 type GoogleProof = { nonce: string; verifier: string };
@@ -28,8 +28,9 @@ export interface GoogleOidc {
 }
 
 export function readGoogleConfig(settings: GoogleSettings): GoogleConfig | null {
-  const { SESSION_ORIGIN: origin, GOOGLE_OAUTH_CLIENT_ID: clientId, GOOGLE_OAUTH_CLIENT_SECRET: clientSecret,
-    GOOGLE_OAUTH_REDIRECT_URI: redirectUri, GOOGLE_OAUTH_FLOW_KEY: encodedKey } = settings;
+  const { APP_ORIGIN: origin, SESSION_ORIGIN: legacyOrigin, GOOGLE_CLIENT_ID: clientId,
+    GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_REDIRECT_URI: redirectUri, GOOGLE_OAUTH_FLOW_KEY: encodedKey } = settings;
+  if (legacyOrigin && legacyOrigin !== origin) return null;
   if (!clientId || !clientSecret || !origin || redirectUri !== `${origin}${GOOGLE_CALLBACK_PATH}` || !encodedKey) {
     return null;
   }
