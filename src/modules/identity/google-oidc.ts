@@ -35,8 +35,11 @@ export function readGoogleConfig(settings: GoogleSettings): GoogleConfig | null 
   if (!clientId || !clientSecret || !origin || redirectUri !== `${origin}${GOOGLE_CALLBACK_PATH}` || !encodedKey) {
     return null;
   }
-  const flowKey = Buffer.from(encodedKey, 'base64url');
-  if (flowKey.length !== 32 || flowKey.toString('base64url') !== encodedKey) return null;
+  const isHex = /^[a-f0-9]{64}$/i.test(encodedKey);
+  const flowKey = Buffer.from(encodedKey, isHex ? 'hex' : 'base64url');
+  if (flowKey.length !== 32 || (!isHex && flowKey.toString('base64url') !== encodedKey)) {
+    return null;
+  }
   return { clientId, clientSecret, redirectUri, flowKey };
 }
 

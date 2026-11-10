@@ -17,7 +17,7 @@ process.env.SESSION_ORIGIN = origin;
 process.env.GOOGLE_CLIENT_ID = 'fixture-client';
 process.env.GOOGLE_CLIENT_SECRET = 'fixture-google-secret';
 process.env.GOOGLE_REDIRECT_URI = `${origin}${base}/google/callback`;
-process.env.GOOGLE_OAUTH_FLOW_KEY = Buffer.alloc(32, 4).toString('base64url');
+process.env.GOOGLE_OAUTH_FLOW_KEY = Buffer.alloc(32, 4).toString('hex');
 
 function cookieFrom(response: request.Response, name: string) {
   const cookies = response.headers['set-cookie'] as unknown as string[];

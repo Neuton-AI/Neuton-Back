@@ -69,6 +69,13 @@ are `http://localhost:5173`, `http://127.0.0.1:5173` and `http://[::1]:5173`.
 For another loopback port, set `SESSION_ORIGIN` to that exact address before
 starting the API. Local HTTP uses a separate session cookie name.
 
+Google sign-in uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`GOOGLE_REDIRECT_URI`, `APP_ORIGIN`, and `GOOGLE_OAUTH_FLOW_KEY`. Register
+`APP_ORIGIN` plus `/api/v1/auth/google/callback` as the redirect URI in Google.
+If `SESSION_ORIGIN` is also set, use the same value as `APP_ORIGIN`. Generate a
+random 32-byte flow key and encode it as 64 hex characters or unpadded Base64url.
+Use the same key on every API instance in the environment.
+
 | Endpoint | Body | Success |
 | --- | --- | --- |
 | `POST /api/v1/auth/csrf` | Allowed origin | `200 { token }` with a browser-bound CSRF proof |

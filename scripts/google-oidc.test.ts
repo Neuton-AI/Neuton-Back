@@ -21,9 +21,22 @@ test('Google requires complete settings and the exact same-origin callback', () 
   assert.equal(readGoogleConfig({ ...settings, APP_ORIGIN: undefined }), null);
   assert.equal(readGoogleConfig({ ...settings, SESSION_ORIGIN: 'https://other.example.test' }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_CLIENT_SECRET: undefined }), null);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: undefined }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: 'invalid' }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_REDIRECT_URI: `${settings.GOOGLE_REDIRECT_URI}?next=/` }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_REDIRECT_URI: 'https://other.example.test/api/v1/auth/google/callback' }), null);
+});
+
+test('Google accepts a 32-byte flow key encoded in hex or unpadded Base64url', () => {
+  const bytes = Buffer.alloc(32, 0xab);
+  const hex = bytes.toString('hex');
+  assert.deepEqual(
+    readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: hex.toUpperCase() })?.flowKey,
+    bytes,
+  );
+  assert.deepEqual(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: bytes.toString('base64url') })?.flowKey, bytes);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: hex.slice(2) }), null);
+  assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: hex.slice(2) + 'gg' }), null);
 });
 
 test('Google authorization sends only the configured callback, requested scopes, and S256 proof', () => {
