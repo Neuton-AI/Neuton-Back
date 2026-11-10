@@ -199,6 +199,14 @@ export class AuthController {
     return { user };
   }
 
+  @Post('password/add') @HttpCode(204)
+  async addPassword(@Req() request: HttpRequest, @Body() body: unknown) {
+    const { session } = await this.current(request);
+    const { newPassword } = z.object({ newPassword: newPasswordSchema }).strict().parse(body);
+    await this.auth.addPassword(session, newPassword);
+    request.log.info({ event: 'password_added', userId: session.userId }, 'First password added');
+  }
+
   @Post('session/renew') @HttpCode(200)
   async renew(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response) {
     const { secret, session } = await this.current(request);

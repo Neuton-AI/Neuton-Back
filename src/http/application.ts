@@ -13,7 +13,7 @@ import { ApiExceptionFilter } from './exception-filter.js';
 import { resolveTraceId, type HttpRequest } from './request-context.js';
 import { AppError, forbidden, tooLarge } from '../lib/errors.js';
 
-const credentialRoute = /^\/api\/v1\/(?:auth\/(?:signup|signin|google\/(?:start|complete))|profile\/password)\/?$/i;
+const credentialRoute = /^\/api\/v1\/(?:auth\/(?:signup|signin|password\/add|google\/(?:start|complete))|profile\/password)\/?$/i;
 const credentialBodyLimit = 32_768;
 const isCredentialPost = (request: HttpRequest) =>
   request.method === 'POST' && credentialRoute.test(request.path);
@@ -88,7 +88,7 @@ export async function configureHttpApplication(app:NestExpressApplication, optio
     credentials: true, exposedHeaders: ['Retry-After', 'X-Trace-Id'],
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
   }));
-  for (const path of ['/api/v1/auth/signup', '/api/v1/profile/password']) {
+  for (const path of ['/api/v1/auth/signup', '/api/v1/auth/password/add', '/api/v1/profile/password']) {
     app.use(path, rateLimit({
       windowMs: 60_000,
       limit: 12,

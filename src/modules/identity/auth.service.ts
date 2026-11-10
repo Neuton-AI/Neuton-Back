@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { users } from '../../db/schema/index.js';
 import { AppError, badRequest, conflict, unauthorized } from '../../lib/errors.js';
@@ -7,6 +7,7 @@ import { hashPassword, isLegacyPasswordHash, verifyPassword } from './password-h
 import type { SignInLimiter, SignInReservation } from './signin-limiter.js';
 
 type Credentials = { email: string; password: string };
+const passwordAlreadySet = () => new AppError(409, 'PASSWORD_ALREADY_SET', 'Use Change password to update your existing password.');
 
 export class AuthService {
   constructor(
@@ -69,6 +70,19 @@ export class AuthService {
     const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash, contextSecret);
     if (!issued) throw unauthorized('Credentials changed. Sign in again.');
     return { user, ...issued };
+  }
+
+  async addPassword(session: SessionRecord, password: string) {
+    const [existing] = await this.sessions.withStore(() => this.db.select({ id: users.id }).from(users)
+      .where(and(eq(users.id, session.userId), isNotNull(users.passwordHash))));
+    if (existing) throw passwordAlreadySet();
+
+    const passwordHash = await hashPassword(password);
+    await this.sessions.transaction(async (tx) => {
+      const { account } = await this.sessions.lockCurrent(tx, session);
+      if (account.passwordHash !== null) throw passwordAlreadySet();
+      await tx.update(users).set({ passwordHash }).where(eq(users.id, account.id));
+    });
   }
 
   async changePassword(session: SessionRecord, input: { currentPassword: string; newPassword: string }) {
