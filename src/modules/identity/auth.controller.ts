@@ -26,7 +26,9 @@ const signupSchema = signinSchema.extend({
 });
 
 const googleStartSchema = z.object({ purpose: z.enum(['sign_in', 'link']) }).strict();
-const googleCompleteSchema = z.object({ completionId: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();
+const googleCompleteSchema = googleStartSchema.partial().extend({
+  completionId: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
 const googleCallbackSchema = z.object({
   state: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   code: z.string().min(1).max(2048).optional(),
@@ -80,6 +82,7 @@ export class AuthController {
     let page = '/signin';
     let outcome = 'retry';
     let completionId: string | undefined;
+    let link = false;
     const parsed = googleCallbackSchema.safeParse(query);
     try {
       if (!this.google) {
@@ -99,6 +102,7 @@ export class AuthController {
           if ('completionId' in result) {
             outcome = 'ready';
             completionId = result.completionId;
+            link = binding.purpose === 'link';
           } else {
             outcome = result.error;
           }
@@ -108,7 +112,12 @@ export class AuthController {
       outcome = error instanceof AppError && error.statusCode < 500 ? 'retry' : 'unavailable';
     }
     request.log.info({ event: 'google_callback', outcome }, 'Google callback processed');
-    const destination = completionId ? `/auth/complete#completionId=${completionId}` : `${page}?google=${outcome}`;
+    let destination = `${page}?google=${outcome}`;
+    if (completionId) {
+      const fragment = new URLSearchParams({ completionId });
+      if (link) fragment.set('purpose', 'link');
+      destination = `/auth/complete#${fragment}`;
+    }
     response.status(303).set('Location', destination).end();
   }
 
@@ -127,7 +136,13 @@ export class AuthController {
     requireOrigin(request);
     requireJson(request);
     if (!this.google) throw new AppError(503, 'SERVICE_UNAVAILABLE', 'Google sign-in is temporarily unavailable');
-    const { completionId } = googleCompleteSchema.parse(body);
+    const { completionId, purpose } = googleCompleteSchema.parse(body);
+    if (purpose === 'link') {
+      const { session } = await this.current(request);
+      const outcome = await this.google.completeLink({ purpose, session }, completionId);
+      request.log.info({ event: 'google_link_completed', userId: session.userId }, 'Google link completed');
+      return { outcome, destination: '/profile' };
+    }
     const { outcome, secret, session } = await this.google.completeSignIn(await this.googleSignInBinding(request), completionId);
     setSessionCookie(response, secret, session);
     clearContextCookie(response);

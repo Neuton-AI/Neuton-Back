@@ -1,7 +1,7 @@
 import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import postgres from 'postgres';
 import request from 'supertest';
 import { GOOGLE_ISSUER, GOOGLE_OIDC, type GoogleIdentity, type GoogleOidc } from '../src/modules/identity/google-oidc.js';
@@ -13,6 +13,8 @@ Object.assign(process.env, {
   APP_ORIGIN: origin, SESSION_ORIGIN: origin, GOOGLE_CLIENT_ID: 'fixture', GOOGLE_CLIENT_SECRET: 'fixture-secret',
   GOOGLE_REDIRECT_URI: `${origin}${auth}/google/callback`, GOOGLE_OAUTH_FLOW_KEY: Buffer.alloc(32, 5).toString('base64url'),
 });
+
+if (testDatabaseUrl) after(async () => (await import('../src/db/client.js')).sql.end());
 
 function cookie(response: request.Response, name: string) {
   const cookies = response.headers['set-cookie'] as unknown as string[];
@@ -26,7 +28,6 @@ test('Google completion signs up and signs in by subject, rejects wrong binding,
 }, async (t) => {
   const { AppModule } = await import('../src/app.js');
   const { testApplication } = await import('./support/httpClient.js');
-  const { sql } = await import('../src/db/client.js');
   const connection = postgres(testDatabaseUrl!);
   const subject = randomUUID();
   const email = `${randomUUID()}@example.test`;
@@ -51,7 +52,6 @@ test('Google completion signs up and signs in by subject, rejects wrong binding,
       ${raceOtherEmail}, ${sharedEmail}, ${sameBrowserEmail}, ${otherPasswordEmail})`;
     await app.close();
     await connection.end();
-    await sql.end();
   });
   const api = request(app.getHttpServer());
   async function pending() {
@@ -105,9 +105,12 @@ test('Google completion signs up and signs in by subject, rejects wrong binding,
   const switched = await pending();
   const password = await api.post(`${auth}/signup`).set(switched.headers)
     .send({ email: passwordEmail, password: 'fixture-password' }).expect(201);
-  const active = await complete(switched, { ...switched.headers, Cookie: `${switched.headers.Cookie}; ${cookie(password, 'session')}` })
-    .expect(409);
+  const passwordCookie = cookie(password, 'session');
+  const active = await complete(switched, { ...switched.headers, Cookie: `${switched.headers.Cookie}; ${passwordCookie}` }).expect(409);
   assert.equal(active.body.error.code, 'GOOGLE_SESSION_CHANGED');
+  const passwordCsrf = await api.post(`${auth}/csrf`).set('Origin', origin).set('Cookie', passwordCookie).expect(200);
+  const newProof = await complete(switched, { Origin: origin, Cookie: passwordCookie, 'X-CSRF-Token': passwordCsrf.body.token as string }).expect(409);
+  assert.equal(newProof.body.error.code, 'GOOGLE_SESSION_CHANGED');
   await complete(switched).expect(400);
   const collision = await complete(await pending()).expect(409);
   assert.equal(collision.body.error.code, 'GOOGLE_EMAIL_IN_USE');
@@ -136,4 +139,105 @@ test('Google completion signs up and signs in by subject, rejects wrong binding,
   const browserRace = await Promise.all([complete(sameBrowser), passwordSignup(sameBrowser, otherPasswordEmail)]);
   assert.equal(browserRace.filter(({ status }) => status < 300).length, 1);
   assert.equal((await connection`SELECT id FROM users WHERE email IN (${sameBrowserEmail}, ${otherPasswordEmail})`).length, 1);
+});
+
+test('Google linking consumes proof in the initiating session and never replaces another link', {
+  skip: skipWithoutDisposableDatabase,
+}, async (t) => {
+  const { AppModule } = await import('../src/app.js');
+  const { testApplication } = await import('./support/httpClient.js');
+  const firstEmail = `${randomUUID()}@example.test`;
+  const secondEmail = `${randomUUID()}@example.test`;
+  const thirdEmail = `${randomUUID()}@example.test`;
+  const password = 'fixture-password';
+  const firstSubject = randomUUID();
+  let identity: GoogleIdentity = { issuer: GOOGLE_ISSUER, subject: firstSubject,
+    email: 'different@example.test', emailVerified: false };
+  const provider: GoogleOidc = {
+    authorizationUrl: ({ state }) => `${GOOGLE_ISSUER}/o/oauth2/v2/auth?state=${state}`,
+    exchange: async () => identity,
+  };
+  const app = await testApplication(AppModule, [[GOOGLE_OIDC, provider], [SIGN_IN_LIMITER, {
+    reserve: async () => ({ releaseAccount: async () => {} }),
+  }]], { origins: [origin] });
+  const connection = postgres(testDatabaseUrl!);
+  t.after(async () => {
+    await connection`DELETE FROM users WHERE email IN (${firstEmail}, ${secondEmail}, ${thirdEmail})`;
+    await app.close();
+    await connection.end();
+  });
+  const api = request(app.getHttpServer());
+  async function headers(session?: string) {
+    const csrf = api.post(`${auth}/csrf`).set('Origin', origin);
+    if (session) csrf.set('Cookie', session);
+    const proof = await csrf.expect(200);
+    return { Origin: origin, Cookie: session ?? cookie(proof, 'context'), 'X-CSRF-Token': proof.body.token as string };
+  }
+  async function signup(email: string) {
+    const binding = await headers();
+    const signedUp = await api.post(`${auth}/signup`).set(binding).send({ email, password }).expect(201);
+    return headers(cookie(signedUp, 'session'));
+  }
+  const first = await signup(firstEmail);
+  const second = await signup(secondEmail);
+  const loginBinding = await headers();
+  const sameAccount = await api.post(`${auth}/signin`).set(loginBinding).send({ email: firstEmail, password }).expect(200);
+  const otherSession = await headers(cookie(sameAccount, 'session'));
+  async function pending(binding: typeof first) {
+    const started = await api.post(`${auth}/google/start`).set(binding).send({ purpose: 'link' }).expect(200);
+    const state = new URL(started.body.authorizationUrl).searchParams.get('state');
+    assert.ok(state);
+    const callback = await api.get(`${auth}/google/callback`).set('Cookie', binding.Cookie)
+      .query({ state, code: 'fixture' }).expect(303);
+    const fragment = new URLSearchParams(callback.headers.location?.split('#')[1]);
+    assert.equal(fragment.get('purpose'), 'link');
+    const id = fragment.get('completionId');
+    assert.ok(id);
+    return id;
+  }
+  const complete = (id: string, binding = first) => api.post(`${auth}/google/complete`).set(binding)
+    .send({ completionId: id, purpose: 'link' });
+
+  const completion = await pending(first);
+  const competingSubject = randomUUID();
+  identity = { ...identity, subject: competingSubject };
+  const competing = await pending(first);
+  await complete(completion, otherSession).expect(400);
+  await complete(completion, { ...first, 'X-CSRF-Token': 'wrong' }).expect(403);
+  const race = await Promise.all([complete(completion), complete(competing)]);
+  assert.deepEqual(race.map(({ status }) => status).sort(), [200, 400]);
+  const linked = race.find(({ status }) => status === 200)!;
+  const winningSubject = race[0].status === 200 ? firstSubject : competingSubject;
+  const losingSubject = race[0].status === 200 ? competingSubject : firstSubject;
+  assert.deepEqual(linked.body, { outcome: 'linked', destination: '/profile' });
+  assert.equal(linked.headers['set-cookie'], undefined);
+  await api.get('/api/v1/session').set('Cookie', first.Cookie).expect(200);
+  await complete(completion).expect(400);
+  await complete(competing).expect(400);
+  identity = { ...identity, subject: losingSubject };
+  await complete(await pending(first)).expect(409);
+
+  identity = { ...identity, subject: winningSubject };
+  await complete(await pending(first)).expect(200);
+  const claimedElsewhere = await pending(second);
+  await complete(claimedElsewhere, second).expect(409);
+  await complete(claimedElsewhere, second).expect(400);
+  const revoked = await pending(otherSession);
+  await api.post(`${auth}/logout`).set(otherSession).expect(204);
+  await complete(revoked, otherSession).expect(401);
+  const links = await connection`SELECT u.email, g.subject, u.google_link_revision FROM google_identities g
+    JOIN users u ON u.id = g.user_id WHERE u.email IN (${firstEmail}, ${secondEmail})`;
+  assert.deepEqual([...links], [{ email: firstEmail, subject: winningSubject, google_link_revision: 1 }]);
+
+  identity = { ...identity, subject: randomUUID() };
+  const third = await signup(thirdEmail);
+  const secondProof = await pending(second);
+  const thirdProof = await pending(third);
+  const sameSubjectRace = await Promise.all([complete(secondProof, second), complete(thirdProof, third)]);
+  assert.deepEqual(sameSubjectRace.map(({ status }) => status).sort(), [200, 409]);
+  const expiryProof = await pending(second);
+  const secondSession = await api.get('/api/v1/session').set('Cookie', second.Cookie).expect(200);
+  const secondSessionId = secondSession.body.session.id as string;
+  await connection`UPDATE user_sessions SET idle_expires_at = now() - interval '1 second' WHERE id = ${secondSessionId}`;
+  await complete(expiryProof, second).expect(401);
 });

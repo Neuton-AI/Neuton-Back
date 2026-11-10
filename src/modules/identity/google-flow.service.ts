@@ -4,7 +4,7 @@ import { googleIdentities, users } from '../../db/schema/index.js';
 import { AppError, forbidden } from '../../lib/errors.js';
 import { GoogleAttemptStore, type GoogleAttemptBinding } from './google-attempts.js';
 import type { GoogleOidc } from './google-oidc.js';
-import { googleSignInAccount, invalidGoogleFlow } from './google-account.js';
+import { googleSignInAccount, invalidGoogleFlow, linkGoogleAccount } from './google-account.js';
 import { digest, SessionService } from './session.service.js';
 
 type CallbackOutcome = { completionId: string } | { error: 'retry' | 'canceled' | 'unavailable' };
@@ -59,6 +59,14 @@ export class GoogleFlowService {
         throw error;
       }
     });
+    if (!result) throw invalidGoogleFlow();
+    if (result instanceof AppError) throw result;
+    return result;
+  }
+
+  async completeLink(binding: Extract<GoogleAttemptBinding, { purpose: 'link' }>, completionId: string) {
+    const result = await this.attempts.consume(binding, completionId, (tx, proof) =>
+      linkGoogleAccount(tx, binding.session.userId, proof.identity));
     if (!result) throw invalidGoogleFlow();
     if (result instanceof AppError) throw result;
     return result;

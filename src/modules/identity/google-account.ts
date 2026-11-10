@@ -1,7 +1,8 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { googleIdentities, users, type GoogleCompletionProof } from '../../db/schema/index.js';
 import { AppError } from '../../lib/errors.js';
 import type { Transaction } from './session.service.js';
+import type { GoogleIdentity } from './google-oidc.js';
 import { signupEmail, signupName } from './signup-fields.js';
 
 export const invalidGoogleFlow = () => new AppError(400, 'GOOGLE_FLOW_INVALID', 'Google sign-in expired or changed. Start again.');
@@ -35,4 +36,20 @@ export async function googleSignInAccount(tx: Transaction, { identity, observedL
     .onConflictDoNothing().returning({ userId: googleIdentities.userId });
   if (!link) throw invalidGoogleFlow();
   return { account, outcome: 'signed_up' as const };
+}
+
+// The attempt store holds the initiating account lock while applying the proof.
+export async function linkGoogleAccount(tx: Transaction, userId: string, { issuer, subject }: GoogleIdentity) {
+  const [inserted] = await tx.insert(googleIdentities).values({ userId, issuer, subject })
+    .onConflictDoNothing().returning({ userId: googleIdentities.userId });
+  if (inserted) {
+    await tx.update(users).set({ googleLinkRevision: sql`${users.googleLinkRevision} + 1` }).where(eq(users.id, userId));
+    return 'linked' as const;
+  }
+
+  const [existing] = await tx.select({ issuer: googleIdentities.issuer, subject: googleIdentities.subject })
+    .from(googleIdentities).where(eq(googleIdentities.userId, userId));
+  if (existing?.issuer === issuer && existing.subject === subject) return 'linked' as const;
+  if (existing) return new AppError(409, 'GOOGLE_LINK_CONFLICT', 'This Neuton account already has a Google link.');
+  return new AppError(409, 'GOOGLE_LINK_CONFLICT', 'This Google account is already linked to a Neuton account.');
 }
