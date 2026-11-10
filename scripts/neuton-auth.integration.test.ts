@@ -9,6 +9,7 @@ import { pino } from 'pino';
 import { argon2id, hash } from 'argon2';
 import { SIGN_IN_LIMITER } from '../src/modules/identity/signin-limiter.js';
 import { countPasswordHashSettings } from './password-hash-report.js';
+import { waitForBlockedTransactions } from './support/postgresLocks.js';
 
 const origin = 'https://app.example.test';
 process.env.SESSION_ORIGIN = origin;
@@ -104,7 +105,16 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     });
     assert.equal((await signup('testpass9')).status, 400);
     assert.equal((await signup('😀'.repeat(64) + 'a')).status, 400);
-    const attempts = await Promise.all([signup(), signup()]);
+    const preAuthDigest = createHash('sha256').update(preAuth.cookie.split('=')[1]!).digest('hex');
+    const { pending } = await connection.begin(async (gate) => {
+      const [owner] = await gate<{ pid: number }[]>`SELECT pg_backend_pid() AS pid FROM pre_auth_contexts
+        WHERE secret_digest = ${preAuthDigest} FOR UPDATE`;
+      assert.ok(owner);
+      const pending = Promise.all([signup(), signup()]);
+      await waitForBlockedTransactions(connection, owner.pid, 2);
+      return { pending };
+    });
+    const attempts = await pending;
     assert.deepEqual(attempts.map((result) => result.status).sort(), [201, 409]);
     const created = attempts.find((result) => result.status === 201)!;
     const { user } = created.body;

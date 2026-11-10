@@ -12,5 +12,5 @@ export async function waitForBlockedTransactions(connection: postgres.Sql, block
     if (row && row.count >= count) return;
     await delay(20);
   }
-  assert.fail('Requests did not queue on the account row');
+  assert.fail('Requests did not queue on the database lock');
 }
