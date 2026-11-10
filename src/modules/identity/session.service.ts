@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { googleAttempts, preAuthContexts, userSessions, users } from '../../db/schema/index.js';
 import { AppError, notFound, unauthorized } from '../../lib/errors.js';
@@ -197,6 +197,14 @@ export class SessionService {
       const { now } = await this.lockCurrent(tx, session);
       await this.advanceVersion(tx, session, now, 'sign_out_all');
     });
+  }
+
+  async revokeOtherGoogleSessions(tx: Transaction, current: SessionRecord, now: Date) {
+    const revoked = await tx.update(userSessions).set({ revokedAt: now, revocationReason: 'google_unlink' })
+      .where(and(eq(userSessions.userId, current.userId), ne(userSessions.id, current.id),
+        eq(userSessions.signInMethod, 'google'), isNull(userSessions.revokedAt)))
+      .returning({ id: userSessions.id });
+    return revoked.length;
   }
 
   async advanceVersion(tx: Transaction, session: SessionRecord, now: Date, reason: 'sign_out_all' | 'password_change', passwordHash?: string) {

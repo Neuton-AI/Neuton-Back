@@ -1,6 +1,6 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { users } from '../../db/schema/index.js';
+import { googleIdentities, users } from '../../db/schema/index.js';
 import { AppError, badRequest, conflict, unauthorized } from '../../lib/errors.js';
 import { SessionService, type SessionRecord } from './session.service.js';
 import { hashPassword, isLegacyPasswordHash, verifyPassword } from './password-hash.js';
@@ -82,6 +82,22 @@ export class AuthService {
       const { account } = await this.sessions.lockCurrent(tx, session);
       if (account.passwordHash !== null) throw passwordAlreadySet();
       await tx.update(users).set({ passwordHash }).where(eq(users.id, account.id));
+    });
+  }
+
+  async unlinkGoogle(session: SessionRecord) {
+    return this.sessions.transaction(async (tx) => {
+      const { account, current, now } = await this.sessions.lockCurrent(tx, session);
+      if (account.passwordHash === null) {
+        throw new AppError(409, 'PASSWORD_REQUIRED', 'Add a password before unlinking Google.');
+      }
+      const [removed] = await tx.delete(googleIdentities).where(eq(googleIdentities.userId, account.id))
+        .returning({ userId: googleIdentities.userId });
+      if (removed) {
+        await tx.update(users).set({ googleLinkRevision: sql`${users.googleLinkRevision} + 1` }).where(eq(users.id, account.id));
+      }
+      const revokedSessions = await this.sessions.revokeOtherGoogleSessions(tx, current, now);
+      return { linkRemoved: Boolean(removed), revokedSessions };
     });
   }
 

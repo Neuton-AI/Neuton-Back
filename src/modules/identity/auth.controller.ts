@@ -150,6 +150,15 @@ export class AuthController {
     return { outcome, destination: '/dashboard' };
   }
 
+  @Delete('google/link') @HttpCode(204)
+  async unlinkGoogle(@Req() request: HttpRequest) {
+    const { session } = await this.current(request);
+    const { linkRemoved, revokedSessions } = await this.auth.unlinkGoogle(session);
+    if (linkRemoved || revokedSessions > 0) {
+      request.log.info({ event: 'google_unlink_completed', userId: session.userId, linkRemoved, revokedSessions }, 'Google unlink completed');
+    }
+  }
+
   private async credentialProof(request: HttpRequest) {
     requireOrigin(request);
     requireJson(request);
