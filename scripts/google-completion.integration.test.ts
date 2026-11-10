@@ -180,6 +180,10 @@ test('Google linking consumes proof in the initiating session and never replaces
   }
   const first = await signup(firstEmail);
   const second = await signup(secondEmail);
+  const read = (binding: typeof first) => api.get('/api/v1/session').set('Cookie', binding.Cookie).expect(200);
+  const before = await read(first);
+  assert.equal(before.body.hasPassword, true);
+  assert.equal(before.body.googleLinked, false);
   const loginBinding = await headers();
   const sameAccount = await api.post(`${auth}/signin`).set(loginBinding).send({ email: firstEmail, password }).expect(200);
   const otherSession = await headers(cookie(sameAccount, 'session'));
@@ -211,7 +215,10 @@ test('Google linking consumes proof in the initiating session and never replaces
   const losingSubject = race[0].status === 200 ? competingSubject : firstSubject;
   assert.deepEqual(linked.body, { outcome: 'linked', destination: '/profile' });
   assert.equal(linked.headers['set-cookie'], undefined);
-  await api.get('/api/v1/session').set('Cookie', first.Cookie).expect(200);
+  const after = await read(first);
+  assert.equal(after.body.hasPassword, true);
+  assert.equal(after.body.googleLinked, true);
+  assert.equal(after.body.session.id, before.body.session.id);
   await complete(completion).expect(400);
   await complete(competing).expect(400);
   identity = { ...identity, subject: losingSubject };

@@ -145,8 +145,11 @@ test('Google unlink protects the last method and atomically revokes only other G
   await read(otherGoogle.Cookie).expect(401);
   await read(anotherGoogle.Cookie).expect(401);
   await read(unrelatedGoogle.Cookie).expect(200);
-  await read(currentGoogle.Cookie).expect(200);
-  await read(currentPassword.Cookie).expect(200);
+  for (const binding of [currentGoogle, currentPassword]) {
+    const state = await read(binding.Cookie).expect(200);
+    assert.equal(state.body.hasPassword, true);
+    assert.equal(state.body.googleLinked, false);
+  }
   await staleLink().expect(400);
   assert.deepEqual(await linkState(), { google_link_revision: 2, subject: null });
   await unlink(currentPassword).expect(204);
