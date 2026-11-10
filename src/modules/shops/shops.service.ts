@@ -26,10 +26,15 @@ export class ShopsService {
     private readonly writeAudit: typeof recordAudit = recordAudit,
   ) {}
   async session(actor: SessionActor) {
+    const [memberships, methods] = await Promise.all([
+      this.persistence.memberships(actor.user.id),
+      this.auth.signInMethods(actor.user.id),
+    ]);
     return {
       user: actor.user,
-      memberships: await this.persistence.memberships(actor.user.id),
+      memberships,
       session: actor.session && sessionMetadata(actor.session),
+      ...methods,
     };
   }
   private async audit(

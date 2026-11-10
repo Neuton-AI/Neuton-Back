@@ -47,6 +47,12 @@ test('a Google-only account can add its first password exactly once and keep exi
     return { Origin: origin, Cookie, 'X-CSRF-Token': csrf.body.token as string, 'X-Session-Id': session.id };
   }
   const first = await browser();
+  const read = (binding: typeof first) => api.get('/api/v1/session').set('Cookie', binding.Cookie).expect(200);
+  const googleOnly = await read(first);
+  assert.equal(googleOnly.body.hasPassword, false);
+  assert.equal(googleOnly.body.googleLinked, true);
+  assert.doesNotMatch(googleOnly.text, /passwordHash|completionId/);
+  assert.ok(!googleOnly.text.includes(subject));
   const second = await browser();
   const revoked = await browser();
   await api.post(`${auth}/logout`).set(revoked).expect(204);
@@ -77,8 +83,10 @@ test('a Google-only account can add its first password exactly once and keep exi
   assert.equal(results[1 - winner]?.body.error.code, 'PASSWORD_ALREADY_SET');
   await add('cannot-overwrite').expect(409);
   for (const binding of [first, second]) {
-    const state = await api.get('/api/v1/session').set('Cookie', binding.Cookie).expect(200);
+    const state = await read(binding);
     assert.equal(state.body.session.id, binding['X-Session-Id']);
+    assert.equal(state.body.hasPassword, true);
+    assert.equal(state.body.googleLinked, true);
   }
   const [stored] = await connection`SELECT password_hash, security_version, g.subject FROM users u
     JOIN google_identities g ON g.user_id = u.id WHERE u.id = ${account.id}`;

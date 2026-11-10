@@ -72,6 +72,16 @@ export class AuthService {
     return { user, ...issued };
   }
 
+  async signInMethods(userId: string) {
+    const [methods] = await this.sessions.withStore(() => this.db.select({
+      hasPassword: sql<boolean>`${users.passwordHash} IS NOT NULL`,
+      googleLinked: sql<boolean>`${googleIdentities.userId} IS NOT NULL`,
+    }).from(users).leftJoin(googleIdentities, eq(googleIdentities.userId, users.id))
+      .where(eq(users.id, userId)));
+    if (!methods) throw unauthorized();
+    return methods;
+  }
+
   async addPassword(session: SessionRecord, password: string) {
     const [existing] = await this.sessions.withStore(() => this.db.select({ id: users.id }).from(users)
       .where(and(eq(users.id, session.userId), isNotNull(users.passwordHash))));
