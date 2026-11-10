@@ -69,7 +69,7 @@ export function createGoogleOidc(config: Pick<GoogleConfig, 'clientId' | 'client
   return {
     authorizationUrl({ state, nonce, verifier }) {
       const options = {
-        scope: 'openid email profile', state, nonce,
+        scope: 'openid email profile', prompt: 'select_account', state, nonce,
         code_challenge_method: CodeChallengeMethod.S256,
         code_challenge: createHash('sha256').update(verifier).digest('base64url'),
       };

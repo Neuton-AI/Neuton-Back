@@ -39,7 +39,7 @@ test('Google accepts a 32-byte flow key encoded in hex or unpadded Base64url', (
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: hex.slice(2) + 'gg' }), null);
 });
 
-test('Google authorization sends only the configured callback, requested scopes, and S256 proof', () => {
+test('Google authorization requests account selection with the configured callback and S256 proof', () => {
   const adapter = createGoogleOidc(readGoogleConfig(settings)!);
   const url = new URL(adapter.authorizationUrl(proof));
   assert.equal(url.origin + url.pathname, `${issuer}/o/oauth2/v2/auth`);
@@ -48,6 +48,7 @@ test('Google authorization sends only the configured callback, requested scopes,
     redirect_uri: settings.GOOGLE_REDIRECT_URI,
     response_type: 'code',
     scope: 'openid email profile',
+    prompt: 'select_account',
     state: proof.state,
     nonce: proof.nonce,
     code_challenge_method: 'S256',
