@@ -27,8 +27,9 @@ test('opaque sessions use the account version and both strict expiry boundaries'
     assert.equal(await sessions.resolve(issued.session.id), null);
     assert.equal(issued.session.idleExpiresAt.getTime(), now.getTime() + 7 * day);
     assert.equal(issued.session.absoluteExpiresAt.getTime(), now.getTime() + 30 * day);
-    const [stored] = await connection`SELECT secret_digest FROM user_sessions WHERE id = ${issued.session.id}`;
+    const [stored] = await connection`SELECT secret_digest, sign_in_method FROM user_sessions WHERE id = ${issued.session.id}`;
     assert.equal(stored?.secret_digest, createHash('sha256').update(issued.secret).digest('hex'));
+    assert.equal(stored?.sign_in_method, 'password');
     assert.equal('secretDigest' in issued.session, false);
     assert.equal((await sessions.resolve(issued.secret))?.email, email);
 
@@ -64,7 +65,47 @@ test('opaque sessions use the account version and both strict expiry boundaries'
   }
 });
 
-test('cleanup removes expired contexts and old sessions in repeatable batches', { skip }, async () => {
+test('renewing a Google session preserves its sign-in method', { skip }, async () => {
+  const connection = postgres(url!);
+  let now = new Date('2026-01-01T00:00:00Z');
+  const sessions = new SessionService(drizzle(connection, { schema }), () => now);
+  const account = { id: randomUUID(), securityVersion: 0 };
+  try {
+    await connection`INSERT INTO users (id, email) VALUES (${account.id}, ${`${account.id}@example.test`})`;
+    const issued = await sessions.transaction((tx) => sessions.insert(tx, account, now, 'google'));
+    now = new Date(now.getTime() + 300_000);
+    const renewed = await sessions.renew(issued.session);
+    assert.equal(renewed.extended, true);
+    assert.equal(renewed.session.signInMethod, 'google');
+    assert.equal((await sessions.resolve(issued.secret))?.signInMethod, 'google');
+  } finally {
+    await connection`DELETE FROM users WHERE id = ${account.id}`;
+    await connection.end();
+  }
+});
+
+test('Google links enforce a canonical issuer and one-to-one account ownership', { skip }, async () => {
+  const connection = postgres(url!);
+  const owner = randomUUID();
+  const other = randomUUID();
+  const subject = randomUUID();
+  const link = (id: string, issuer: string, sub: string) => connection`
+    INSERT INTO google_identities (user_id, issuer, subject) VALUES (${id}, ${issuer}, ${sub})`;
+  const issuer = 'https://accounts.google.com';
+  try {
+    await connection`INSERT INTO users (id, email) VALUES
+      (${owner}, ${`${owner}@example.test`}), (${other}, ${`${other}@example.test`})`;
+    await link(owner, issuer, subject);
+    await assert.rejects(link(owner, issuer, randomUUID()), { code: '23505', constraint_name: 'google_identities_pkey' });
+    await assert.rejects(link(other, issuer, subject), { code: '23505', constraint_name: 'google_identities_issuer_subject_unique' });
+    await assert.rejects(link(other, `${issuer}/`, subject), { code: '23514', constraint_name: 'google_identities_canonical_issuer' });
+  } finally {
+    await connection`DELETE FROM users WHERE id IN (${owner}, ${other})`;
+    await connection.end();
+  }
+});
+
+test('cleanup removes expired contexts, old sessions, and expired Google attempts in repeatable batches', { skip }, async () => {
   const connection = postgres(url!);
   const now = new Date('2026-01-01T00:00:00Z');
   const timestamp = now.toISOString();
@@ -86,15 +127,22 @@ test('cleanup removes expired contexts and old sessions in repeatable batches', 
         ${timestamp}::timestamptz - interval '1 day', ${timestamp}::timestamptz - interval '1 day',
         CASE WHEN n <= 101 THEN ${timestamp}::timestamptz - interval '30 days' END
       FROM generate_series(1, 102) AS n`;
-    assert.deepEqual(await sessions.cleanup(), { sessions: 100, preAuthContexts: 100 });
-    assert.deepEqual(await sessions.cleanup(), { sessions: 1, preAuthContexts: 1 });
-    assert.deepEqual(await sessions.cleanup(), { sessions: 0, preAuthContexts: 0 });
+    const activeContext = `${prefix}${'102'.padStart(32, '0')}`;
+    await connection`INSERT INTO google_attempts (state_digest, context_digest, expires_at) VALUES
+      (${`${prefix}${'1'.padStart(32, '0')}`}, ${activeContext}, ${timestamp}),
+      (${`${prefix}${'2'.padStart(32, '0')}`}, ${activeContext}, ${timestamp}::timestamptz + interval '1 second')`;
+    assert.deepEqual(await sessions.cleanup(), { sessions: 100, preAuthContexts: 100, googleAttempts: 1 });
+    assert.deepEqual(await sessions.cleanup(), { sessions: 1, preAuthContexts: 1, googleAttempts: 0 });
+    assert.deepEqual(await sessions.cleanup(), { sessions: 0, preAuthContexts: 0, googleAttempts: 0 });
     const retained = await connection`SELECT id FROM user_sessions WHERE user_id = ${userId}`;
     assert.equal(retained.length, 1);
     const contexts = await connection`
       SELECT expires_at > ${timestamp}::timestamptz AS active
       FROM pre_auth_contexts WHERE secret_digest LIKE ${`${prefix}%`}`;
     assert.deepEqual(contexts.map(({ active }) => active), [true]);
+    const attempts = await connection`SELECT expires_at > ${timestamp}::timestamptz AS active
+      FROM google_attempts WHERE context_digest = ${activeContext}`;
+    assert.deepEqual(attempts.map(({ active }) => active), [true]);
   } finally {
     await connection`DELETE FROM pre_auth_contexts WHERE secret_digest LIKE ${`${prefix}%`}`;
     await connection`DELETE FROM users WHERE id = ${userId}`;
@@ -130,7 +178,7 @@ test('version changes serialize issuance and renewal and roll back with password
     await assert.rejects(sessions.transaction(async (tx) => {
       const { now } = await sessions.lockCurrent(tx, session);
       const version = await sessions.advanceVersion(tx, session, now, 'password_change', 'replacement-hash');
-      await sessions.insert(tx, { id, securityVersion: version }, now);
+      await sessions.insert(tx, { id, securityVersion: version }, now, 'password');
       throw new AppError(503, 'TEST_ABORT', 'Abort transaction');
     }), { code: 'TEST_ABORT' });
     const [unchanged] = await connection`SELECT password_hash, security_version FROM users WHERE id = ${id}`;

@@ -40,6 +40,7 @@ test('sign-in shares limits across two HTTP apps and fails closed before credent
   const { AuthController } = await import('../src/modules/identity/auth.controller.js');
   const { AuthService } = await import('../src/modules/identity/auth.service.js');
   const { SessionService } = await import('../src/modules/identity/session.service.js');
+  const { GoogleFlowService } = await import('../src/modules/identity/google-flow.service.js');
   const { csrfProof } = await import('../src/modules/identity/session-http.js');
   const { testApplication } = await import('./support/httpClient.js');
   const password = 'known valid password';
@@ -66,6 +67,7 @@ test('sign-in shares limits across two HTTP apps and fails closed before credent
     providers: [
       { provide: AuthService, useValue: null },
       { provide: SessionService, useValue: null },
+      { provide: GoogleFlowService, useValue: null },
     ],
   })
   class SignInProbeModule {}

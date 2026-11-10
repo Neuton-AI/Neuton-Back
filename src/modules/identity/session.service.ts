@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, inArray, isNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { preAuthContexts, userSessions, users } from '../../db/schema/index.js';
+import { googleAttempts, preAuthContexts, userSessions, users } from '../../db/schema/index.js';
 import { AppError, notFound, unauthorized } from '../../lib/errors.js';
 import { apiLogger } from '../../lib/logger/index.js';
 
@@ -13,10 +13,11 @@ const CLEANUP_BATCH_SIZE = 100;
 const RENEWAL_MS = 300_000;
 const CONTEXT_MS = 30 * 60_000;
 
-type VerifiedAccount = Pick<typeof users.$inferSelect, 'id' | 'passwordHash' | 'securityVersion'>;
-type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+type SessionAccount = Pick<typeof users.$inferSelect, 'id' | 'securityVersion'>;
+type VerifiedPasswordAccount = SessionAccount & { passwordHash: string };
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export type SessionRecord = Pick<typeof userSessions.$inferSelect,
-  'id' | 'userId' | 'securityVersion' | 'createdAt' | 'lastActivityAt' | 'idleExpiresAt' | 'absoluteExpiresAt'>;
+  'id' | 'userId' | 'securityVersion' | 'signInMethod' | 'createdAt' | 'lastActivityAt' | 'idleExpiresAt' | 'absoluteExpiresAt'>;
 
 export function sessionMetadata(session: SessionRecord) {
   return {
@@ -32,17 +33,18 @@ const sessionFields = {
   id: userSessions.id,
   userId: userSessions.userId,
   securityVersion: userSessions.securityVersion,
+  signInMethod: userSessions.signInMethod,
   createdAt: userSessions.createdAt,
   lastActivityAt: userSessions.lastActivityAt,
   idleExpiresAt: userSessions.idleExpiresAt,
   absoluteExpiresAt: userSessions.absoluteExpiresAt,
 };
 
-function digest(secret: string) {
+export function digest(secret: string) {
   return createHash('sha256').update(secret).digest('hex');
 }
 
-const validSecret = (secret: string | undefined): secret is string => Boolean(secret && /^[A-Za-z0-9_-]{43}$/.test(secret));
+export const validSecret = (secret: string | undefined): secret is string => Boolean(secret && /^[A-Za-z0-9_-]{43}$/.test(secret));
 
 function liveAt(now: Date) {
   return and(isNull(userSessions.revokedAt), gt(userSessions.idleExpiresAt, now), gt(userSessions.absoluteExpiresAt, now));
@@ -51,7 +53,9 @@ function liveAt(now: Date) {
 export class SessionService {
   private cleanupTimer?: ReturnType<typeof setInterval>;
 
-  constructor(private readonly db: Database, private readonly now: () => Date = () => new Date()) {}
+  constructor(private readonly db: Database, private readonly clock?: () => Date) {}
+
+  private now() { return this.clock?.() ?? new Date(); }
 
   onModuleInit() {
     this.cleanupTimer = setInterval(() => {
@@ -62,8 +66,9 @@ export class SessionService {
 
   onModuleDestroy() { clearInterval(this.cleanupTimer); }
 
-  async issue(account: VerifiedAccount, proofAt: Date, upgradedHash?: string) {
+  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string, contextSecret?: string) {
     return this.transaction(async (tx) => {
+      const context = await this.lockPasswordContext(tx, contextSecret);
       // Password proof happens outside the transaction. Recheck it under the same user lock as revocation.
       const [verified] = await tx.select({ id: users.id }).from(users).where(and(
         eq(users.id, account.id),
@@ -74,15 +79,17 @@ export class SessionService {
       if (upgradedHash) {
         await tx.update(users).set({ passwordHash: upgradedHash }).where(eq(users.id, verified.id));
       }
-      return this.insert(tx, account, proofAt);
+      await this.consumeContext(tx, context?.secretDigest);
+      return this.insert(tx, account, proofAt, 'password');
     });
   }
 
-  async insert(tx: Transaction, account: Pick<VerifiedAccount, 'id' | 'securityVersion'>, proofAt: Date) {
+  async insert(tx: Transaction, account: SessionAccount, proofAt: Date, signInMethod: SessionRecord['signInMethod']) {
     const secret = randomBytes(32).toString('base64url');
     const [session] = await tx.insert(userSessions).values({
       userId: account.id,
       securityVersion: account.securityVersion,
+      signInMethod,
       secretDigest: digest(secret),
       createdAt: proofAt,
       lastActivityAt: proofAt,
@@ -117,6 +124,23 @@ export class SessionService {
     });
   }
 
+  async lockContext(tx: Transaction, secret: string | undefined) {
+    if (!validSecret(secret)) return null;
+    const [context] = await tx.select().from(preAuthContexts)
+      .where(eq(preAuthContexts.secretDigest, digest(secret))).for('update');
+    return context ?? null;
+  }
+
+  async lockPasswordContext(tx: Transaction, secret: string | undefined) {
+    const context = await this.lockContext(tx, secret);
+    if (secret && !context) throw new AppError(409, 'AUTH_CONTEXT_CHANGED', 'Your browser sign-in changed. Try again.');
+    return context;
+  }
+
+  async consumeContext(tx: Transaction, contextDigest?: string) {
+    if (contextDigest) await tx.delete(preAuthContexts).where(eq(preAuthContexts.secretDigest, contextDigest));
+  }
+
   async createContext() {
     const secret = randomBytes(32).toString('base64url');
     const expires = new Date(this.now().getTime() + CONTEXT_MS);
@@ -124,11 +148,12 @@ export class SessionService {
     return { secret, expires };
   }
 
-  async lockCurrent(tx: Transaction, session: SessionRecord) {
-    const [account] = await tx.select({ id: users.id, securityVersion: users.securityVersion, passwordHash: users.passwordHash })
+  async lockCurrent(tx: Transaction, session: SessionRecord, clock?: () => Promise<Date>) {
+    const [account] = await tx.select({ id: users.id, securityVersion: users.securityVersion, passwordHash: users.passwordHash,
+      googleLinkRevision: users.googleLinkRevision })
       .from(users).where(eq(users.id, session.userId)).for('update');
     if (account?.securityVersion !== session.securityVersion) throw unauthorized();
-    const now = this.now();
+    const now = clock ? await clock() : this.now();
     const [current] = await tx.select(sessionFields).from(userSessions)
       .where(and(eq(userSessions.id, session.id), eq(userSessions.userId, session.userId), liveAt(now))).for('update');
     if (!current) throw unauthorized();
@@ -174,6 +199,14 @@ export class SessionService {
     });
   }
 
+  async revokeOtherGoogleSessions(tx: Transaction, current: SessionRecord, now: Date) {
+    const revoked = await tx.update(userSessions).set({ revokedAt: now, revocationReason: 'google_unlink' })
+      .where(and(eq(userSessions.userId, current.userId), ne(userSessions.id, current.id),
+        eq(userSessions.signInMethod, 'google'), isNull(userSessions.revokedAt)))
+      .returning({ id: userSessions.id });
+    return revoked.length;
+  }
+
   async advanceVersion(tx: Transaction, session: SessionRecord, now: Date, reason: 'sign_out_all' | 'password_change', passwordHash?: string) {
     const securityVersion = session.securityVersion + 1;
     await tx.update(users).set({ securityVersion, passwordHash }).where(eq(users.id, session.userId));
@@ -197,11 +230,17 @@ export class SessionService {
       const staleContexts = tx.select({ digest: preAuthContexts.secretDigest }).from(preAuthContexts)
         .where(lte(preAuthContexts.expiresAt, now)).orderBy(preAuthContexts.expiresAt, preAuthContexts.secretDigest)
         .limit(CLEANUP_BATCH_SIZE).for('update', { skipLocked: true });
+      const staleAttempts = tx.select({ digest: googleAttempts.stateDigest }).from(googleAttempts)
+        .where(lte(googleAttempts.expiresAt, this.clock ? now : sql`statement_timestamp()`))
+        .orderBy(googleAttempts.expiresAt, googleAttempts.stateDigest)
+        .limit(CLEANUP_BATCH_SIZE).for('update', { skipLocked: true });
       const removedSessions = await tx.delete(userSessions).where(inArray(userSessions.id, staleSessions))
         .returning({ id: userSessions.id });
       const removedContexts = await tx.delete(preAuthContexts).where(inArray(preAuthContexts.secretDigest, staleContexts))
         .returning({ digest: preAuthContexts.secretDigest });
-      return { sessions: removedSessions.length, preAuthContexts: removedContexts.length };
+      const removedAttempts = await tx.delete(googleAttempts).where(inArray(googleAttempts.stateDigest, staleAttempts))
+        .returning({ digest: googleAttempts.stateDigest });
+      return { sessions: removedSessions.length, preAuthContexts: removedContexts.length, googleAttempts: removedAttempts.length };
     }));
   }
 

@@ -10,6 +10,7 @@ export async function countPasswordHashSettings(db: Database) {
     select coalesce(substring(password_hash from ${encodedSettings}), 'unrecognized') as settings,
            count(*)::int as count
     from users
+    where password_hash is not null
     group by 1
     order by 1
   `)];

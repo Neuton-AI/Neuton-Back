@@ -9,6 +9,9 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { SessionService } from './session.service.js';
 import { createSignInLimiter, SIGN_IN_LIMITER, type SignInLimiter } from './signin-limiter.js';
+import { GoogleFlowService } from './google-flow.service.js';
+import { createGoogleOidc, GOOGLE_OIDC, readGoogleConfig, type GoogleOidc } from './google-oidc.js';
+import { GoogleAttemptStore } from './google-attempts.js';
 
 const defaultProviders: Provider[] = [
   {
@@ -41,6 +44,23 @@ const defaultProviders: Provider[] = [
     inject: [SessionService, SIGN_IN_LIMITER],
     useFactory: async (sessions: SessionService, limiter: SignInLimiter) =>
       new AuthService((await import('../../db/client.js')).db, sessions, limiter),
+  },
+  {
+    provide: GOOGLE_OIDC,
+    useFactory: async () => {
+      const config = readGoogleConfig((await import('../../env.js')).env);
+      return config && createGoogleOidc(config);
+    },
+  },
+  {
+    provide: GoogleFlowService,
+    inject: [SessionService, GOOGLE_OIDC],
+    useFactory: async (sessions: SessionService, oidc: GoogleOidc | null) => {
+      const config = readGoogleConfig((await import('../../env.js')).env);
+      if (!oidc || !config) return null;
+      const { db } = await import('../../db/client.js');
+      return new GoogleFlowService(db, new GoogleAttemptStore(sessions, config.flowKey), oidc, sessions);
+    },
   },
 ];
 

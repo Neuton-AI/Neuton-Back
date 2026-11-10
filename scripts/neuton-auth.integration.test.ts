@@ -9,9 +9,11 @@ import { pino } from 'pino';
 import { argon2id, hash } from 'argon2';
 import { SIGN_IN_LIMITER } from '../src/modules/identity/signin-limiter.js';
 import { countPasswordHashSettings } from './password-hash-report.js';
+import { waitForBlockedTransactions } from './support/postgresLocks.js';
 
 const origin = 'https://app.example.test';
 process.env.SESSION_ORIGIN = origin;
+delete process.env.GOOGLE_CLIENT_ID;
 
 type Browser = { cookie: string; proof: string };
 
@@ -50,6 +52,7 @@ test('cookie auth preserves account/shop access and enforces session ownership a
   const api = request(app.getHttpServer());
   const email = `auth-${randomUUID()}@example.test`;
   const otherEmail = `other-${randomUUID()}@example.test`;
+  const googleOnlyEmail = `google-${randomUUID()}@example.test`;
   const signupPassword = 'testpass10';
   const password = 'testpass';
   let shopId: string | undefined;
@@ -74,6 +77,18 @@ test('cookie auth preserves account/shop access and enforces session ownership a
   const signin = (browser: Browser, candidate = password) =>
     api.post('/api/v1/auth/signin').set(headers(browser)).send({ email, password: candidate });
   try {
+    await connection`WITH account AS (INSERT INTO users (email) VALUES (${googleOnlyEmail}) RETURNING id)
+      INSERT INTO google_identities (user_id, issuer, subject)
+      SELECT id, 'https://accounts.google.com', ${randomUUID()} FROM account`;
+    const missingPassword = await api.post('/api/v1/auth/signin').set(headers(await anonymous()))
+      .send({ email: googleOnlyEmail, password });
+    const unknownAccount = await signin(await anonymous());
+    assert.equal(missingPassword.status, 401);
+    assert.equal(unknownAccount.status, 401);
+    assert.equal(missingPassword.body.error.code, unknownAccount.body.error.code);
+    assert.equal(missingPassword.body.error.message, unknownAccount.body.error.message);
+    assert.equal(missingPassword.headers['set-cookie'], undefined);
+
     assert.equal((await api.post('/api/v1/auth/csrf')).status, 403);
     assert.equal((await api.post('/api/v1/auth/csrf').set('Origin', 'null')).status, 403);
     const expiredContext = await anonymous();
@@ -82,12 +97,24 @@ test('cookie auth preserves account/shop access and enforces session ownership a
     assert.equal((await signin(expiredContext)).status, 403);
 
     const preAuth = await anonymous();
+    assert.deepEqual((await api.get('/api/v1/auth/google/status').expect(200)).body, { enabled: false });
+    await api.post('/api/v1/auth/google/start').set(headers(preAuth)).send({ purpose: 'sign_in' }).expect(503);
+    await api.get('/api/v1/auth/google/callback').expect(303).expect('Location', '/signin?google=unavailable');
     const signup = (candidate = signupPassword) => api.post('/api/v1/auth/signup').set(headers(preAuth)).send({
       email: ` ${email.toUpperCase()} `, password: candidate, fullName: 'Neuton Tester',
     });
     assert.equal((await signup('testpass9')).status, 400);
     assert.equal((await signup('😀'.repeat(64) + 'a')).status, 400);
-    const attempts = await Promise.all([signup(), signup()]);
+    const preAuthDigest = createHash('sha256').update(preAuth.cookie.split('=')[1]!).digest('hex');
+    const { pending } = await connection.begin(async (gate) => {
+      const [owner] = await gate<{ pid: number }[]>`SELECT pg_backend_pid() AS pid FROM pre_auth_contexts
+        WHERE secret_digest = ${preAuthDigest} FOR UPDATE`;
+      assert.ok(owner);
+      const pending = Promise.all([signup(), signup()]);
+      await waitForBlockedTransactions(connection, owner.pid, 2);
+      return { pending };
+    });
+    const attempts = await pending;
     assert.deepEqual(attempts.map((result) => result.status).sort(), [201, 409]);
     const created = attempts.find((result) => result.status === 201)!;
     const { user } = created.body;
@@ -228,7 +255,7 @@ test('cookie auth preserves account/shop access and enforces session ownership a
       .send({ currentPassword: unicodePassword, newPassword: signupPassword }).expect(200);
   } finally {
     if (shopId) await connection`DELETE FROM shops WHERE id = ${shopId}`;
-    await connection`DELETE FROM users WHERE email IN (${email}, ${otherEmail})`;
+    await connection`DELETE FROM users WHERE email IN (${email}, ${otherEmail}, ${googleOnlyEmail})`;
     await app.close();
     await connection.end();
     await sql.end();

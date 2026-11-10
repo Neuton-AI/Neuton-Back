@@ -33,7 +33,7 @@ const shop = {
   privateColumn: 'hidden',
 };
 async function fixture(db: FakeDb, role = 'owner') {
-  const passwords = new FakeDb({ 'select:users': [[]] });
+  const passwords = new FakeDb({ 'select:users': [[{ hasPassword: true, googleLinked: false }]] });
   @Module({
     imports: [
       IdentityModule.register({
@@ -113,6 +113,8 @@ test('session/profile require authentication but no selected shop; profile field
       .set('Cookie', '__Host-neuton-session=test');
     assert.equal(session.status, 200);
     assert.equal(session.body.memberships[0].shop.id, SHOP_ID);
+    assert.equal(session.body.hasPassword, true);
+    assert.equal(session.body.googleLinked, false);
     const profile = await request(h.app.getHttpServer())
       .get('/api/v1/profile')
       .set('Cookie', '__Host-neuton-session=test');
