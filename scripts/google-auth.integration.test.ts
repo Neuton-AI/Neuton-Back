@@ -13,7 +13,6 @@ const base = '/api/v1/auth';
 const sessionCookie = '__Host-neuton-session';
 const contextCookie = '__Host-neuton-context';
 process.env.APP_ORIGIN = origin;
-process.env.SESSION_ORIGIN = origin;
 process.env.GOOGLE_CLIENT_ID = 'fixture-client';
 process.env.GOOGLE_CLIENT_SECRET = 'fixture-google-secret';
 process.env.GOOGLE_REDIRECT_URI = `${origin}${base}/google/callback`;

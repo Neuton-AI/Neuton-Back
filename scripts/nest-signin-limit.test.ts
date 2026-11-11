@@ -11,7 +11,7 @@ import { RedisSignInLimiter, type SignInLimiter } from '../src/modules/identity/
 
 const redisUrl = process.env.NEUTON_TEST_REDIS_URL;
 const origin = 'https://signin-limit.example.test';
-process.env.SESSION_ORIGIN = origin;
+process.env.APP_ORIGIN = origin;
 
 test('sign-in shares limits across two HTTP apps and fails closed before credential lookup', {
   skip: !redisUrl && 'set NEUTON_TEST_REDIS_URL to an isolated loopback Redis instance',

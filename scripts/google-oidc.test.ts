@@ -17,9 +17,7 @@ const proof = { state: 'test-state', nonce: 'test-nonce', verifier: 'v'.repeat(4
 
 test('Google requires complete settings and the exact same-origin callback', () => {
   assert.ok(readGoogleConfig(settings));
-  assert.ok(readGoogleConfig({ ...settings, SESSION_ORIGIN: settings.APP_ORIGIN }));
   assert.equal(readGoogleConfig({ ...settings, APP_ORIGIN: undefined }), null);
-  assert.equal(readGoogleConfig({ ...settings, SESSION_ORIGIN: 'https://other.example.test' }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_CLIENT_SECRET: undefined }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: undefined }), null);
   assert.equal(readGoogleConfig({ ...settings, GOOGLE_OAUTH_FLOW_KEY: 'invalid' }), null);

@@ -10,7 +10,7 @@ import { SIGN_IN_LIMITER } from '../src/modules/identity/signin-limiter.js';
 const origin = 'https://app.example.test';
 const auth = '/api/v1/auth';
 Object.assign(process.env, {
-  APP_ORIGIN: origin, SESSION_ORIGIN: origin, GOOGLE_CLIENT_ID: 'fixture', GOOGLE_CLIENT_SECRET: 'fixture-secret',
+  APP_ORIGIN: origin, GOOGLE_CLIENT_ID: 'fixture', GOOGLE_CLIENT_SECRET: 'fixture-secret',
   GOOGLE_REDIRECT_URI: `${origin}${auth}/google/callback`, GOOGLE_OAUTH_FLOW_KEY: Buffer.alloc(32, 5).toString('base64url'),
 });
 

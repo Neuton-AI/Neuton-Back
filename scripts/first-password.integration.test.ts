@@ -9,7 +9,7 @@ import { waitForBlockedTransactions } from './support/postgresLocks.js';
 
 const origin = 'https://app.example.test';
 const auth = '/api/v1/auth';
-process.env.SESSION_ORIGIN = origin;
+process.env.APP_ORIGIN = origin;
 
 test('a Google-only account can add its first password exactly once and keep existing sessions', {
   skip: skipWithoutDisposableDatabase,

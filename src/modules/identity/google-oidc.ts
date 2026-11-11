@@ -9,7 +9,7 @@ export const GOOGLE_CALLBACK_PATH = '/api/v1/auth/google/callback';
 export const GOOGLE_OIDC = Symbol('GOOGLE_OIDC');
 const acceptedIssuers = [GOOGLE_ISSUER, 'accounts.google.com'];
 
-type GoogleSettings = Pick<Env, 'APP_ORIGIN' | 'SESSION_ORIGIN' | 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET'
+type GoogleSettings = Pick<Env, 'APP_ORIGIN' | 'GOOGLE_CLIENT_ID' | 'GOOGLE_CLIENT_SECRET'
   | 'GOOGLE_REDIRECT_URI' | 'GOOGLE_OAUTH_FLOW_KEY'>;
 
 type GoogleConfig = { clientId: string; clientSecret: string; redirectUri: string; flowKey: Buffer };
@@ -29,9 +29,8 @@ export interface GoogleOidc {
 }
 
 export function readGoogleConfig(settings: GoogleSettings): GoogleConfig | null {
-  const { APP_ORIGIN: origin, SESSION_ORIGIN: legacyOrigin, GOOGLE_CLIENT_ID: clientId,
+  const { APP_ORIGIN: origin, GOOGLE_CLIENT_ID: clientId,
     GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_REDIRECT_URI: redirectUri, GOOGLE_OAUTH_FLOW_KEY: encodedKey } = settings;
-  if (legacyOrigin && legacyOrigin !== origin) return null;
   if (!clientId || !clientSecret || !origin || redirectUri !== `${origin}${GOOGLE_CALLBACK_PATH}` || !encodedKey) {
     return null;
   }

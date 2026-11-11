@@ -51,7 +51,6 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   DIRECT_DATABASE_URL: emptyToUndefined(z.string()),
-  SESSION_ORIGIN: emptyToUndefined(z.string().url()),
   APP_ORIGIN: emptyToUndefined(z.string()),
   GOOGLE_CLIENT_ID: emptyToUndefined(z.string()),
   GOOGLE_CLIENT_SECRET: emptyToUndefined(z.string()),
@@ -165,15 +164,14 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.superRefine((settings, context) => {
-  const origin = settings.SESSION_ORIGIN ?? settings.APP_ORIGIN;
+  const origin = settings.APP_ORIGIN;
   if (!origin && settings.NODE_ENV !== 'production') return;
   const url = origin && URL.canParse(origin) ? new URL(origin) : null;
   const localHttp = url?.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url?.origin === origin && (url?.protocol === 'https:' || (settings.NODE_ENV !== 'production' && localHttp))) {
     return;
   }
-  const setting = settings.SESSION_ORIGIN || !settings.APP_ORIGIN ? 'SESSION_ORIGIN' : 'APP_ORIGIN';
-  context.addIssue({ code: 'custom', path: [setting], message: 'Expected an exact HTTPS origin or an explicit localhost development origin' });
+  context.addIssue({ code: 'custom', path: ['APP_ORIGIN'], message: 'Expected an exact HTTPS origin or an explicit localhost development origin' });
 }).safeParse(process.env);
 
 if (!parsed.success) {
@@ -186,7 +184,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
-export const sessionOrigin = env.SESSION_ORIGIN ?? env.APP_ORIGIN;
+export const sessionOrigin = env.APP_ORIGIN;
 
 export type Env = typeof env;
 

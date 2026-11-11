@@ -6,7 +6,6 @@ import type { Request } from 'express';
 
 test('development accepts the default Vite loopback origins with no origin setting', async () => {
   process.env.NODE_ENV = 'development';
-  delete process.env.SESSION_ORIGIN;
   delete process.env.APP_ORIGIN;
   const { requireOrigin, sessionSecret } = await import('../src/modules/identity/session-http.js');
   const request = (origin?: string) => ({ headers: { origin, cookie: 'neuton-session-local=fixture' } } as Request);
@@ -19,17 +18,15 @@ test('development accepts the default Vite loopback origins with no origin setti
   }
 });
 
-test('production uses APP_ORIGIN as a fallback for the existing session origin', () => {
+test('production uses APP_ORIGIN as the session origin', () => {
   const origin = 'https://app.example.test';
-  for (const sessionOrigin of ['', 'https://session.example.test']) {
-    const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
-      import assert from 'node:assert/strict';
-      import { sessionOrigins } from './src/modules/identity/session-http.ts';
-      assert.deepEqual(sessionOrigins, [process.env.SESSION_ORIGIN || process.env.APP_ORIGIN]);
-    `], {
-      env: { ...process.env, NODE_ENV: 'production', SESSION_ORIGIN: sessionOrigin, APP_ORIGIN: origin },
-      encoding: 'utf8', windowsHide: true,
-    });
-    assert.equal(result.status, 0, result.stderr);
-  }
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { sessionOrigins } from './src/modules/identity/session-http.ts';
+    assert.deepEqual(sessionOrigins, [process.env.APP_ORIGIN]);
+  `], {
+    env: { ...process.env, NODE_ENV: 'production', APP_ORIGIN: origin },
+    encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
 });

@@ -12,7 +12,7 @@ import { countPasswordHashSettings } from './password-hash-report.js';
 import { waitForBlockedTransactions } from './support/postgresLocks.js';
 
 const origin = 'https://app.example.test';
-process.env.SESSION_ORIGIN = origin;
+process.env.APP_ORIGIN = origin;
 delete process.env.GOOGLE_CLIENT_ID;
 
 type Browser = { cookie: string; proof: string };

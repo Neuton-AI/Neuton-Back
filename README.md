@@ -63,17 +63,16 @@ stays in current inventory balances. Start the updated API and worker
 after the migration. To restore deleted data and files, use the
 pre-migration database and storage backups.
 
-Set `SESSION_ORIGIN` to the exact public HTTPS origin in production, including
+Set `APP_ORIGIN` to the exact public HTTPS origin in production, including
 scheme and any non-default port. In development, the default allowed origins
 are `http://localhost:5173`, `http://127.0.0.1:5173` and `http://[::1]:5173`.
-For another loopback port, set `SESSION_ORIGIN` to that exact address before
+For another loopback port, set `APP_ORIGIN` to that exact address before
 starting the API. Local HTTP uses a separate session cookie name.
 
 Google sign-in uses `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URI`, `APP_ORIGIN`, and `GOOGLE_OAUTH_FLOW_KEY`. Register
 `APP_ORIGIN` plus `/api/v1/auth/google/callback` as the redirect URI in Google.
-If `SESSION_ORIGIN` is also set, use the same value as `APP_ORIGIN`. Generate a
-random 32-byte flow key and encode it as 64 hex characters or unpadded Base64url.
+Generate a random 32-byte flow key and encode it as 64 hex characters or unpadded Base64url.
 Use the same key on every API instance in the environment.
 
 | Endpoint | Body | Success |
