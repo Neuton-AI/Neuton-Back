@@ -118,6 +118,7 @@ export async function processReceipt(
     throw new Error('Cannot process receipt without storagePath');
   }
 
+  if (!(await recipeShop(deps, data.shopId))) return;
   const jobLogger = workerLogger.child(jobLogContext(data, job));
   const startedAt = new Date();
   const deadline = new Date(
@@ -161,6 +162,7 @@ export async function processReceipt(
     'Validating extracted data',
   );
   await job.updateProgress(30);
+  if (!(await recipeShop(deps, data.shopId))) return;
 
   await saveReceipt(
     deps,
@@ -189,6 +191,7 @@ export async function processRecipe(
   if (!storagePath) {
     throw new Error('Cannot process recipe without storagePath');
   }
+  if (!(await recipeShop(deps, data.shopId))) return;
   const jobLogger = workerLogger.child(jobLogContext(data, job));
 
   // Claim the row by (shopId, storagePath) and set to 'processing'
@@ -211,6 +214,7 @@ export async function processRecipe(
   const convertedRecipe = convertRecipeToBaseUnits(extraction);
 
   const shop = await recipeShop(deps, data.shopId);
+  if (!shop) return;
   const linkedIngredientIds = await recipeLinks(
     deps,
     data.shopId,
@@ -247,6 +251,7 @@ export async function processOrderDocument(
   if (!storagePath) {
     throw new Error('Cannot process order document without storagePath');
   }
+  if (!(await recipeShop(deps, data.shopId))) return;
   const jobLogger = workerLogger.child(jobLogContext(data, job));
   const document = await loadDocumentInput(deps, data);
   const extraction = await deps.extractOrder(
@@ -263,6 +268,7 @@ export async function processOrderDocument(
     return;
   }
 
+  if (!(await recipeShop(deps, data.shopId))) return;
   await applyOrderDocument(deps, data, extraction, jobLogger);
 }
 

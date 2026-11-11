@@ -25,6 +25,6 @@ import { SyncEventsController } from './sync-events.controller.js';
     },
     { provide: SYNC_DATABASE, useValue: db },
   ],
-  exports: [SyncService],
+  exports: [SyncService, SyncEvents],
 })
 export class SyncModule { }
