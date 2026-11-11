@@ -66,7 +66,7 @@ export class SessionService {
 
   onModuleDestroy() { clearInterval(this.cleanupTimer); }
 
-  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string, contextSecret?: string) {
+  async issue(account: VerifiedPasswordAccount, proofAt: Date, upgradedHash?: string, contextSecret?: string, platform = 'Unknown') {
     return this.transaction(async (tx) => {
       const context = await this.lockPasswordContext(tx, contextSecret);
       // Password proof happens outside the transaction. Recheck it under the same user lock as revocation.
@@ -80,16 +80,17 @@ export class SessionService {
         await tx.update(users).set({ passwordHash: upgradedHash }).where(eq(users.id, verified.id));
       }
       await this.consumeContext(tx, context?.secretDigest);
-      return this.insert(tx, account, proofAt, 'password');
+      return this.insert(tx, account, proofAt, 'password', platform);
     });
   }
 
-  async insert(tx: Transaction, account: SessionAccount, proofAt: Date, signInMethod: SessionRecord['signInMethod']) {
+  async insert(tx: Transaction, account: SessionAccount, proofAt: Date, signInMethod: SessionRecord['signInMethod'], platform = 'Unknown') {
     const secret = randomBytes(32).toString('base64url');
     const [session] = await tx.insert(userSessions).values({
       userId: account.id,
       securityVersion: account.securityVersion,
       signInMethod,
+      deviceLabel: platform,
       secretDigest: digest(secret),
       createdAt: proofAt,
       lastActivityAt: proofAt,

@@ -10,6 +10,7 @@ import { existingPasswordSchema, newPasswordSchema } from './password-policy.js'
 import { GoogleFlowService } from './google-flow.service.js';
 import type { GoogleAttemptBinding } from './google-attempts.js';
 import { signupEmail, signupName } from './signup-fields.js';
+import { platformFromUserAgent } from './session-platform.js';
 import {
   clearContextCookie, clearSessionCookie, contextSecret, csrfProof, protectSessionMutation,
   requireJson, requireMatchingSession, requireOrigin, requireProof, sessionSecret, setContextCookie, setSessionCookie,
@@ -143,7 +144,9 @@ export class AuthController {
       request.log.info({ event: 'google_link_completed', userId: session.userId }, 'Google link completed');
       return { outcome, destination: '/profile' };
     }
-    const { outcome, secret, session } = await this.google.completeSignIn(await this.googleSignInBinding(request), completionId);
+    const { outcome, secret, session } = await this.google.completeSignIn(
+      await this.googleSignInBinding(request), completionId, platformFromUserAgent(request.headers['user-agent']),
+    );
     setSessionCookie(response, secret, session);
     clearContextCookie(response);
     request.log.info({ event: 'google_sign_in_completed', outcome, userId: session.userId, sessionId: session.id }, 'Google sign-in completed');
@@ -186,7 +189,7 @@ export class AuthController {
   @Header('Cache-Control', 'no-store')
   async signup(@Req() request: HttpRequest, @Res({ passthrough: true }) response: Response, @Body() body: unknown) {
     const context = await this.credentialProof(request);
-    const { user, secret, session } = await this.auth.signup(signupSchema.parse(body), context);
+    const { user, secret, session } = await this.auth.signup(signupSchema.parse(body), context, platformFromUserAgent(request.headers['user-agent']));
     setSessionCookie(response, secret, session);
     clearContextCookie(response);
     request.log.info({ event: 'session_created', userId: user.id, sessionId: session.id }, 'Session created');
@@ -200,7 +203,7 @@ export class AuthController {
     const context = await this.credentialProof(request);
     const sourceIp = request.ip ?? request.socket.remoteAddress;
     const { user, secret, session } = await this.auth.signin(
-      signinSchema.parse(body), sourceIp && ipKeyGenerator(sourceIp, 128), context,
+      signinSchema.parse(body), sourceIp && ipKeyGenerator(sourceIp, 128), context, platformFromUserAgent(request.headers['user-agent']),
     );
     setSessionCookie(response, secret, session);
     clearContextCookie(response);

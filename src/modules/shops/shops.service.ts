@@ -94,9 +94,9 @@ export class ShopsService {
       profile: await this.persistence.updateProfile(actor.user.id, body),
     };
   }
-  password(actor: SessionActor, body: z.infer<typeof passwordSchema>) {
+  password(actor: SessionActor, body: z.infer<typeof passwordSchema>, platform: string) {
     if (!actor.session) throw unauthorized();
-    return this.auth.changePassword(actor.session, body);
+    return this.auth.changePassword(actor.session, body, platform);
   }
   delivery(actor: ActorContext, distanceKm: number) {
     requireActorRole(actor, ['owner', 'admin', 'member']);

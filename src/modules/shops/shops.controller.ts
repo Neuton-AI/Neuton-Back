@@ -16,6 +16,7 @@ import { ShopGuard } from '../identity/shop.guard.js';
 import type { Response } from 'express';
 import type { HttpRequest } from '../../http/request-context.js';
 import { setSessionCookie } from '../identity/session-http.js';
+import { platformFromUserAgent } from '../identity/session-platform.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import type { ActorContext } from '../identity/contracts.js';
 import {
@@ -71,7 +72,7 @@ export class ShopsController {
     @Req() request: HttpRequest,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const { secret, session } = await this.shops.password(actor, passwordSchema.parse(body));
+    const { secret, session } = await this.shops.password(actor, passwordSchema.parse(body), platformFromUserAgent(request.headers['user-agent']));
     setSessionCookie(response, secret, session);
     request.log.info({ event: 'session_replaced', userId: session.userId, sessionId: session.id }, 'Password changed and sessions revoked');
     return { ok: true };

@@ -16,7 +16,7 @@ export class AuthService {
     private readonly signInLimiter: SignInLimiter,
   ) {}
 
-  async signup({ email, password, fullName }: Credentials & { fullName?: string }, contextSecret?: string) {
+  async signup({ email, password, fullName }: Credentials & { fullName?: string }, contextSecret: string | undefined, platform: string) {
     const passwordHash = await hashPassword(password);
     const proofAt = new Date();
     return this.sessions.transaction(async (tx) => {
@@ -33,11 +33,11 @@ export class AuthService {
       if (!account) throw conflict('Email is already registered');
       await this.sessions.consumeContext(tx, context?.secretDigest);
       const { securityVersion, ...user } = account;
-      return { user, ...await this.sessions.insert(tx, { id: user.id, securityVersion }, proofAt, 'password') };
+      return { user, ...await this.sessions.insert(tx, { id: user.id, securityVersion }, proofAt, 'password', platform) };
     });
   }
 
-  async signin({ email, password }: Credentials, sourceIp: string | undefined, contextSecret?: string) {
+  async signin({ email, password }: Credentials, sourceIp: string | undefined, contextSecret: string | undefined, platform: string) {
     let reservation: SignInReservation | null;
     try {
       if (!sourceIp) throw new Error('Missing source IP');
@@ -67,7 +67,7 @@ export class AuthService {
     const user = { id, email: accountEmail, fullName, avatarUrl };
     const proofAt = new Date();
     const upgradedHash = isLegacyPasswordHash(passwordHash) ? await hashPassword(password) : undefined;
-    const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash, contextSecret);
+    const issued = await this.sessions.issue({ id, securityVersion, passwordHash }, proofAt, upgradedHash, contextSecret, platform);
     if (!issued) throw unauthorized('Credentials changed. Sign in again.');
     return { user, ...issued };
   }
@@ -111,7 +111,7 @@ export class AuthService {
     });
   }
 
-  async changePassword(session: SessionRecord, input: { currentPassword: string; newPassword: string }) {
+  async changePassword(session: SessionRecord, input: { currentPassword: string; newPassword: string }, platform: string) {
     const [account] = await this.sessions.withStore(() => this.db.select({ passwordHash: users.passwordHash })
       .from(users).where(eq(users.id, session.userId)));
     const valid = await verifyPassword(input.currentPassword, account?.passwordHash);
@@ -123,7 +123,7 @@ export class AuthService {
       const { account: locked, now } = await this.sessions.lockCurrent(tx, session);
       if (locked.passwordHash !== account.passwordHash) throw conflict('Password changed. Try again.');
       const securityVersion = await this.sessions.advanceVersion(tx, session, now, 'password_change', passwordHash);
-      return this.sessions.insert(tx, { id: session.userId, securityVersion }, proofAt, 'password');
+      return this.sessions.insert(tx, { id: session.userId, securityVersion }, proofAt, 'password', platform);
     });
   }
 }

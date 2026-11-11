@@ -44,13 +44,13 @@ export class GoogleFlowService {
     }
   }
 
-  async completeSignIn(binding: Extract<GoogleAttemptBinding, { purpose: 'sign_in' }>, completionId: string) {
+  async completeSignIn(binding: Extract<GoogleAttemptBinding, { purpose: 'sign_in' }>, completionId: string, platform: string) {
     const result = await this.attempts.consume(binding, completionId, async (tx, proof) => {
       try {
         // A savepoint rolls back a losing signup without making the proof reusable.
         return await tx.transaction(async (accountTx) => {
           const { account, outcome } = await googleSignInAccount(accountTx, proof);
-          const issued = await this.sessions.insert(accountTx, account, new Date(), 'google');
+          const issued = await this.sessions.insert(accountTx, account, new Date(), 'google', platform);
           await this.sessions.consumeContext(accountTx, digest(binding.contextSecret));
           return { ...issued, outcome };
         });
