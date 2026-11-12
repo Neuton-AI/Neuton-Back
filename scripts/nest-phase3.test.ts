@@ -16,6 +16,7 @@ import {
 } from '../src/modules/shops/shops.persistence.js';
 import { AuthService } from '../src/modules/identity/auth.service.js';
 import { SessionService } from '../src/modules/identity/session.service.js';
+import { SyncEvents } from '../src/modules/sync/sync-events.js';
 import { AnalyticsController } from '../src/modules/analytics/analytics.controller.js';
 import { AnalyticsService } from '../src/modules/analytics/analytics.service.js';
 import {
@@ -54,6 +55,8 @@ async function fixture(db: FakeDb, role = 'owner') {
     controllers: [ShopsController, AnalyticsController],
     providers: [
       { provide: SHOPS_AUDIT, useValue: async () => {} },
+      // ShopsService notifies live sync when a shop is removed.
+      { provide: SyncEvents, useValue: new SyncEvents() },
       ShopsService,
       ShopsPersistence,
       AnalyticsService,

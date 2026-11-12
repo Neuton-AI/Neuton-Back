@@ -38,12 +38,32 @@ interface Harness {
   extracted: { storagePath: string | null; mimeType: string; data: string }[];
 }
 
+const DEFAULT_SHOP = { hourlyLaborCost: '0', targetProfitMargin: '0.00' };
+
+/**
+ * Every handler now starts by confirming the shop still exists: a shop deleted
+ * while its document is queued must stop the work. The handlers read the shop
+ * once or twice (orders read it a third time while pricing), so pad whatever a
+ * test scripted with its last row instead of consuming the queue empty.
+ */
+function shopResponses(responses: FakeResponses = {}): FakeResponses {
+  const scripted = responses['select:shops'];
+  if (!scripted?.length) {
+    return {
+      ...responses,
+      'select:shops': [[DEFAULT_SHOP], [DEFAULT_SHOP], [DEFAULT_SHOP]],
+    };
+  }
+  const last = scripted[scripted.length - 1];
+  return { ...responses, 'select:shops': [...scripted, last, last] };
+}
+
 function harness(options: {
   responses?: FakeResponses;
   extractions?: ExtractionStubs;
   data?: Partial<MediaJobData>;
 } = {}): Harness {
-  const db = new FakeDb(options.responses ?? {});
+  const db = new FakeDb(shopResponses(options.responses));
   const extracted: Harness['extracted'] = [];
   const jobData: MediaJobData = {
     shopId: SHOP_ID,
@@ -607,7 +627,6 @@ test('recipe: a missing or non-positive yield falls back to a single portion', a
   for (const yieldQuantity of [null, 0, -4]) {
     const { db, deps, job, jobData } = harness({
       responses: {
-        'select:shops': [[]],
         'select:inventoryItems': [[], []],
         'insert:inventoryItems': [[]],
         'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
@@ -626,7 +645,6 @@ test('recipe: a missing or non-positive yield falls back to a single portion', a
 test('recipe: a negative prep time is clamped to zero', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:shops': [[]],
       'insert:recipes': [[{ id: 'rec-1', name: 'Focaccia' }]],
     },
     extractions: { recipe: { ...RECIPE, prepTimeMinutes: -20, ingredients: [] } },
@@ -654,7 +672,7 @@ test('recipe: a nameless or unusable extraction fails the job', async () => {
 
 test('recipe: a recipe row that never comes back fails the job rather than costing nothing', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:shops': [[]], 'insert:recipes': [[]] },
+    responses: { 'insert:recipes': [[]] },
     extractions: { recipe: { ...RECIPE, ingredients: [] } },
   });
 
@@ -868,7 +886,10 @@ test('order: a document with no target order writes nothing', async () => {
 
   await processOrderDocument(deps, jobData, job);
 
-  assert.equal(db.calls.length, 0);
+  // The handler still confirms the shop exists, but a document with no target
+  // order must not read or write any order row.
+  assert.equal(db.callsTo('select', 'orders').length, 0);
+  assert.equal(db.calls.filter((call) => call.op !== 'select').length, 0);
 });
 
 test('order: an unknown order is a no-op, not a crash', async () => {
@@ -880,13 +901,13 @@ test('order: an unknown order is a no-op, not a crash', async () => {
 
   await processOrderDocument(deps, jobData, job);
 
-  assert.equal(db.calls.length, 1);
+  assert.equal(db.callsTo('select', 'orders').length, 1);
   assert.equal(db.transactionCount, 0);
 });
 
 test('order: lines that match no recipe leave the order untouched', async () => {
   const { db, deps, job, jobData } = harness({
-    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
+    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]] },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Mystery', quantity: 1, unitPrice: null }] } },
   });
@@ -1000,7 +1021,7 @@ function groupedHarness(options: Parameters<typeof harness>[0] = {}): Harness {
 }
 test('runJob: routes every media kind to its handler', async () => {
   const orderRun = groupedHarness({
-    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]], 'select:shops': [[]] },
+    responses: { 'select:orders': [[{ ...ORDER }]], 'select:recipes': [[]] },
     data: { kind: 'order', orderId: 'order-1' },
     extractions: { order: { customerName: null, destinationAddress: null, items: [{ name: 'Focaccia', quantity: 1, unitPrice: null }] } },
   });
@@ -1010,7 +1031,7 @@ test('runJob: routes every media kind to its handler', async () => {
 
   // `product` shares the recipe pipeline.
   const productRun = groupedHarness({
-    responses: { 'select:shops': [[]], 'insert:recipes': [[{ id: 'rec-1', name: 'Bread' }]] },
+    responses: { 'insert:recipes': [[{ id: 'rec-1', name: 'Bread' }]] },
     data: { kind: 'product' },
     extractions: { recipe: { ...RECIPE, ingredients: [] } },
   });

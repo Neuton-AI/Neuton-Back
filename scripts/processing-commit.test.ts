@@ -44,9 +44,16 @@ test('processing success waits for the durable processed marker to commit', asyn
         },
       ],
     };
+    // Each run locks the upload, reads its document, re-reads the upload, then
+    // saves the receipt and confirms the shop still exists. Two runs need two
+    // of everything, in that order.
     const db = new FakeDb({
-      'select:mediaUploads': [[upload], [upload]],
-      'select:receipts': [[{ id }], [{ id }]],
+      'select:mediaUploads': [[upload], [upload], [upload], [upload]],
+      'select:receipts': [[{ id }], [{ id }], [{ id }], [{ id }]],
+      'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '0.00' }],
+        [{ hourlyLaborCost: '0', targetProfitMargin: '0.00' }],
+        [{ hourlyLaborCost: '0', targetProfitMargin: '0.00' }],
+        [{ hourlyLaborCost: '0', targetProfitMargin: '0.00' }]],
     });
     if (fail)
       db.failOn('update', 'mediaUploads', new Error('processed marker failed'));
