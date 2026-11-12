@@ -56,6 +56,16 @@ function mapProfile(row: Pick<typeof users.$inferSelect, keyof typeof profileCol
 @Injectable()
 export class ShopsPersistence {
   constructor(@Inject(SHOPS_DATABASE) readonly database: Database = db) {}
+  async membership(userId: string, shopId: string) {
+    const [row] = await this.database
+      .select({ role: shopMembers.role, shop: shops })
+      .from(shopMembers)
+      .innerJoin(shops, eq(shops.id, shopMembers.shopId))
+      .where(and(eq(shopMembers.userId, userId), eq(shopMembers.shopId, shopId)))
+      .limit(1);
+    if (!row) return null;
+    return { role: row.role, shop: mapShop(row.shop) };
+  }
   async memberships(userId: string) {
     const rows = await this.database
       .select({

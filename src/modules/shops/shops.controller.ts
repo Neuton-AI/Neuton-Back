@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
+  Param,
   Post,
   Patch,
   HttpCode,
@@ -27,6 +29,7 @@ import {
 import { ShopsService } from './shops.service.js';
 import {
   createShopSchema,
+  deleteShopSchema,
   shopSettingsSchema,
   updateProfileSchema,
   passwordSchema,
@@ -39,6 +42,13 @@ export class ShopsController {
     @CurrentSession() actor: SessionActor,
   ) {
     return this.shops.session(actor);
+  }
+  @Delete('shops/:shopId') @HttpCode(204) @Header('Cache-Control', 'no-store') @UseGuards(SessionGuard) remove(
+    @CurrentSession() actor: SessionActor,
+    @Param('shopId') shopId: string,
+    @Body() body: unknown,
+  ) {
+    return this.shops.remove(actor, shopId, deleteShopSchema.parse(body));
   }
   @Post('shops') @UseGuards(SessionGuard) create(
     @CurrentSession() actor: SessionActor,

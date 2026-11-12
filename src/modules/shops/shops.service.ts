@@ -7,13 +7,17 @@ import { ShopsPersistence } from './shops.persistence.js';
 import { AuthService } from '../identity/auth.service.js';
 import type {
   createShopSchema,
+  deleteShopSchema,
   shopSettingsSchema,
   updateProfileSchema,
   passwordSchema,
 } from './contracts.js';
 import { recordAudit, type AuditEvent } from '../../lib/audit.js';
 import { toNumber } from '../../lib/money.js';
-import { unauthorized } from '../../lib/errors.js';
+import { conflict, forbidden, notFound, unauthorized } from '../../lib/errors.js';
+import { SyncEvents } from '../sync/sync-events.js';
+import { deleteOwnedShop } from './shop-deletion.persistence.js';
+import { shopNameMatches } from './contracts.js';
 import { sessionMetadata } from '../identity/session.service.js';
 export const SHOPS_AUDIT = Symbol('SHOPS_AUDIT');
 @Injectable()
@@ -24,6 +28,7 @@ export class ShopsService {
     @Optional()
     @Inject(SHOPS_AUDIT)
     private readonly writeAudit: typeof recordAudit = recordAudit,
+    @Inject(SyncEvents) private readonly events: SyncEvents,
   ) {}
   async session(actor: SessionActor) {
     const [memberships, methods] = await Promise.all([
@@ -62,6 +67,28 @@ export class ShopsService {
       { event: eventType.toLowerCase(), shopId },
       'shop operation committed',
     );
+  }
+  async remove(actor: SessionActor, shopId: string, body: z.infer<typeof deleteShopSchema>) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(shopId)) {
+      throw notFound('Shop not found');
+    }
+    const membership = await this.persistence.membership(actor.user.id, shopId);
+    if (!membership) throw notFound('Shop not found');
+    if (membership.role !== 'owner') {
+      throw forbidden('Only the shop owner can delete this shop');
+    }
+    if (!shopNameMatches(membership.shop.name, body.name)) {
+      actor.log.info({ event: 'shop_delete_rejected', shopId, result: 'mismatch' }, 'shop delete rejected');
+      throw conflict('The shop name does not match.');
+    }
+    await deleteOwnedShop(this.persistence.database, {
+      shopId,
+      userId: actor.user.id,
+      name: body.name,
+      traceId: actor.traceId,
+    });
+    this.events.removed(shopId);
+    actor.log.info({ event: 'shop_deleted', shopId, userId: actor.user.id }, 'shop deleted');
   }
   async create(actor: SessionActor, body: z.infer<typeof createShopSchema>) {
     const shop = await this.persistence.create(actor.user.id, body);

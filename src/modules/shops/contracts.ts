@@ -22,6 +22,14 @@ export const shopSettingsSchema = z.object({
   timezone: htmlFree(z.string().trim().min(1).max(80)).optional(),
 });
 
+export const deleteShopSchema = z.object({
+  name: z.string(),
+}).strict();
+
+export function shopNameMatches(storedName: string, typedName: string) {
+  return storedName === typedName;
+}
+
 export const createShopSchema = z.object({
   name: htmlFree(z.string().trim().min(2).max(120)),
   storeAddress: htmlFree(z.string().trim().max(300)).optional(),

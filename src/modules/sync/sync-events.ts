@@ -1,5 +1,5 @@
 /** Application events contain no database/provider types or document payloads. */
-export type SyncEvent = 'document-change' | 'reconcile' | 'unavailable';
+export type SyncEvent = 'document-change' | 'reconcile' | 'unavailable' | 'removed';
 export abstract class SyncEventSource {
   abstract ready(): Promise<void>;
   abstract close(): Promise<void>;
@@ -27,5 +27,8 @@ export class SyncEvents {
   unavailable() {
     for (const listeners of [...this.shops.values()])
       for (const receive of [...listeners]) receive('unavailable');
+  }
+  removed(shop: string) {
+    for (const receive of [...(this.shops.get(shop) ?? [])]) receive('removed');
   }
 }

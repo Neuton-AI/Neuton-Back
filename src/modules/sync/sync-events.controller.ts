@@ -72,7 +72,7 @@ export class SyncEventsController {
       });
       response.flushHeaders();
       detach = this.events.subscribe(actor.shop.id, (event) => {
-        if (event === 'unavailable') {
+        if (event === 'unavailable' || event === 'removed') {
           stop();
           return;
         }
