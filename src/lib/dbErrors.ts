@@ -65,6 +65,16 @@ function codeOf(value: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+export function getDatabaseErrorCode(error: unknown): string | undefined {
+  let candidate = error;
+  for (let depth = 0; candidate && depth < 5; depth += 1) {
+    const code = codeOf(candidate);
+    if (code) return code;
+    candidate = (candidate as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 function messageOf(value: unknown): string | undefined {
   if (value instanceof Error) return value.message;
   if (typeof value === 'string') return value;

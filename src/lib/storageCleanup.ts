@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { storageObjectDeletions } from "../db/schema/storage-cleanup.js";
+import { getDatabaseErrorCode } from "./dbErrors.js";
 import type { Logger } from "./logger/types.js";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -67,11 +68,13 @@ export class StorageCleanupDispatcher {
   start(intervalMs = 5000) {
     if (this.timer || this.stopped) return;
     const tick = () => {
-      void this.drain().catch(() =>
+      void this.drain().catch((error: unknown) =>
         this.options.log.error(
           {
             event: "storage_cleanup_dispatch_failed",
             entryPoint: "storage_cleanup",
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+            errorCode: getDatabaseErrorCode(error),
           },
           "cleanup dispatch failed",
         ),
