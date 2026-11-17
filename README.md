@@ -176,6 +176,21 @@ be configured from 1 to 60000 ms. Check the provider's `/health/ready` endpoint
 before deploying. Search needs no HTTP credentials. No database migration is
 required for Neuton.
 
+For the remote Render service, configure both the API and worker with:
+
+```dotenv
+SCRAPY_API_BASE_URL=https://scrapy-api-wx5i.onrender.com
+SCRAPY_API_TIMEOUT_MS=30000
+```
+
+Restart both processes after changing environment settings. The 5-second default
+can abort otherwise successful remote searches (logged as
+`supermarket_search_failed` with `reason: "timeout"`). Hebrew query values are
+already encoded by `URLSearchParams`; pass plain text, not pre-encoded values.
+Recipe fallback caches failed lookups for the current extraction and leaves those
+ingredients unlinked, so existing recipes are not automatically repriced when the
+service recovers or the timeout changes.
+
 `GET /v1/search` always sends `limitPerChain=10` and an explicit `queryType`:
 `sku` for exact barcodes, `name` for names. SKU strings retain leading zeros;
 barcode pricing also tries the EAN-13 equivalent of a zero-padded GTIN-14 when
