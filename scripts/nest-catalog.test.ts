@@ -115,7 +115,11 @@ test('Nest recipe list/detail preserve reviewed values with explicit nested DTOs
       assert.deepEqual(next.body, previous.json());
       const value = next.body.recipe ?? next.body.recipes[0];
       const { costing, sources, ...publicRecipe } = value;
-      assert.deepEqual(publicRecipe, JSON.parse(JSON.stringify(recipe)), 'retain every existing public recipe field');
+      assert.deepEqual(publicRecipe, {
+        ...JSON.parse(JSON.stringify(recipe)),
+        orderPricing: { unitPrice: '0.13', unitCost: '0.1000', costComplete: true },
+        orderPricingError: null,
+      }, 'retain every existing public recipe field and add the pricing projection');
       assert.deepEqual(value.steps, recipe.steps);
       assert.equal(value.yieldQuantity, '2.000');
       assert.equal(value.createdAt, createdAt.toISOString());

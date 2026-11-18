@@ -211,10 +211,10 @@ export class RecipeService {
     const rows = await this.persistence.listRecipes(actor.shop.id, query);
     return {
       recipes: await Promise.all(
-        rows.map(async (recipe) => ({
-          ...recipe,
-          costing: await this.costing(actor, recipe),
-        })),
+        rows.map(async (recipe) => {
+          const { orderPricing, orderPricingError, ...costing } = await this.costing(actor, recipe);
+          return { ...recipe, costing, orderPricing, orderPricingError };
+        }),
       ),
     };
   }
@@ -225,9 +225,9 @@ export class RecipeService {
   ): Promise<{ recipe: RecipeDetailDto }> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const recipe = await this.persistence.recipe(actor.shop.id, id);
-    const costing = await this.costing(actor, recipe);
+    const { orderPricing, orderPricingError, ...costing } = await this.costing(actor, recipe);
     const sources = await this.persistence.recipeSources(actor.shop.id, id);
-    return { recipe: { ...recipe, costing, sources } };
+    return { recipe: { ...recipe, costing, orderPricing, orderPricingError, sources } };
   }
 
   async orderable(

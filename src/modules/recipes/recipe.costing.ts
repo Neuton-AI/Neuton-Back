@@ -1,5 +1,6 @@
 import { toNumber } from '../../lib/money.js';
-import { calculateRetailPrice, calculateUnitCost, ingredientLineCost, checkBatchStock } from '../../lib/pricing.js';
+import { calculateOrderPricing, calculateRetailPrice, calculateUnitCost, ingredientLineCost, checkBatchStock } from '../../lib/pricing.js';
+import type { OrderPricingResult } from '../../lib/pricing.js';
 import { readRecipeCostIngredients } from './recipe.persistence.js';
 import type { ReadDatabase } from '../../db/types.js';
 import type { RecipeCostingInput, RecipeCostingDto } from './contracts.js';
@@ -11,7 +12,7 @@ export async function costRecipe(
   shopMargin: string,
   hourlyLaborCost: string,
   database?: ReadDatabase,
-): Promise<RecipeCostingDto> {
+): Promise<RecipeCostingDto & OrderPricingResult> {
   const ingredientRows = await readRecipeCostIngredients(shopId, recipe.id, database);
   const lineCosts = ingredientRows.map((i) => ingredientLineCost({
     quantity: i.baseUnitAmount, averageUnitCost: i.averageUnitCost,
@@ -51,6 +52,7 @@ export async function costRecipe(
     });
 
   return {
+    ...calculateOrderPricing(breakdown, shopMargin, recipe.targetMarginPct),
     costComplete: fullyLinked,
     unresolvedCount: breakdown.unresolvedCount,
     unitCost: fullyLinked ? breakdown.unitCost : null,

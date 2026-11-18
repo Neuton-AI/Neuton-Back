@@ -1,4 +1,5 @@
 import type { SourcePreview } from '../../db/schema/uploads.js';
+import type { OrderPricingResult } from '../../lib/pricing.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 
@@ -52,7 +53,7 @@ export interface RecipeSourceDto {
   byteSize: number;
 }
 
-export interface CostedRecipeDto extends RecipeDto {
+export interface CostedRecipeDto extends RecipeDto, OrderPricingResult {
   costing: RecipeCostingDto;
 }
 
