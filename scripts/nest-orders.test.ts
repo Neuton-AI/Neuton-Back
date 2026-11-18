@@ -80,8 +80,8 @@ test('Nest quote and create preserve pricing and force processing with transacti
           recipeId: RECIPE_ID, quantity: 2, unitPrice: 5
         }] });
     assert.equal(quote.status, 200);
-    assert.equal(quote.body.deliveryFee, 8);
-    assert.equal(quote.body.totalAmount, 18);
+    assert.equal(quote.body.deliveryFee, 5);
+    assert.equal(quote.body.totalAmount, 15);
   }
   finally {
     await h.close();
@@ -168,6 +168,54 @@ test('list and detail expose unknown historical dates and frozen line completene
     const detail = await request(h.app.getHttpServer()).get(`/api/v1/orders/${ORDER_ID}`).set(auth);
     assert.equal(detail.body.order.deliveryDate, null);
     assert.deepEqual(detail.body.order.items.map((line: { costComplete: boolean | null }) => line.costComplete), [null, false, true]);
+  } finally {
+    await h.close();
+  }
+});
+
+for (const fee of [undefined, 0, 2.35, '1.23']) {
+  test(`quote/create use final fee ${String(fee)} and ignore distance rates`, async () => {
+    for (const endpoint of ['/api/v1/orders/quote', '/api/v1/orders']) {
+      const fake = new FakeDb({ ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]],
+        'insert:orders': [[storedOrder]], 'insert:orderItems': [[]] });
+      const h = await buildNestOrdersApp('owner', fake as never);
+      try {
+        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth).send({
+          deliveryDistanceKm: 20000, ...(fee === undefined ? {} : { deliveryFee: fee }),
+          items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 5 }],
+        });
+        assert.equal(result.status, endpoint.endsWith('quote') ? 200 : 201, result.text);
+        const totals = endpoint.endsWith('quote') ? result.body : result.body.totals;
+        const expectedFee = fee === undefined ? 5 : Number(fee);
+        assert.equal(totals.deliveryFee, expectedFee);
+        assert.equal(totals.totalAmount, 5 + expectedFee);
+        assert.equal(totals.netProfit, 3, 'delivery remains excluded from profit');
+        if (endpoint.endsWith('quote')) {
+          assert.equal(result.body.ratePerKm, 0);
+        } else {
+          const inserted = fake.onlyCallTo('insert', 'orders').values as Record<string, unknown>;
+          assert.equal(inserted.deliveryFee, expectedFee.toFixed(2));
+          assert.equal(inserted.deliveryDistanceKm, '0.00');
+        }
+      } finally {
+        await h.close();
+      }
+    }
+  });
+}
+
+test('final delivery fees reject invalid values before pricing or persistence', async () => {
+  const fake = new FakeDb();
+  const h = await buildNestOrdersApp('owner', fake as never);
+  try {
+    for (const fee of ['', null, -1, 1.001, 100000000, '0x10', '1e2', {}]) {
+      for (const endpoint of ['/api/v1/orders', '/api/v1/orders/quote']) {
+        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth)
+          .send({ deliveryFee: fee, items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
+        assert.equal(result.status, 400, `invalid fee ${JSON.stringify(fee)}`);
+      }
+    }
+    assert.equal(fake.calls.length, 0);
   } finally {
     await h.close();
   }

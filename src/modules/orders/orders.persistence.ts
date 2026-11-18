@@ -4,7 +4,7 @@ import { db, type Database } from '../../db/client.js';
 import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
-import { money, quantity as qty, toNumber } from '../../lib/money.js';
+import { money, quantity as qty } from '../../lib/money.js';
 import { notFound } from '../../lib/errors.js';
 import type { CreateOrderInput, ListOrdersInput, OrderDto, PricedOrderItem, OrderTotals } from './contracts.js';
 export const ORDERS_DATABASE = Symbol('ORDERS_DATABASE');
@@ -141,7 +141,7 @@ export class OrdersPersistence {
           orderDate: body.orderDate ?? new Date(),
           deliveryDate: body.deliveryDate ?? null,
           destinationAddress: body.destinationAddress ?? null,
-          deliveryDistanceKm: toNumber(body.deliveryDistanceKm).toFixed(2),
+          deliveryDistanceKm: '0.00',
           deliveryFee: money(totals.deliveryFee),
           appliedProfitMargin: priced[0]?.appliedProfitMargin !== undefined
             ? priced[0].appliedProfitMargin.toFixed(2)

@@ -2,6 +2,10 @@ import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
+const deliveryFeeSchema = z.union([
+  z.number().finite().min(0).max(99_999_999.99).multipleOf(0.01),
+  z.string().max(11).regex(/^(0|[1-9]\d{0,7})(\.\d{1,2})?$/).transform(Number),
+]);
 export const orderItemSchema = z.object({
   recipeId: z.string().uuid(),
   /**
@@ -23,6 +27,7 @@ export const createOrderSchema = z.object({
   /** Legacy clients may omit this; omission is stored as null. */
   deliveryDate: z.string().date().refine(value => !value.startsWith('0000-'), 'Date must have a nonzero year').optional(),
   destinationAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
+  deliveryFee: deliveryFeeSchema.optional(),
   deliveryDistanceKm: z.coerce.number().min(0).max(20000).default(0),
   documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),
   items: z.array(orderItemSchema).min(1),
@@ -33,7 +38,7 @@ export const listOrdersSchema = z.object({
   search: z.string().trim().max(120).optional(), status: z.enum(ORDER_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).default(0),
 }).strict();
-export const quoteOrderSchema = z.object({ deliveryDistanceKm: z.coerce.number().min(0).default(0), items: z.array(orderItemSchema).min(1) });
+export const quoteOrderSchema = z.object({ deliveryFee: deliveryFeeSchema.optional(), deliveryDistanceKm: z.coerce.number().min(0).default(0), items: z.array(orderItemSchema).min(1) });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type QuoteOrderInput = z.infer<typeof quoteOrderSchema>;
 export type ListOrdersInput = z.infer<typeof listOrdersSchema>;

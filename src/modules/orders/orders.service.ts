@@ -5,7 +5,7 @@ import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.pe
 import { OrdersAudit } from './orders.audit.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { toNumber } from '../../lib/money.js';
-import { calculateDeliveryFee, calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
+import { calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, QuoteOrderInput, ListOrdersInput, PricedOrderItem, QuoteOrderOutput, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
 export const ORDERS_COMMIT_EFFECTS = Symbol('ORDERS_COMMIT_EFFECTS');
 export type AfterCommit = (effect: () => Promise<void>) => void;
@@ -100,13 +100,13 @@ export class OrdersService {
   async quote(actor: ActorContext, body: QuoteOrderInput): Promise<QuoteOrderOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const items = await this.price(actor, body.items);
-    const deliveryFee = calculateDeliveryFee(body.deliveryDistanceKm, actor.shop.deliveryBaseFee, actor.shop.deliveryRatePerKm);
+    const deliveryFee = body.deliveryFee ?? toNumber(actor.shop.deliveryBaseFee);
     const totals = calculateOrderTotals({ items, deliveryFee });
     return {
       items,
       deliveryDistanceKm: body.deliveryDistanceKm,
       baseFee: toNumber(actor.shop.deliveryBaseFee),
-      ratePerKm: toNumber(actor.shop.deliveryRatePerKm),
+      ratePerKm: 0,
       ...totals,
     };
   }
