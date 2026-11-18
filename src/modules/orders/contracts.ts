@@ -20,6 +20,8 @@ export const orderItemSchema = z.object({
 export const createOrderSchema = z.object({
   customerName: htmlFree(z.string().trim().max(160)).nullable().optional(),
   orderDate: z.coerce.date().optional(),
+  /** Legacy clients may omit this; omission is stored as null. */
+  deliveryDate: z.string().date().optional(),
   destinationAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
   deliveryDistanceKm: z.coerce.number().min(0).max(20000).default(0),
   documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),
@@ -35,7 +37,7 @@ export const quoteOrderSchema = z.object({ deliveryDistanceKm: z.coerce.number()
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type QuoteOrderInput = z.infer<typeof quoteOrderSchema>;
 export type ListOrdersInput = z.infer<typeof listOrdersSchema>;
-/** Decimal columns intentionally remain strings; date columns serialize as ISO timestamps. */
+/** Decimals remain strings; deliveryDate is YYYY-MM-DD, timestamps are ISO. */
 export interface OrderDto {
   id: string;
   orderNumber: number;
@@ -43,6 +45,7 @@ export interface OrderDto {
   userId: string | null;
   customerName: string | null;
   orderDate: string;
+  deliveryDate: string | null;
   destinationAddress: string | null;
   deliveryDistanceKm: string;
   deliveryFee: string;
@@ -59,6 +62,8 @@ export interface OrderItemDto {
   recipeId: string;
   name: string;
   quantity: string;
+  /** null means the historical completeness was not recorded. */
+  costComplete: boolean | null;
   unitCost: string;
   unitPrice: string;
 }
@@ -66,6 +71,7 @@ export interface PricedOrderItem {
   recipeId: string;
   name: string;
   quantity: number;
+  costComplete: boolean;
   unitCost: number;
   unitPrice: number;
   appliedProfitMargin: number;

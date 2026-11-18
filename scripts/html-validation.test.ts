@@ -101,6 +101,7 @@ test('POST /orders stores plain text verbatim — the guard rejects, it never re
       customerName,
       destinationAddress,
       orderDate: new Date('2026-01-01T00:00:00.000Z'),
+      deliveryDate: null,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       deletedAt: null,
       deliveryDistanceKm: '0.00',

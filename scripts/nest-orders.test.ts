@@ -24,6 +24,7 @@ import type { Order } from '../src/db/schema/orders.js';
 const ORDER_ID = '44444444-4444-4444-4444-444444444444';
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const storedOrder: Order = {
+  deliveryDate: null,
   id: ORDER_ID, orderNumber: 1, shopId: SHOP_ID, userId: USER_ID, customerName: 'Dana', orderDate: new Date('2026-01-01T00:00:00Z'), destinationAddress: null, deliveryDistanceKm: '0.00', deliveryFee: '5.00', appliedProfitMargin: '30.00', totalCost: '4.00', totalAmount: '15.00', documentUrl: null, status: 'processing', createdAt: new Date('2026-01-01T00:00:00Z'), deletedAt: null
 };
 const auth = { cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID };
@@ -115,6 +116,59 @@ test('Nest order authorization, missing resources and input validation have stab
     assert.equal((await request(server).post('/api/v1/orders/quote').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1.5 }] })).status, 400);
   }
   finally {
+    await h.close();
+  }
+});
+
+test('delivery dates accept only calendar strings and preserve legacy omission', () => {
+  const input = { items: [{ recipeId: RECIPE_ID, quantity: 1 }] };
+  for (const date of ['2024-02-29', '2026-11-20']) {
+    assert.equal(createOrderSchema.parse({ ...input, deliveryDate: date }).deliveryDate, date);
+  }
+  for (const date of ['2026-02-29', '2026-11-31', '2026-1-1', '2026-11-20T00:00:00Z', '', null]) {
+    assert.equal(createOrderSchema.safeParse({ ...input, deliveryDate: date }).success, false);
+  }
+  assert.equal(createOrderSchema.parse(input).deliveryDate, undefined);
+});
+
+test('order create persists the requested calendar date and server costing completeness', async () => {
+  const fake = new FakeDb({
+    ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]],
+    'insert:orders': [[{ ...storedOrder, deliveryDate: '2026-11-20' }]], 'insert:orderItems': [[]],
+  });
+  const h = await buildNestOrdersApp('owner', fake as never);
+  try {
+    const created = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth).send({
+      orderDate: '2026-11-19T23:30:00-08:00', deliveryDate: '2026-11-20',
+      items: [{ recipeId: RECIPE_ID, quantity: 1, costComplete: false }],
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.order.deliveryDate, '2026-11-20');
+    const order = fake.onlyCallTo('insert', 'orders').values as Record<string, unknown>;
+    assert.equal(order.deliveryDate, '2026-11-20');
+    assert.equal((order.orderDate as Date).toISOString(), '2026-11-20T07:30:00.000Z');
+    const lines = fake.onlyCallTo('insert', 'orderItems').values as Record<string, unknown>[];
+    assert.equal(lines[0]?.costComplete, true, 'completeness comes from server costing');
+  } finally {
+    await h.close();
+  }
+});
+
+test('list and detail expose unknown historical dates and frozen line completeness', async () => {
+  const fake = new FakeDb({
+    'select:orders': [[storedOrder], [{ count: 1 }], [storedOrder]],
+    'select:orderItems': [[null, false, true].map((costComplete) => ({
+      id: RECIPE_ID, recipeId: RECIPE_ID, name: 'Frozen name', quantity: '1.000', unitCost: '2.00', unitPrice: '5.00', costComplete,
+    }))], 'select:mediaUploads': [[]],
+  });
+  const h = await buildNestOrdersApp('member', fake as never);
+  try {
+    const list = await request(h.app.getHttpServer()).get('/api/v1/orders').set(auth);
+    assert.equal(list.body.orders[0].deliveryDate, null);
+    const detail = await request(h.app.getHttpServer()).get(`/api/v1/orders/${ORDER_ID}`).set(auth);
+    assert.equal(detail.body.order.deliveryDate, null);
+    assert.deepEqual(detail.body.order.items.map((line: { costComplete: boolean | null }) => line.costComplete), [null, false, true]);
+  } finally {
     await h.close();
   }
 });

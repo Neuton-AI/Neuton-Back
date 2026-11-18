@@ -17,6 +17,7 @@ export function mapOrder(order: Order): OrderDto {
     userId: order.userId,
     customerName: order.customerName,
     orderDate: order.orderDate.toISOString(),
+    deliveryDate: order.deliveryDate ?? null,
     destinationAddress: order.destinationAddress,
     deliveryDistanceKm: order.deliveryDistanceKm,
     deliveryFee: order.deliveryFee,
@@ -93,6 +94,7 @@ export class OrdersPersistence {
         // lines down with it.
         name: orderItemRecipeName,
         quantity: orderItems.quantity,
+        costComplete: orderItems.costComplete,
         unitCost: orderItems.unitCost,
         unitPrice: orderItems.unitPrice,
       })
@@ -137,6 +139,7 @@ export class OrdersPersistence {
           userId: userId,
           customerName: body.customerName ?? null,
           orderDate: body.orderDate ?? new Date(),
+          deliveryDate: body.deliveryDate ?? null,
           destinationAddress: body.destinationAddress ?? null,
           deliveryDistanceKm: toNumber(body.deliveryDistanceKm).toFixed(2),
           deliveryFee: money(totals.deliveryFee),
@@ -162,6 +165,7 @@ export class OrdersPersistence {
         // prefers this over the live name (N-107).
         recipeName: item.name,
         quantity: qty(item.quantity),
+        costComplete: item.costComplete,
         unitCost: money(item.unitCost),
         unitPrice: money(item.unitPrice),
       })));

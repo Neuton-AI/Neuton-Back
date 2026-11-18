@@ -6,6 +6,7 @@ export function orderRow(overrides: Partial<Order> = {}): Order {
     orderNumber: 1,
     userId: null,
     customerName: null,
+    deliveryDate: null,
     orderDate: new Date('2026-06-15'),
     destinationAddress: null,
     deliveryDistanceKm: '0.00',
