@@ -5,6 +5,7 @@ import {
   average,
   calculateDeliveryFee,
   calculateOrderTotals,
+  calculateOrderPricing,
   calculateRetailPrice,
   calculateUnitCost,
   checkBatchStock,
@@ -42,15 +43,72 @@ test('unit cost: accepts decimal strings from numeric columns', () => {
   assert.equal(result.unitCost, 3.375);
 });
 
-test('unit cost: zero yield does not produce Infinity or NaN', () => {
-  const result = calculateUnitCost({
-    ingredients: [{ quantity: 10, averageUnitCost: 1 }],
-    prepTimeMinutes: 0,
-    hourlyLaborCost: 0,
-    yieldQuantity: 0,
+test('unit cost: invalid yield has no manufactured unit price', () => {
+  for (const yieldQuantity of [0, -1, null, undefined, '', 'invalid', Infinity]) {
+    const result = calculateUnitCost({
+      ingredients: [{ quantity: 10, averageUnitCost: 1 }],
+      prepTimeMinutes: 0,
+      hourlyLaborCost: 0,
+      yieldQuantity,
+    });
+    assert.equal(result.unitCost, null);
+    assert.equal(result.costComplete, false);
+    assert.equal(result.ingredientsCost, 10);
+  }
+});
+
+test('order pricing: complete recipes preserve shop and recipe markup', () => {
+  const breakdown = calculateUnitCost({
+    ingredients: [{ quantity: 2, averageUnitCost: 3 }],
+    prepTimeMinutes: 30, hourlyLaborCost: 12, yieldQuantity: 3,
   });
-  assert.ok(Number.isFinite(result.unitCost), `unitCost was ${result.unitCost}`);
-  assert.equal(result.unitCost, 10_000_000);
+  assert.deepEqual(calculateOrderPricing(breakdown, '30', null), {
+    orderPricing: { unitPrice: '5.20', unitCost: '4.0000', costComplete: true },
+    orderPricingError: null,
+  });
+  assert.equal(calculateOrderPricing(breakdown, '30', '50').orderPricing?.unitPrice, '6.00');
+  assert.equal(calculateOrderPricing(breakdown, '30', '0').orderPricing?.unitPrice, '4.00');
+});
+
+test('order pricing: partial prices use known cost plus labor without markup', () => {
+  const breakdown = calculateUnitCost({
+    ingredients: [
+      { quantity: 1, averageUnitCost: 1 },
+      { quantity: 1, averageUnitCost: null },
+    ],
+    prepTimeMinutes: 30, hourlyLaborCost: 18, yieldQuantity: 3,
+  });
+  assert.deepEqual(calculateOrderPricing(breakdown, '30', '50'), {
+    orderPricing: { unitPrice: '3.33', unitCost: '3.3333', costComplete: false },
+    orderPricingError: null,
+  });
+});
+
+test('order pricing: labor-only, unresolved and free recipes can have zero prices', () => {
+  for (const [ingredients, hourlyLaborCost, expectedPrice, complete] of [
+    [[], 12, '6.00', false],
+    [[], 0, '0.00', false],
+    [[{ quantity: 1, averageUnitCost: null }], 0, '0.00', false],
+    [[{ quantity: 1, averageUnitCost: 0 }], 0, '0.00', true],
+  ] as const) {
+    const breakdown = calculateUnitCost({
+      ingredients: [...ingredients], prepTimeMinutes: 30, hourlyLaborCost, yieldQuantity: 1,
+    });
+    const result = calculateOrderPricing(breakdown, '30', '50');
+    assert.equal(result.orderPricing?.unitPrice, expectedPrice);
+    assert.equal(result.orderPricing?.costComplete, complete);
+  }
+});
+
+test('order pricing: malformed yield returns a recoverable data error', () => {
+  const breakdown = calculateUnitCost({
+    ingredients: [{ quantity: 1, averageUnitCost: 2 }],
+    prepTimeMinutes: 0, hourlyLaborCost: 0, yieldQuantity: 0,
+  });
+  assert.deepEqual(calculateOrderPricing(breakdown, '30'), {
+    orderPricing: null,
+    orderPricingError: { code: 'INVALID_RECIPE_YIELD', message: 'Recipe yield must be a finite positive number' },
+  });
 });
 
 test('retail price: recipe margin overrides shop margin', () => {

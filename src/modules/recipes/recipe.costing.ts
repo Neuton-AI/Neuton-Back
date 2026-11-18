@@ -32,13 +32,13 @@ export async function costRecipe(
 
   const fullyLinked = breakdown.costComplete;
 
-  const { retailPrice, appliedMarginPercent } = calculateRetailPrice(
-    breakdown.unitCost,
-    shopMargin,
-    fullyLinked ? recipe.targetMarginPct : null,
-  );
-
-  const finalRetailPrice = fullyLinked ? retailPrice : null;
+  let finalRetailPrice: number | null = null;
+  let appliedMarginPercent: number | '0.00' = '0.00';
+  if (breakdown.costComplete) {
+    const retail = calculateRetailPrice(breakdown.unitCost, shopMargin, recipe.targetMarginPct);
+    finalRetailPrice = retail.retailPrice;
+    appliedMarginPercent = retail.appliedMarginPercent;
+  }
 
   const batchAvailable =
     fullyLinked &&
@@ -58,7 +58,7 @@ export async function costRecipe(
     laborCost: breakdown.laborCost,
     batchCost: fullyLinked ? breakdown.batchCost : null,
     retailPrice: finalRetailPrice,
-    appliedMarginPercent: fullyLinked ? appliedMarginPercent : '0.00',
+    appliedMarginPercent,
     yieldQuantity: toNumber(recipe.yieldQuantity),
     inStock: batchAvailable,
     linkedCount,
