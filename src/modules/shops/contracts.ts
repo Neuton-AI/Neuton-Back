@@ -16,7 +16,9 @@ export const shopSettingsSchema = z.object({
   storeAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
   targetProfitMargin: z.coerce.number().min(0).max(999).optional(),
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).optional(),
+  /** Store default for new order fees; zero is a valid default, not a minimum. */
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).optional(),
+  /** @deprecated Compatibility field; shop delivery previews ignore distance pricing. */
   deliveryRatePerKm: z.coerce.number().min(0).max(100_000).optional(),
   currency: htmlFree(z.string().trim().length(3).toUpperCase()).optional(),
   timezone: htmlFree(z.string().trim().min(1).max(80)).optional(),
@@ -35,6 +37,7 @@ export const createShopSchema = z.object({
   storeAddress: htmlFree(z.string().trim().max(300)).optional(),
   targetProfitMargin: z.coerce.number().min(0).max(999).default(35),
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).default(18),
+  /** Keep the existing new-shop default while using it as the default order fee. */
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).default(3),
   deliveryRatePerKm: z.coerce.number().min(0).max(100_000).default(0.8),
 });
@@ -49,7 +52,7 @@ export const passwordSchema = z.object({
   newPassword: newPasswordSchema,
 });
 export const deliverySchema = z
-  .object({ distanceKm: z.coerce.number().finite().min(0) })
+  .object({ distanceKm: z.coerce.number().finite().min(0).default(0) })
   .strict();
 export interface ShopDto {
   id: string;
@@ -61,7 +64,9 @@ export interface ShopDto {
   storeAddress: string | null;
   targetProfitMargin: string;
   hourlyLaborCost: string;
+  /** Store default delivery fee; existing stored values are preserved. */
   deliveryBaseFee: string;
+  /** @deprecated Historical compatibility value, not a shop preview multiplier. */
   deliveryRatePerKm: string;
   createdAt: string;
   updatedAt: string;
