@@ -88,6 +88,7 @@ test('parallel creates come out as one gapless per-shop sequence', { skip }, asy
           url: '/api/v1/orders',
           payload: {
             customerName: `Order ${index}`,
+            destinationAddress: 'Market Street',
             deliveryDistanceKm: 0,
             items: [{ recipeId, quantity: 1 }],
           },
@@ -131,6 +132,7 @@ test('a cancelled order keeps its number and it is never handed out again', { sk
       url: '/api/v1/orders',
       payload: {
         customerName: 'Voided sale',
+        destinationAddress: 'Market Street',
         deliveryDistanceKm: 0,
         items: [{ recipeId, quantity: 1 }],
       },

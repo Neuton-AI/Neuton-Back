@@ -18,19 +18,35 @@ export const orderItemSchema = z.object({
     .int('Quantity must be a positive integer')
     .positive('Quantity must be a positive integer')
     .max(100000),
-  /** Optional override; when omitted the recipe retail price is used. */
+  /** The price shown to the user, compared by atomic review; never an override. */
+  expectedUnitPrice: z.string().max(11).regex(/^(0|[1-9]\d{0,7})\.\d{2}$/).optional(),
+  /** Legacy override, incompatible with expectedUnitPrice. */
   unitPrice: z.coerce.number().min(0).nullable().optional(),
 });
 export const createOrderSchema = z.object({
-  customerName: htmlFree(z.string().trim().max(160)).nullable().optional(),
+  customerName: htmlFree(z.string().trim().min(1).max(160)),
   orderDate: z.coerce.date().optional(),
   /** Legacy clients may omit this; omission is stored as null. */
   deliveryDate: z.string().date().refine(value => !value.startsWith('0000-'), 'Date must have a nonzero year').optional(),
-  destinationAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
+  destinationAddress: htmlFree(z.string().trim().min(1).max(300)),
   deliveryFee: deliveryFeeSchema.optional(),
   deliveryDistanceKm: z.coerce.number().min(0).max(20000).default(0),
   documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),
-  items: z.array(orderItemSchema).min(1),
+  items: z.array(orderItemSchema).min(1).max(100),
+  confirmedUnavailableRecipeIds: z.array(z.string().uuid()).max(100).optional(),
+}).superRefine((body, context) => {
+  const confirmedIds = body.confirmedUnavailableRecipeIds ?? [];
+  const submittedIds = new Set(body.items.map(item => item.recipeId));
+  if (new Set(confirmedIds).size !== confirmedIds.length || confirmedIds.some(id => !submittedIds.has(id))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['confirmedUnavailableRecipeIds'],
+      message: 'Confirmed exclusions must be unique submitted recipe IDs' });
+  }
+  body.items.forEach((item, index) => {
+    if (item.expectedUnitPrice !== undefined && item.unitPrice !== undefined && item.unitPrice !== null) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['items', index, 'unitPrice'],
+        message: 'An expected price cannot be combined with a price override' });
+    }
+  });
 });
 export const orderIdSchema = z.object({ id: z.string().uuid() });
 export const listOrdersSchema = z.object({

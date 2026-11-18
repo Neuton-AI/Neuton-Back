@@ -7,15 +7,15 @@ import { OrdersAudit } from '../src/modules/orders/orders.audit.js';
 import { createOrderSchema } from '../src/modules/orders/contracts.js';
 import { actorFor } from './support/nestOrdersApp.js';
 test('create input rejects fractional quantity and strips caller supplied lifecycle', () => {
-  assert.throws(() => createOrderSchema.parse({ items: [{ recipeId: '44444444-4444-4444-4444-444444444444', quantity: 1.5 }] }));
-  const body = createOrderSchema.parse({ status: 'delivered', items: [{ recipeId: '44444444-4444-4444-4444-444444444444', quantity: 1 }] });
+  assert.throws(() => createOrderSchema.parse({ customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: '44444444-4444-4444-4444-444444444444', quantity: 1.5 }] }));
+  const body = createOrderSchema.parse({ customerName: 'Dana', destinationAddress: 'Market Street', status: 'delivered', items: [{ recipeId: '44444444-4444-4444-4444-444444444444', quantity: 1 }] });
   assert.equal('status' in body, false);
 });
 test('business service refuses member mutations before touching persistence', async () => {
   const repository = new OrdersPersistence({} as never);
   const service = new OrdersService(repository, new OrdersAudit());
   await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444'), { statusCode: 403 });
-  await assert.rejects(service.create(actorFor('member'), { items: [], deliveryDistanceKm: 0 }), { statusCode: 403 });
+  await assert.rejects(service.create(actorFor('member'), { customerName: 'Dana', destinationAddress: 'Market Street', items: [], deliveryDistanceKm: 0 }), { statusCode: 403 });
 });
 import request from 'supertest';
 import { FakeDb } from './support/fakeDb.js';
@@ -62,7 +62,7 @@ test('Nest quote and create preserve pricing and force processing with transacti
   });
   const h = await buildNestOrdersApp('owner', fake as never);
   try {
-    const created = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth).send({ status: 'delivered', items: [{
+    const created = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', status: 'delivered', items: [{
           recipeId: RECIPE_ID, quantity: 2, unitPrice: 5
         }] });
     assert.equal(created.status, 201);
@@ -76,7 +76,7 @@ test('Nest quote and create preserve pricing and force processing with transacti
       recipeName: string;
     }[])[0]?.recipeName, 'Focaccia');
     h.use({ db: new FakeDb(pricingResponses()) as never });
-    const quote = await request(h.app.getHttpServer()).post('/api/v1/orders/quote').set(auth).send({ deliveryDistanceKm: 2, items: [{
+    const quote = await request(h.app.getHttpServer()).post('/api/v1/orders/quote').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', deliveryDistanceKm: 2, items: [{
           recipeId: RECIPE_ID, quantity: 2, unitPrice: 5
         }] });
     assert.equal(quote.status, 200);
@@ -112,8 +112,8 @@ test('Nest order authorization, missing resources and input validation have stab
     assert.equal((await request(server).get('/api/v1/orders/not-id').set(auth)).status, 400);
     assert.equal((await request(server).get(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 404);
     assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 403);
-    assert.equal((await request(server).post('/api/v1/orders').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1 }] })).status, 403);
-    assert.equal((await request(server).post('/api/v1/orders/quote').set(auth).send({ items: [{ recipeId: RECIPE_ID, quantity: 1.5 }] })).status, 400);
+    assert.equal((await request(server).post('/api/v1/orders').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: RECIPE_ID, quantity: 1 }] })).status, 403);
+    assert.equal((await request(server).post('/api/v1/orders/quote').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: RECIPE_ID, quantity: 1.5 }] })).status, 400);
   }
   finally {
     await h.close();
@@ -121,7 +121,7 @@ test('Nest order authorization, missing resources and input validation have stab
 });
 
 test('delivery dates accept only calendar strings and preserve legacy omission', () => {
-  const input = { items: [{ recipeId: RECIPE_ID, quantity: 1 }] };
+  const input = { customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: RECIPE_ID, quantity: 1 }] };
   for (const date of ['2024-02-29', '2026-11-20']) {
     assert.equal(createOrderSchema.parse({ ...input, deliveryDate: date }).deliveryDate, date);
   }
@@ -138,7 +138,7 @@ test('order create persists the requested calendar date and server costing compl
   });
   const h = await buildNestOrdersApp('owner', fake as never);
   try {
-    const created = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth).send({
+    const created = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street',
       orderDate: '2026-11-19T23:30:00-08:00', deliveryDate: '2026-11-20',
       items: [{ recipeId: RECIPE_ID, quantity: 1, costComplete: false }],
     });
@@ -180,7 +180,7 @@ for (const fee of [undefined, 0, 2.35, '1.23']) {
         'insert:orders': [[storedOrder]], 'insert:orderItems': [[]] });
       const h = await buildNestOrdersApp('owner', fake as never);
       try {
-        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth).send({
+        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street',
           deliveryDistanceKm: 20000, ...(fee === undefined ? {} : { deliveryFee: fee }),
           items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 5 }],
         });
@@ -211,7 +211,7 @@ test('final delivery fees reject invalid values before pricing or persistence', 
     for (const fee of ['', null, -1, 1.001, 100000000, '0x10', '1e2', {}]) {
       for (const endpoint of ['/api/v1/orders', '/api/v1/orders/quote']) {
         const result = await request(h.app.getHttpServer()).post(endpoint).set(auth)
-          .send({ deliveryFee: fee, items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
+          .send({ customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: fee, items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
         assert.equal(result.status, 400, `invalid fee ${JSON.stringify(fee)}`);
       }
     }

@@ -66,7 +66,7 @@ async function harness(role = 'owner', responses: Record<string, unknown[]> = {}
   return {
     db,
     async post(url: string, body?: Record<string, unknown>) {
-      const response = await testApp.app.inject({ method: 'POST', url, payload: body });
+      const response = await testApp.app.inject({ method: 'POST', url, payload: { customerName: 'Dana', destinationAddress: 'Market Street', ...body } });
       return { status: response.statusCode, body: response.json() as any };
     },
     async get(url: string) {

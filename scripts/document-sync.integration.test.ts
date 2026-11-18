@@ -146,7 +146,7 @@ test(
         values (${shopId}::uuid,${orderRecipeId}::uuid,${inventoryId}::uuid,'Flour','Flour',1,'g','g',1)`);
       const rejectedMutation = randomUUID();
       const constraintName = `sync_order_rollback_${shopId.replaceAll('-', '')}`;
-      const orderPayload = { deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
+      const orderPayload = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: '0.00', deliveryDistanceKm: 123, deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
       const orderVersion = Date.now() + 100_000;
       const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
         app.inject({ method, url: `/api/v1/orders${path}`, headers: {
@@ -193,6 +193,8 @@ test(
       assert.equal(created.statusCode, 201, created.body);
       const createdOrderId = created.json().order.id;
       assert.equal(created.json().order.deliveryDate, '2024-02-29');
+      assert.equal(created.json().order.deliveryFee, '0.00');
+      assert.equal(created.json().order.deliveryDistanceKm, '0.00');
       const downloaded = await app.inject({ method: 'GET', url: `/api/v1/orders/${createdOrderId}`,
         headers: { ...headers, 'x-sync-snapshot': 'true' } });
       assert.equal(downloaded.statusCode, 200, downloaded.body);
