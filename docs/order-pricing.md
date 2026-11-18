@@ -35,10 +35,22 @@ epsilon yield is used. The shared `calculateOrderPricing` policy is available
 for order creation integration.
 
 This provider is additive. It does not activate partial-cost order creation or
-change existing saved orders. Dependency sync rollout and migration of existing
-local snapshots are tracked separately in T02; adding response fields alone does
-not invalidate previously initialized clients. Complete-recipe markup replacement
-remains outside this initiative.
+change existing saved orders. Migration `0039_recipe_order_pricing_sync.sql`
+advances active recipe document revisions once so initialized clients pull the
+projection through normal sync. It keeps future revisions monotonic, leaves
+tombstones and other document kinds unchanged, and never updates financial or
+recipe rows. Existing dependency triggers invalidate snapshots after ingredient
+inserts/edits/deletes, inventory average-price changes, general-price changes and
+shop labor/margin changes. Reactivation downloads current pricing even when
+dependencies changed while the recipe was inactive.
 
-Source: [T01 #269](https://github.com/Neuton-AI/Neuton-Back/issues/269), under
+Apply the backend migration before switching New Order to this projection. Old
+frontend clients tolerate the additive response; new clients derive documented
+legacy prices until refreshed. Rolling back application code can leave advanced
+sync revisions in place: they cause a harmless extra download and must not be
+decremented. No dedicated pricing fetch or polling loop is needed. Complete-recipe
+markup replacement remains outside this initiative.
+
+Source: [T01 #269](https://github.com/Neuton-AI/Neuton-Back/issues/269) and
+[T02 #270](https://github.com/Neuton-AI/Neuton-Back/issues/270), under
 [New Order #268](https://github.com/Neuton-AI/Neuton-Back/issues/268).

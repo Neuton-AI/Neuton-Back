@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- Existing local recipe snapshots refresh through normal sync when order-pricing
+  projections roll out; pricing dependency changes retain existing sync behavior.
 - Recipe list, detail and sync downloads expose complete or partial order pricing,
   including known production cost and costing completeness.
 
