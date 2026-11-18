@@ -4,7 +4,8 @@ import { compareDocuments, type DocumentMeta } from '../../lib/documentSync.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { SyncPersistence, type SyncTransaction } from './sync.persistence.js';
-import { syncVersionSchema, type SyncMutation } from './contracts.js';
+import { isOrderCreateMutation, syncVersionSchema, type SyncMutation } from './contracts.js';
+import { retryTransaction } from '../../lib/transactionRetry.js';
 import { AppError } from '../../lib/errors.js';
 export type CommitEffect = (effect: () => Promise<void>) => void;
 @Injectable()
@@ -41,14 +42,22 @@ export class SyncService {
       parsedVersion = syncVersionSchema.parse(input.version);
     const baseVersion = input.baseVersion === undefined ? undefined : syncVersionSchema.parse(input.baseVersion);
     const effects: Array<() => Promise<void>> = [];
-    const result = await this.persistence.mutate(
-      { shopId: actor.shop.id, userId: actor.user.id },
-      { ...input, baseVersion, id, parsedVersion },
-      (tx) =>
-        operation(tx, (effect) => {
+    let attempts = 0;
+    const run = () => {
+      effects.length = 0;
+      attempts++;
+      if (attempts > 1) {
+        actor.log.info({ event: 'order_create_retry', attempt: attempts }, 'retrying rolled-back order creation');
+      }
+      return this.persistence.mutate(
+        { shopId: actor.shop.id, userId: actor.user.id },
+        { ...input, baseVersion, id, parsedVersion },
+        (tx) => operation(tx, (effect) => {
           effects.push(effect);
         }),
-    );
+      );
+    };
+    const result = isOrderCreateMutation(input) ? await retryTransaction(run) : await run();
     for (const effect of effects) {
       try {
         await effect();

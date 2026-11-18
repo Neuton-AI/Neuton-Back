@@ -141,7 +141,7 @@ test(
       // mutation without publishing a successful order audit.
       const orderRecipeId = randomUUID();
       await db.execute(sql`insert into recipes(id,shop_id,name,status)
-        values (${orderRecipeId}::uuid,${shopId}::uuid,'Order fixture','unverified')`);
+        values (${orderRecipeId}::uuid,${shopId}::uuid,'Order fixture','verified')`);
       await db.execute(sql`insert into recipe_ingredients(shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,quantity,raw_src_unit,base_unit,base_unit_amount)
         values (${shopId}::uuid,${orderRecipeId}::uuid,${inventoryId}::uuid,'Flour','Flour',1,'g','g',1)`);
       const rejectedMutation = randomUUID();

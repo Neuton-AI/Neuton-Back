@@ -5,6 +5,7 @@ import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, 
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { money, quantity as qty } from '../../lib/money.js';
+import { retryTransaction } from '../../lib/transactionRetry.js';
 import { notFound } from '../../lib/errors.js';
 import type { CreateOrderInput, ListOrdersInput, OrderDto, PricedOrderItem, OrderTotals } from './contracts.js';
 export const ORDERS_DATABASE = Symbol('ORDERS_DATABASE');
@@ -33,11 +34,24 @@ export function mapOrder(order: Order): OrderDto {
 @Injectable()
 export class OrdersPersistence {
   constructor(@Inject(ORDERS_DATABASE) readonly database: Database | OrdersTransaction = db) {}
-  async pricingInputs(shopId: string, recipeIds: string[]) {
-    const recipeRows = await this.database
+  async runSerializable<T>(operation: (tx: OrdersTransaction) => Promise<T>): Promise<T> {
+    return retryTransaction(() => this.database.transaction(async (tx) => {
+      await tx.setTransaction({ isolationLevel: 'serializable' });
+      return operation(tx);
+    }));
+  }
+  async currentShop(shopId: string) {
+    const [shop] = await this.database.select().from(shops).where(eq(shops.id, shopId)).limit(1);
+    if (!shop) throw notFound('Shop not found');
+    return shop;
+  }
+  async pricingInputs(shopId: string, recipeIds: string[], lockRecipes = false) {
+    const recipeQuery = this.database
       .select()
       .from(recipes)
-      .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)));
+      .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)))
+      .orderBy(asc(recipes.id));
+    const recipeRows = await (lockRecipes ? recipeQuery.for('key share') : recipeQuery);
     const ingredientRows = await this.database
       .select({
         recipeId: recipeIngredients.recipeId,
@@ -47,7 +61,7 @@ export class OrdersPersistence {
       .from(recipeIngredients)
       .leftJoin(inventoryItems, and(eq(inventoryItems.id, recipeIngredients.inventoryItemId), eq(inventoryItems.shopId, shopId)))
       .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-      .where(eq(recipeIngredients.shopId, shopId));
+      .where(and(eq(recipeIngredients.shopId, shopId), inArray(recipeIngredients.recipeId, recipeIds)));
     return { recipeRows, ingredientRows };
   }
   async list(shopId: string, query: ListOrdersInput) {

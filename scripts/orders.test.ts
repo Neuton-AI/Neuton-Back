@@ -18,7 +18,7 @@ import test from 'node:test';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { FakeDb } from './support/fakeDb.js';
-import { buildOrdersApp, SHOP_ID } from './support/ordersApp.js';
+import { buildOrdersApp, SHOP_ID, TEST_SHOP } from './support/ordersApp.js';
 import { orderItemRecipeName } from '../src/db/schema/index.js';
 
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
@@ -47,6 +47,8 @@ const orderRow = {
 const recipeRow = {
   id: RECIPE_ID,
   name: 'Focaccia',
+  isActive: true,
+  status: 'verified',
   prepTimeMinutes: 30,
   yieldQuantity: '4',
   targetMarginPct: null,
@@ -54,13 +56,14 @@ const recipeRow = {
 
 function recipeResponses() {
   return {
+    'select:shops': [[TEST_SHOP]],
     'select:recipes': [[recipeRow]],
     'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '1.000', averageUnitCost: '2.00' }]],
   };
 }
 
 async function harness(role = 'owner', responses: Record<string, unknown[]> = {}) {
-  const db = new FakeDb(responses);
+  const db = new FakeDb({ 'select:shops': [[TEST_SHOP]], ...responses });
   const testApp = await buildOrdersApp(role);
   testApp.use({ db: db as never });
   return {
@@ -542,9 +545,13 @@ for (const endpoint of ['/api/v1/orders/quote', '/api/v1/orders']) {
       'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '200', averageUnitCost: null }]],
     });
     try {
-      const result = await h.post(endpoint, { items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 20 }] });
+      const result = await h.post(endpoint, { items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 20, ...(endpoint.endsWith('quote') ? {} : { expectedUnitPrice: '3.13' }) }] });
       assert.equal(result.status, 400);
-      assert.match(result.body.error.message, /incomplete ingredient costs/);
+      if (endpoint.endsWith('quote')) {
+        assert.match(result.body.error.message, /incomplete ingredient costs/);
+      } else {
+        assert.equal(result.body.error.code, 'VALIDATION_ERROR');
+      }
       assert.equal(h.db.callsTo('insert', 'orders').length, 0);
       assert.equal(h.db.callsTo('insert', 'orderItems').length, 0);
     } finally { await h.close(); }

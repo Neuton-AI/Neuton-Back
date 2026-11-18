@@ -49,7 +49,7 @@ async function seedShop(): Promise<string> {
 
   const [recipe] = await db
     .insert(recipes)
-    .values({ shopId: SHOP_ID, name: 'Focaccia' })
+    .values({ shopId: SHOP_ID, name: 'Focaccia', status: 'verified' })
     .returning();
   if (!recipe) throw new Error('fixture: recipe insert returned no row');
 

@@ -3,14 +3,16 @@ import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.persistence.js';
 import { OrdersAudit } from './orders.audit.js';
-import { badRequest, conflict, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
 import { toNumber } from '../../lib/money.js';
-import { calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
+import { calculateOrderPricing, calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, QuoteOrderInput, ListOrdersInput, PricedOrderItem, QuoteOrderOutput, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
+import { reviewOrder, type OrderReviewState } from './order-review.js';
 export const ORDERS_COMMIT_EFFECTS = Symbol('ORDERS_COMMIT_EFFECTS');
 export type AfterCommit = (effect: () => Promise<void>) => void;
 @Injectable()
 export class OrdersService {
+  private transaction?: OrdersTransaction;
   constructor(
     @Inject(OrdersPersistence) readonly persistence: OrdersPersistence,
     @Inject(OrdersAudit) readonly audit: OrdersAudit,
@@ -18,7 +20,9 @@ export class OrdersService {
   ) {}
   /** The outer transaction owner must run registered effects only after commit. */
   inTransaction(transaction: OrdersTransaction, afterCommit: AfterCommit): OrdersService {
-    return new OrdersService(new OrdersPersistence(transaction), this.audit, afterCommit);
+    const service = new OrdersService(new OrdersPersistence(transaction), this.audit, afterCommit);
+    service.transaction = transaction;
+    return service;
   }
   private async committed(effect: () => Promise<void>) {
     if (this.deferEffect)
@@ -112,9 +116,62 @@ export class OrdersService {
   }
   async create(actor: ActorContext, body: CreateOrderInput): Promise<CreateOrderOutput> {
     requireActorRole(actor, ['owner', 'admin']);
-    const quote = await this.quote(actor, body);
-    const totals = calculateOrderTotals({ items: quote.items, deliveryFee: quote.deliveryFee });
-    const created = await this.persistence.create(actor.shop.id, actor.user.id, body, quote.items, totals);
+    if (!this.transaction) {
+      const effects: Array<() => Promise<void>> = [];
+      let attempts = 0;
+      const result = await this.persistence.runSerializable(tx => {
+        effects.length = 0;
+        attempts++;
+        if (attempts > 1) {
+          actor.log.info({ event: 'order_create_retry', attempt: attempts }, 'retrying rolled-back order creation');
+        }
+        return this.inTransaction(tx, effect => effects.push(effect)).create(actor, body);
+      });
+      for (const effect of effects) await effect();
+      return result;
+    }
+    const shop = await this.persistence.currentShop(actor.shop.id);
+    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, body.items.map(item => item.recipeId), true);
+    const states: OrderReviewState[] = [];
+    const priced: PricedOrderItem[] = [];
+    for (const item of body.items) {
+      const recipe = recipeRows.find(row => row.id === item.recipeId);
+      if (!recipe) {
+        states.push({ recipeId: item.recipeId, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (!recipe.isActive || recipe.status !== 'verified') {
+        states.push({ recipeId: item.recipeId, reason: recipe.isActive ? 'UNVERIFIED' : 'INACTIVE' });
+        continue;
+      }
+      const breakdown = calculateUnitCost({
+        ingredients: ingredientRows.filter(row => row.recipeId === recipe.id).map(row => ({ quantity: row.quantity, averageUnitCost: row.averageUnitCost })),
+        prepTimeMinutes: recipe.prepTimeMinutes, hourlyLaborCost: shop.hourlyLaborCost, yieldQuantity: recipe.yieldQuantity,
+      });
+      const { orderPricing, orderPricingError } = calculateOrderPricing(breakdown, shop.targetProfitMargin, recipe.targetMarginPct);
+      if (!orderPricing) {
+        throw new AppError(400, 'INVALID_RECIPE_YIELD', orderPricingError?.message ?? 'Recipe pricing is unavailable.');
+      }
+      states.push({ recipeId: recipe.id, reason: null, name: recipe.name, unitPrice: orderPricing.unitPrice, costComplete: orderPricing.costComplete });
+      const retailPrice = Number(orderPricing.unitPrice);
+      priced.push({ recipeId: recipe.id, name: recipe.name, quantity: item.quantity, unitCost: Number(orderPricing.unitCost),
+        unitPrice: item.unitPrice ?? retailPrice, costComplete: orderPricing.costComplete, retailPrice,
+        appliedProfitMargin: toNumber(recipe.targetMarginPct ?? shop.targetProfitMargin) });
+    }
+    try {
+      reviewOrder(body, states);
+    } catch (error) {
+      if (error instanceof AppError) {
+        actor.log.info({ event: 'order_review_rejected', code: error.code }, 'order requires updated review');
+      }
+      throw error;
+    }
+    const deliveryFee = body.deliveryFee ?? toNumber(shop.deliveryBaseFee);
+    const totals = calculateOrderTotals({ items: priced, deliveryFee });
+    if (totals.totalAmount > 99_999_999.99 || totals.totalCost > 99_999_999.99) {
+      throw badRequest('Order total exceeds the supported amount.');
+    }
+    const created = await this.persistence.create(shop.id, actor.user.id, body, priced, totals, this.transaction);
     await this.committed(async () => {
       await this.audit.record(actor, {
         shopId: actor.shop.id,
@@ -122,7 +179,7 @@ export class OrdersService {
         eventType: 'ORDER_CREATED',
         resourceId: created.id,
         ipAddress: actor.ipAddress,
-        metadata: { totalAmount: totals.totalAmount, items: quote.items.length },
+        metadata: { totalAmount: totals.totalAmount, items: priced.length },
       });
       actor.log.info({ event: 'order_created', orderId: created.id }, 'order created');
     });

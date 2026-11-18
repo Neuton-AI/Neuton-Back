@@ -26,3 +26,8 @@ export interface SyncMutation {
   body: unknown;
   status: number;
 }
+
+/** Only new orders need reviewed source reads in the mutation's outer transaction. */
+export function isOrderCreateMutation(input: SyncMutation): boolean {
+  return input.kind === 'order' && input.method === 'POST' && input.documentId === null;
+}

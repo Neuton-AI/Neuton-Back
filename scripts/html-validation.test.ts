@@ -17,7 +17,7 @@ import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FakeDb } from './support/fakeDb.js';
-import { buildOrdersApp, SHOP_ID } from './support/ordersApp.js';
+import { buildOrdersApp, SHOP_ID, TEST_SHOP } from './support/ordersApp.js';
 import { buildShopApp } from './support/shopApp.js';
 import { buildCatalogApp } from './support/catalogApp.js';
 import { buildReceiptsApp } from './support/receiptsApp.js';
@@ -44,7 +44,7 @@ function flaggedPaths(body: any): string[] {
 }
 
 async function ordersHarness(responses: Record<string, unknown[]> = {}): Promise<Harness> {
-  const db = new FakeDb(responses);
+  const db = new FakeDb({ 'select:shops': [[TEST_SHOP]], ...responses });
   const testApp = await buildOrdersApp();
   testApp.use({ db: db as never });
   return { app: testApp.app, db, close: testApp.close };
@@ -88,7 +88,7 @@ test('POST /orders stores plain text verbatim — the guard rejects, it never re
   const destinationAddress = '12 HaYarkon St, Apt #4 — 100% on time';
   const h = await ordersHarness({
     'select:recipes': [
-      [{ id: RECIPE_ID, name: 'Focaccia', prepTimeMinutes: 30, yieldQuantity: '4', targetMarginPct: null }],
+      [{ id: RECIPE_ID, name: 'Focaccia', isActive: true, status: 'verified', prepTimeMinutes: 30, yieldQuantity: '4', targetMarginPct: null }],
     ],
     'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '1.000', averageUnitCost: '2.00' }]],
     'update:shops': [[{ lastOrderNumber: 1 }]],
