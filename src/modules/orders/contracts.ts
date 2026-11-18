@@ -21,7 +21,7 @@ export const createOrderSchema = z.object({
   customerName: htmlFree(z.string().trim().max(160)).nullable().optional(),
   orderDate: z.coerce.date().optional(),
   /** Legacy clients may omit this; omission is stored as null. */
-  deliveryDate: z.string().date().optional(),
+  deliveryDate: z.string().date().refine(value => !value.startsWith('0000-'), 'Date must have a nonzero year').optional(),
   destinationAddress: htmlFree(z.string().trim().max(300)).nullable().optional(),
   deliveryDistanceKm: z.coerce.number().min(0).max(20000).default(0),
   documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),

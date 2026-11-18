@@ -125,7 +125,7 @@ test('delivery dates accept only calendar strings and preserve legacy omission',
   for (const date of ['2024-02-29', '2026-11-20']) {
     assert.equal(createOrderSchema.parse({ ...input, deliveryDate: date }).deliveryDate, date);
   }
-  for (const date of ['2026-02-29', '2026-11-31', '2026-1-1', '2026-11-20T00:00:00Z', '', null]) {
+  for (const date of ['0000-01-01', '2026-02-29', '2026-11-31', '2026-1-1', '2026-11-20T00:00:00Z', '', null]) {
     assert.equal(createOrderSchema.safeParse({ ...input, deliveryDate: date }).success, false);
   }
   assert.equal(createOrderSchema.parse(input).deliveryDate, undefined);
