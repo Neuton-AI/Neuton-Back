@@ -4,7 +4,7 @@ import { requireActorRole } from '../identity/authorization.js';
 import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.persistence.js';
 import { OrdersAudit } from './orders.audit.js';
 import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
-import { toNumber } from '../../lib/money.js';
+import { money, toNumber } from '../../lib/money.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, QuoteOrderInput, ListOrdersInput, PricedOrderItem, QuoteOrderOutput, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
@@ -152,9 +152,14 @@ export class OrdersService {
       if (!orderPricing) {
         throw new AppError(400, 'INVALID_RECIPE_YIELD', orderPricingError?.message ?? 'Recipe pricing is unavailable.');
       }
-      states.push({ recipeId: recipe.id, reason: null, name: recipe.name, unitPrice: orderPricing.unitPrice, costComplete: orderPricing.costComplete });
       const retailPrice = Number(orderPricing.unitPrice);
-      priced.push({ recipeId: recipe.id, name: recipe.name, quantity: item.quantity, unitCost: Number(orderPricing.unitCost),
+      const knownUnitCost = Number(orderPricing.unitCost);
+      if (!Number.isFinite(retailPrice) || retailPrice < 0 || retailPrice > 99_999_999.99 ||
+        !Number.isFinite(knownUnitCost) || knownUnitCost < 0 || Number(money(knownUnitCost)) > 99_999_999.99) {
+        throw new AppError(400, 'ORDER_PRICING_UNAVAILABLE', 'Recipe pricing is outside the supported amount range.');
+      }
+      states.push({ recipeId: recipe.id, reason: null, name: recipe.name, unitPrice: orderPricing.unitPrice, costComplete: orderPricing.costComplete });
+      priced.push({ recipeId: recipe.id, name: recipe.name, quantity: item.quantity, unitCost: knownUnitCost,
         unitPrice: item.unitPrice ?? retailPrice, costComplete: orderPricing.costComplete, retailPrice,
         appliedProfitMargin: toNumber(recipe.targetMarginPct ?? shop.targetProfitMargin) });
     }

@@ -78,3 +78,23 @@ test('available partial-cost recipes use known cost without markup and preserve 
     assert.equal(lines[0]?.unitCost, '2.00');
   } finally { await h.close(); }
 });
+
+for (const malformed of ['overflow', 'negative-labor']) {
+  test(`malformed ${malformed} pricing fails recoverably before exposing invalid review prices`, async () => {
+    const db = database();
+    if (malformed === 'overflow') {
+      db.prepend('select', 'recipeIngredients', [{ recipeId, quantity: '1', averageUnitCost: '100000000' }]);
+    } else {
+      db.prepend('select', 'shops', [{ ...TEST_SHOP, hourlyLaborCost: '-10' }]);
+      db.prepend('select', 'recipes', [{ ...recipe, prepTimeMinutes: 60 }]);
+    }
+    const h = await buildNestOrdersApp('owner', db as never);
+    try {
+      const result = await request(h.app.getHttpServer()).post('/api/v1/orders').set(headers).send(input);
+      assert.equal(result.status, 400, result.text);
+      assert.equal(result.body.error.code, 'ORDER_PRICING_UNAVAILABLE');
+      assert.equal(db.calls.filter(call => call.op !== 'select').length, 0);
+      assert.equal(h.audits.length, 0);
+    } finally { await h.close(); }
+  });
+}
