@@ -31,11 +31,9 @@ and `laborCost`. The projection does not claim that partial cost is complete.
 Invalid or nonpositive yield produces `orderPricing: null` and
 `orderPricingError: { code: "INVALID_RECIPE_YIELD", message: "Recipe yield must be a finite positive number" }`.
 Other recipes still load. No recipe is repaired or deleted, and no artificial
-epsilon yield is used. The shared `calculateOrderPricing` policy is available
-for order creation integration.
+epsilon yield is used. The shared `calculateOrderPricing` policy also supplies reviewed order creation.
 
-This provider is additive. It does not activate partial-cost order creation or
-change existing saved orders. Dependency sync rollout and migration of existing
+Reviewed creation uses the complete/partial projection and snapshots its provenance; existing saved orders are not recalculated. Dependency sync rollout and migration of existing
 local snapshots are tracked separately in T02; adding response fields alone does
 not invalidate previously initialized clients. Complete-recipe markup replacement
 remains outside this initiative.
