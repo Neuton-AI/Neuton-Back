@@ -6,6 +6,8 @@
 ### Added
 - Order creation checks selected availability and reviewed prices atomically before allocating an invoice.
 - Orders record a requested delivery date and line costing completeness without inventing historical values.
+- Existing local recipe snapshots refresh through normal sync when order-pricing
+  projections roll out; pricing dependency changes retain existing sync behavior.
 - Recipe list, detail and sync downloads expose complete or partial order pricing,
   including known production cost and costing completeness.
 
