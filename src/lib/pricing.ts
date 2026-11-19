@@ -198,11 +198,11 @@ export function applyWeightedAverage(
 }
 
 export interface OrderTotalsInput {
-  items: { quantity: number; unitCost: number; unitPrice: number }[];
+  items: { quantity: number; unitCost: number; unitPrice: number; costComplete?: boolean | null }[];
   deliveryFee: number;
 }
 
-/** Net profit = billed amount − delivery fee − production cost. */
+/** Known partial costs remain in totals; partial-cost sales contribute no profit. */
 export function calculateOrderTotals(input: OrderTotalsInput) {
   const totalCost = input.items.reduce(
     (sum, item) => sum + item.quantity * item.unitCost,
@@ -214,7 +214,13 @@ export function calculateOrderTotals(input: OrderTotalsInput) {
   );
   const totalAmount = round(itemsSubtotal + input.deliveryFee, 2);
   const deliveryFee = round(input.deliveryFee, 2);
-  const netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  let netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  if (input.items.some(item => item.costComplete === false)) {
+    const completeItems = input.items.filter(item => item.costComplete !== false);
+    const completeRevenue = completeItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const completeCost = completeItems.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
+    netProfit = round(completeRevenue - completeCost, 2);
+  }
 
   return {
     totalCost: round(totalCost, 2),
