@@ -9,13 +9,25 @@ const recipeId = '11111111-1111-1111-1111-111111111111';
 const missingId = '55555555-5555-5555-5555-555555555555';
 const recipe = { id: recipeId, name: 'Focaccia', isActive: true, status: 'verified', yieldQuantity: '1', prepTimeMinutes: 0, targetMarginPct: null };
 const headers = { cookie: '__Host-neuton-session=test', 'x-shop-id': TEST_SHOP.id };
-const input = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: 0,
+const input = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryDate: '2026-11-20', deliveryFee: 0,
   items: [{ recipeId, quantity: 1, expectedUnitPrice: '2.60' }] };
 function database(rows = [recipe], margin = '30') {
   return new FakeDb({ 'select:shops': [[{ ...TEST_SHOP, targetProfitMargin: margin }]],
     'select:recipes': [rows], 'select:recipeIngredients': [[{ recipeId, quantity: '1', averageUnitCost: '2' }]],
     'update:shops': [[{ lastOrderNumber: 1 }]], 'insert:orders': [[orderRow()]], 'insert:orderItems': [[]] });
 }
+test('reviewed create rejects a missing delivery date before writing the order', async () => {
+  const db = database();
+  const h = await buildNestOrdersApp('owner', db as never);
+  try {
+    const result = await request(h.app.getHttpServer()).post('/api/v1/orders').set(headers)
+      .send({ ...input, deliveryDate: undefined });
+    assert.equal(result.status, 400, result.text);
+    assert.match(result.text, /deliveryDate/);
+    assert.equal(db.calls.filter(call => call.op !== 'select').length, 0);
+    assert.equal(h.audits.length, 0);
+  } finally { await h.close(); }
+});
 test('ordinary create owns source reads and writes in one transaction and reloads shop prices', async () => {
   const db = database([recipe], '50');
   const h = await buildNestOrdersApp('owner', db as never);

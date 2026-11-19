@@ -35,6 +35,12 @@ export const createOrderSchema = z.object({
   items: z.array(orderItemSchema).min(1).max(100),
   confirmedUnavailableRecipeIds: z.array(z.string().uuid()).max(100).optional(),
 }).superRefine((body, context) => {
+  const isReviewed = body.confirmedUnavailableRecipeIds !== undefined ||
+    body.items.some(item => item.expectedUnitPrice !== undefined);
+  if (isReviewed && body.deliveryDate === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['deliveryDate'],
+      message: 'Delivery date is required for a reviewed order' });
+  }
   const confirmedIds = body.confirmedUnavailableRecipeIds ?? [];
   const submittedIds = new Set(body.items.map(item => item.recipeId));
   if (new Set(confirmedIds).size !== confirmedIds.length || confirmedIds.some(id => !submittedIds.has(id))) {

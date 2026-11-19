@@ -14,6 +14,7 @@
 ### Changed
 - Shop delivery previews return the store default, including zero, without distance charges.
 - New order input requires a customer and address and validates bounded expected prices and confirmed exclusions.
+- Reviewed orders require a delivery date. Older clients can still omit the date.
 - Order quotes and creation use the final delivery fee or shop default, without distance rates.
 
 ### Fixed
