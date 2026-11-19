@@ -14,6 +14,7 @@ export function orderRow(overrides: Partial<Order> = {}): Order {
     appliedProfitMargin: null,
     totalCost: '0.00',
     totalAmount: '0.00',
+    profitSnapshot: null,
     documentUrl: null,
     status: 'processing',
     createdAt: new Date('2026-06-15'),

@@ -594,6 +594,7 @@ export async function applyOrderDocument(
           : {}),
         totalCost: money(totalCost),
         totalAmount: money(subtotal + toNumber(order.deliveryFee)),
+        profitSnapshot: null,
       })
       .where(eq(orders.id, order.id));
   });

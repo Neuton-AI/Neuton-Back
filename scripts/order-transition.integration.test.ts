@@ -53,7 +53,7 @@ test('order verification cannot overwrite a concurrent cancellation, verificatio
       user_id uuid, customer_name text, order_date timestamptz DEFAULT now(),
       destination_address text, delivery_date date, delivery_distance_km numeric DEFAULT 0,
       delivery_fee numeric DEFAULT 0, applied_profit_margin numeric,
-      total_cost numeric DEFAULT 0, total_amount numeric DEFAULT 0,
+      total_cost numeric DEFAULT 0, total_amount numeric DEFAULT 0, profit_snapshot numeric,
       document_url text, status text DEFAULT 'processing',
       created_at timestamptz DEFAULT now(), deleted_at timestamptz
     )`);

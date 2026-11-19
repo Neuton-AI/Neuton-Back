@@ -1,9 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
 import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
+import { orderProfitCorrection } from '../../lib/orderProfit.js';
 import { money, quantity as qty } from '../../lib/money.js';
 import { retryTransaction } from '../../lib/transactionRetry.js';
 import { notFound } from '../../lib/errors.js';
@@ -76,7 +77,7 @@ export class OrdersPersistence {
     if (query.status)
       conditions.push(eq(orders.status, query.status));
     const rows = await this.database
-      .select()
+      .select({ ...getTableColumns(orders), profitCorrection: orderProfitCorrection })
       .from(orders)
       .where(and(...conditions))
       // Secondary key is the invoice number (N-105): it is issued in creation
@@ -92,7 +93,7 @@ export class OrdersPersistence {
     return { rows, total: totalRows[0]?.count ?? 0 };
   }
   async find(shopId: string, id: string) {
-    const [order] = await this.database.select().from(orders)
+    const [order] = await this.database.select({ ...getTableColumns(orders), profitCorrection: orderProfitCorrection }).from(orders)
       .where(and(eq(orders.id, id), eq(orders.shopId, shopId), isNull(orders.deletedAt))).limit(1);
     if (!order)
       throw notFound('Order not found');
@@ -162,6 +163,7 @@ export class OrdersPersistence {
             : null,
           totalCost: money(totals.totalCost),
           totalAmount: money(totals.totalAmount),
+          profitSnapshot: priced.some(item => item.costComplete === false) ? money(totals.netProfit) : null,
           documentUrl: body.documentUrl ?? null,
           // The client can never set the lifecycle state on create:
           // every order starts as `processing`.

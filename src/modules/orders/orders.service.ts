@@ -5,6 +5,7 @@ import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.pe
 import { OrdersAudit } from './orders.audit.js';
 import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
 import { money, toNumber } from '../../lib/money.js';
+import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, QuoteOrderInput, ListOrdersInput, PricedOrderItem, QuoteOrderOutput, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
@@ -75,7 +76,7 @@ export class OrdersService {
     return {
       orders: rows.map(order => ({
         ...mapOrder(order),
-        netProfit: toNumber(order.totalAmount) - toNumber(order.deliveryFee) - toNumber(order.totalCost),
+        netProfit: readOrderProfit(order),
       })),
       total,
     };
@@ -97,7 +98,7 @@ export class OrdersService {
           unitPrice: item.unitPrice,
         })),
         sources,
-        netProfit: toNumber(order.totalAmount) - toNumber(order.deliveryFee) - toNumber(order.totalCost),
+        netProfit: readOrderProfit(order),
       },
     };
   }

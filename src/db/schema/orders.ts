@@ -41,6 +41,8 @@ export const orders = pgTable('orders', {
   appliedProfitMargin: numeric('applied_profit_margin', { precision: 5, scale: 2 }),
   totalCost: numeric('total_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull().default('0.00'),
+  /** Partial-order profit freezes calculation precision lost by 2dp line costs. */
+  profitSnapshot: numeric('profit_snapshot', { precision: 10, scale: 2 }),
   documentUrl: text('document_url'),
   status: text('status').notNull().default('processing'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
