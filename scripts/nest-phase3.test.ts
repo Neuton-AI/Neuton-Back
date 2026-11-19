@@ -33,7 +33,7 @@ const shop = {
   updatedAt: date,
   privateColumn: 'hidden',
 };
-async function fixture(db: FakeDb, role = 'owner') {
+async function fixture(db: FakeDb, role = 'owner', shopContext = TEST_SHOP) {
   const passwords = new FakeDb({ 'select:users': [[{ hasPassword: true, googleLinked: false }]] });
   @Module({
     imports: [
@@ -48,7 +48,7 @@ async function fixture(db: FakeDb, role = 'owner') {
           findProfile: async () => null,
           findMembership: async (_id, shopId) =>
             shopId === SHOP_ID ? { shopId, role: role as 'owner' } : null,
-          findShop: async () => TEST_SHOP,
+          findShop: async () => shopContext,
         },
       }),
     ],
@@ -152,7 +152,8 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
       .get('/api/v1/shop/delivery-preview?distanceKm=2')
       .set(headers);
     assert.equal(preview.status, 200);
-    assert.equal(preview.body.deliveryFee, 8);
+    assert.equal(preview.body.deliveryFee, 5);
+    assert.equal(preview.body.ratePerKm, 0);
     assert.equal(
       (
         await request(h.app.getHttpServer())
@@ -161,6 +162,40 @@ test('onboarding creates shop and owner in one transaction; delivery accepts onl
       ).status,
       400,
     );
+  } finally {
+    await h.app.close();
+  }
+});
+
+test('shop delivery preview uses the default including zero, independent of legacy distance and rate', async () => {
+  for (const fee of ['0.00', '5.75']) {
+    const db = new FakeDb();
+    const h = await fixture(db, 'member', { ...TEST_SHOP, deliveryBaseFee: fee, deliveryRatePerKm: '999.00' });
+    try {
+      for (const query of ['', '?distanceKm=0', '?distanceKm=2', '?distanceKm=999999']) {
+        const response = await request(h.app.getHttpServer())
+          .get(`/api/v1/shop/delivery-preview${query}`).set(headers);
+        assert.equal(response.status, 200, response.text);
+        assert.equal(response.body.deliveryFee, Number(fee));
+        assert.equal(response.body.baseFee, Number(fee));
+        assert.equal(response.body.ratePerKm, 0);
+      }
+      assert.equal(db.calls.length, 0, 'preview never rewrites settings or history');
+    } finally {
+      await h.app.close();
+    }
+  }
+});
+
+test('shop settings persist an explicit zero default fee without rewriting legacy rates', async () => {
+  const db = new FakeDb({ 'update:shops': [[{ ...shop, deliveryBaseFee: '0.00' }]] });
+  const h = await fixture(db);
+  try {
+    const response = await request(h.app.getHttpServer()).patch('/api/v1/shop').set(headers).send({ deliveryBaseFee: 0 });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.body.shop.deliveryBaseFee, '0.00');
+    assert.equal(db.onlyCallTo('update', 'shops').set?.deliveryBaseFee, '0.00');
+    assert.equal(db.onlyCallTo('update', 'shops').set?.deliveryRatePerKm, undefined);
   } finally {
     await h.app.close();
   }

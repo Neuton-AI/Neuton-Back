@@ -13,7 +13,7 @@ import type {
   passwordSchema,
 } from './contracts.js';
 import { recordAudit, type AuditEvent } from '../../lib/audit.js';
-import { toNumber } from '../../lib/money.js';
+import { round, toNumber } from '../../lib/money.js';
 import { conflict, forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { SyncEvents } from '../sync/sync-events.js';
 import { deleteOwnedShop } from './shop-deletion.persistence.js';
@@ -127,13 +127,12 @@ export class ShopsService {
   }
   delivery(actor: ActorContext, distanceKm: number) {
     requireActorRole(actor, ['owner', 'admin', 'member']);
-    const base = toNumber(actor.shop.deliveryBaseFee),
-      rate = toNumber(actor.shop.deliveryRatePerKm);
+    const defaultFee = round(toNumber(actor.shop.deliveryBaseFee), 2);
     return {
       distanceKm,
-      baseFee: base,
-      ratePerKm: rate,
-      deliveryFee: Math.round((base + distanceKm * rate) * 100) / 100,
+      baseFee: defaultFee,
+      ratePerKm: 0,
+      deliveryFee: defaultFee,
     };
   }
 }
