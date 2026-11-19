@@ -60,16 +60,25 @@ export class OrdersController {
     @Req() request: HttpRequest,
     @Res({ passthrough: true }) response: Response,
   ) {
+    let reportedLegacyContract = false;
     const id = null;
     const result = await this.sync.mutate(
       actor,
       { ...syncMutation(request, 'order', id, 201), transactionIsolation: 'serializable' },
       async (tx, afterCommit) => {
+        const input = createOrderSchema.parse(body);
+        if (!reportedLegacyContract && (
+          input.deliveryDate === undefined || input.deliveryFee === undefined ||
+          input.items.some(item => item.expectedUnitPrice === undefined)
+        )) {
+          request.log.info({ event: 'legacy_order_create_contract' }, 'Legacy order create contract used');
+          reportedLegacyContract = true;
+        }
         const service =
           tx && afterCommit
             ? this.orders.inTransaction(tx, afterCommit)
             : this.orders;
-        return service.create(actor, createOrderSchema.parse(body));
+        return service.create(actor, input);
       },
     );
     return sendMutation(response, result);

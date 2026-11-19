@@ -15,9 +15,10 @@ are not multiplied into the preview. Existing owner/admin settings permissions a
 member read permissions are unchanged.
 
 This is T03 of [New Order #268](https://github.com/Neuton-AI/Neuton-Back/issues/268).
-Per-order final-fee input and order quote/create migration are T06. Caller
-migration and retirement of deprecated API fields/endpoints are T17. Existing
-distance/rate columns and historical financial snapshots are retained.
+Per-order final-fee input and order quote/create migration are T06. The
+[New Order API rollout](new-order-api-rollout.md) records the cached-client
+compatibility window. Existing distance/rate columns and historical
+financial snapshots are retained.
 
 Reverting this provider restores the previous preview calculation; no migration
 or data rewrite needs reversing. Coordinate rollback with settings and order
