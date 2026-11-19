@@ -4,7 +4,7 @@ import { compareDocuments, type DocumentMeta } from '../../lib/documentSync.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { SyncPersistence, type SyncTransaction } from './sync.persistence.js';
-import { isOrderCreateMutation, syncVersionSchema, type SyncMutation } from './contracts.js';
+import { syncVersionSchema, type SyncMutation } from './contracts.js';
 import { retryTransaction } from '../../lib/transactionRetry.js';
 import { AppError } from '../../lib/errors.js';
 export type CommitEffect = (effect: () => Promise<void>) => void;
@@ -47,7 +47,7 @@ export class SyncService {
       effects.length = 0;
       attempts++;
       if (attempts > 1) {
-        actor.log.info({ event: 'order_create_retry', attempt: attempts }, 'retrying rolled-back order creation');
+        actor.log.info({ event: 'sync_transaction_retry', kind: input.kind, attempt: attempts }, 'retrying rolled-back sync transaction');
       }
       return this.persistence.mutate(
         { shopId: actor.shop.id, userId: actor.user.id },
@@ -57,7 +57,7 @@ export class SyncService {
         }),
       );
     };
-    const result = isOrderCreateMutation(input) ? await retryTransaction(run) : await run();
+    const result = input.transactionIsolation === 'serializable' ? await retryTransaction(run) : await run();
     for (const effect of effects) {
       try {
         await effect();

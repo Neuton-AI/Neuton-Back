@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
 import type { DocumentMeta } from '../../lib/documentSync.js';
-import { isOrderCreateMutation, type SyncMutation } from './contracts.js';
+import type { SyncMutation } from './contracts.js';
 import { conflict } from '../../lib/errors.js';
 export const SYNC_DATABASE = Symbol('SYNC_DATABASE');
 export type SyncTransaction = Parameters<
@@ -39,7 +39,7 @@ export class SyncPersistence {
       ...(input.baseVersion === undefined ? {} : { baseVersion: input.baseVersion }),
     });
     return this.database.transaction(async (tx) => {
-      if (isOrderCreateMutation(input)) {
+      if (input.transactionIsolation === 'serializable') {
         await tx.setTransaction({ isolationLevel: 'serializable' });
       }
       await tx.execute(

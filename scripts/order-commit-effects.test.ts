@@ -23,7 +23,7 @@ for (const replay of [false, true]) {
     } as SyncPersistence;
     const result = await new SyncService(persistence).mutate(actorFor(), {
       kind: 'order', documentId: null, method: 'POST', path: '/api/v1/orders', body: {},
-      status: 201, mutationId: randomUUID(), version: 1,
+      status: 201, mutationId: randomUUID(), version: 1, transactionIsolation: 'serializable',
     }, async (_tx, afterCommit) => {
       const thisAttempt = attempts;
       afterCommit?.(async () => { emitted.push(thisAttempt); });
@@ -34,3 +34,16 @@ for (const replay of [false, true]) {
     assert.deepEqual(emitted, replay ? [] : [2]);
   });
 }
+
+test('sync transactions retry only when their caller explicitly requests serializable isolation', async () => {
+  let attempts = 0;
+  const persistence = { async mutate() {
+    attempts++;
+    throw Object.assign(new Error('rollback'), { code: '40001' });
+  } } as unknown as SyncPersistence;
+  await assert.rejects(new SyncService(persistence).mutate(actorFor(), {
+    kind: 'order', documentId: null, method: 'POST', path: '/api/v1/orders', body: {},
+    status: 201, mutationId: randomUUID(), version: 1,
+  }, async () => ({})));
+  assert.equal(attempts, 1);
+});
