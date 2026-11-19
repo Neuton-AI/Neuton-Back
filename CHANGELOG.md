@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Partial-cost sales retain revenue and known costs while contributing zero profit across saved-order reads and reporting; partial-order profit is frozen without rewriting financial history.
 
 ### Added
 - Order creation checks selected availability and reviewed prices atomically before allocating an invoice.
