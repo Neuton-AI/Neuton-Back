@@ -136,54 +136,25 @@ test('session/profile require authentication but no selected shop; profile field
     await h.app.close();
   }
 });
-test('onboarding creates shop and owner in one transaction; delivery accepts only camelCase', async () => {
+test('onboarding creates shop and owner in one transaction; the delivery preview is retired', async () => {
   const db = new FakeDb({ 'select:shops': [[]], 'insert:shops': [[shop]] });
   const h = await fixture(db);
   try {
     const response = await request(h.app.getHttpServer())
       .post('/api/v1/shops')
       .set('Cookie', '__Host-neuton-session=test')
-      .send({ name: 'Shop' });
+      .send({ name: 'Shop', deliveryRatePerKm: 999 });
     assert.equal(response.status, 201);
     assert.equal(response.body.shop.targetProfitMargin, '30.00');
     assert.equal('privateColumn' in response.body.shop, false);
     assert.equal(db.onlyCallTo('insert', 'shopMembers').inTransaction, true);
+    assert.equal((db.onlyCallTo('insert', 'shops').values as Record<string, unknown>).deliveryRatePerKm, undefined);
     const preview = await request(h.app.getHttpServer())
       .get('/api/v1/shop/delivery-preview?distanceKm=2')
       .set(headers);
-    assert.equal(preview.status, 200);
-    assert.equal(preview.body.deliveryFee, 5);
-    assert.equal(preview.body.ratePerKm, 0);
-    assert.equal(
-      (
-        await request(h.app.getHttpServer())
-          .get('/api/v1/shop/delivery-preview?distance_km=2')
-          .set(headers)
-      ).status,
-      400,
-    );
+    assert.equal(preview.status, 404);
   } finally {
     await h.app.close();
-  }
-});
-
-test('shop delivery preview uses the default including zero, independent of legacy distance and rate', async () => {
-  for (const fee of ['0.00', '5.75']) {
-    const db = new FakeDb();
-    const h = await fixture(db, 'member', { ...TEST_SHOP, deliveryBaseFee: fee, deliveryRatePerKm: '999.00' });
-    try {
-      for (const query of ['', '?distanceKm=0', '?distanceKm=2', '?distanceKm=999999']) {
-        const response = await request(h.app.getHttpServer())
-          .get(`/api/v1/shop/delivery-preview${query}`).set(headers);
-        assert.equal(response.status, 200, response.text);
-        assert.equal(response.body.deliveryFee, Number(fee));
-        assert.equal(response.body.baseFee, Number(fee));
-        assert.equal(response.body.ratePerKm, 0);
-      }
-      assert.equal(db.calls.length, 0, 'preview never rewrites settings or history');
-    } finally {
-      await h.app.close();
-    }
   }
 });
 
@@ -191,7 +162,7 @@ test('shop settings persist an explicit zero default fee without rewriting legac
   const db = new FakeDb({ 'update:shops': [[{ ...shop, deliveryBaseFee: '0.00' }]] });
   const h = await fixture(db);
   try {
-    const response = await request(h.app.getHttpServer()).patch('/api/v1/shop').set(headers).send({ deliveryBaseFee: 0 });
+    const response = await request(h.app.getHttpServer()).patch('/api/v1/shop').set(headers).send({ deliveryBaseFee: 0, deliveryRatePerKm: 999 });
     assert.equal(response.status, 200, response.text);
     assert.equal(response.body.shop.deliveryBaseFee, '0.00');
     assert.equal(db.onlyCallTo('update', 'shops').set?.deliveryBaseFee, '0.00');

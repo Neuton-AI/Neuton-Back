@@ -46,13 +46,13 @@ export class OrdersPersistence {
     if (!shop) throw notFound('Shop not found');
     return shop;
   }
-  async pricingInputs(shopId: string, recipeIds: string[], lockRecipes = false) {
-    const recipeQuery = this.database
+  async pricingInputs(shopId: string, recipeIds: string[]) {
+    const recipeRows = await this.database
       .select()
       .from(recipes)
       .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)))
-      .orderBy(asc(recipes.id));
-    const recipeRows = await (lockRecipes ? recipeQuery.for('key share') : recipeQuery);
+      .orderBy(asc(recipes.id))
+      .for('key share');
     const ingredientRows = await this.database
       .select({
         recipeId: recipeIngredients.recipeId,

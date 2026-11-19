@@ -13,7 +13,7 @@ import { prepareBarcodePrice } from '../../lib/recipeBarcodePrice.js';
 import { searchProduct } from '../../lib/supermarket/product-search.js';
 import type { z } from 'zod';
 import type { BarcodePriceInput, BarcodePriceDto, CreateRecipeInput, RecipePatchInput, VerifyRecipeInput,
-  RecipeQuery, CostedRecipeDto, RecipeDetailDto, OrderableRecipeDto, RecipeDto } from './contracts.js';
+  RecipeQuery, CostedRecipeDto, RecipeDetailDto, RecipeDto } from './contracts.js';
 export const RECIPE_COMMIT_EFFECTS = Symbol('RECIPE_COMMIT_EFFECTS');
 export const RECIPE_SEARCH = Symbol('RECIPE_SEARCH');
 @Injectable()
@@ -228,36 +228,5 @@ export class RecipeService {
     const { orderPricing, orderPricingError, ...costing } = await this.costing(actor, recipe);
     const sources = await this.persistence.recipeSources(actor.shop.id, id);
     return { recipe: { ...recipe, costing, orderPricing, orderPricingError, sources } };
-  }
-
-  async orderable(
-    actor: ActorContext,
-  ): Promise<{ recipes: OrderableRecipeDto[] }> {
-    requireActorRole(actor, ['owner', 'admin', 'member']);
-    const rows = await this.persistence.listRecipes(actor.shop.id, {
-      includeInactive: false,
-      includeUnverified: false,
-    });
-    const costed = await Promise.all(
-      rows.map(async (recipe): Promise<OrderableRecipeDto | null> => {
-        const costing = await this.costing(actor, recipe);
-        if (!costing.costComplete) return null;
-        return {
-          id: recipe.id,
-          name: recipe.name,
-          imageUrl: recipe.imageUrl,
-          yieldQuantity: recipe.yieldQuantity,
-          yieldUnit: recipe.yieldUnit,
-          costComplete: true,
-          unitCost: costing.unitCost,
-          retailPrice: costing.retailPrice,
-        };
-      }),
-    );
-    return {
-      recipes: costed.filter(
-        (recipe): recipe is OrderableRecipeDto => recipe !== null,
-      ),
-    };
   }
 }

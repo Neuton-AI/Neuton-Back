@@ -6,7 +6,7 @@ import type { CreateOrderInput } from '../src/modules/orders/contracts.js';
 
 const first = '11111111-1111-1111-1111-111111111111';
 const second = '22222222-2222-2222-2222-222222222222';
-const input: CreateOrderInput = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryDistanceKm: 0,
+const input: CreateOrderInput = { customerName: 'Dana', destinationAddress: 'Market Street',
   items: [{ recipeId: first, quantity: 1, expectedUnitPrice: '2.60' }, { recipeId: second, quantity: 1, expectedUnitPrice: '0.00' }] };
 const available: OrderReviewState = { recipeId: first, reason: null, name: 'First recipe', unitPrice: '2.60', costComplete: true };
 const partial: OrderReviewState = { recipeId: second, reason: null, name: 'Partial recipe', unitPrice: '0.00', costComplete: false };

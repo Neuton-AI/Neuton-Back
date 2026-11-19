@@ -74,11 +74,6 @@ export class RecipeController {
     return this.recipeService.createRecipe(actor, recipeSchema.parse(body));
   }
 
-  @Get('recipes/orderable')
-  orderable(@CurrentActor() actor: ActorContext) {
-    return this.recipeService.orderable(actor);
-  }
-
   @Get('recipes/:id')
   recipe(@CurrentActor() actor: ActorContext, @Param() params: unknown, @Req() request: HttpRequest) {
     const id = recipeIdSchema.parse(params).id;

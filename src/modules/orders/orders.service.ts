@@ -3,11 +3,11 @@ import type { ActorContext } from '../identity/contracts.js';
 import { requireActorRole } from '../identity/authorization.js';
 import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.persistence.js';
 import { OrdersAudit } from './orders.audit.js';
-import { AppError, badRequest, conflict, notFound } from '../../lib/errors.js';
+import { AppError, badRequest, conflict } from '../../lib/errors.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
-import { calculateOrderPricing, calculateOrderTotals, calculateRetailPrice, calculateUnitCost } from '../../lib/pricing.js';
-import type { CreateOrderInput, QuoteOrderInput, ListOrdersInput, PricedOrderItem, QuoteOrderOutput, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
+import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
+import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
 export const ORDERS_COMMIT_EFFECTS = Symbol('ORDERS_COMMIT_EFFECTS');
 export type AfterCommit = (effect: () => Promise<void>) => void;
@@ -30,45 +30,6 @@ export class OrdersService {
       this.deferEffect(effect);
     else
       await effect();
-  }
-  private async price(actor: ActorContext, items: QuoteOrderInput['items']): Promise<PricedOrderItem[]> {
-    const { shop } = actor;
-    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, [...new Set(items.map(item => item.recipeId))]);
-    const hourlyLaborCost = shop.hourlyLaborCost;
-    const shopMargin = shop.targetProfitMargin;
-    const byRecipe = new Map<string, typeof ingredientRows>();
-    for (const row of ingredientRows) {
-      const list = byRecipe.get(row.recipeId) ?? [];
-      list.push(row);
-      byRecipe.set(row.recipeId, list);
-    }
-    return items.map((item) => {
-      const recipe = recipeRows.find((row) => row.id === item.recipeId);
-      if (!recipe)
-        throw notFound(`Recipe ${item.recipeId} not found`);
-      const breakdown = calculateUnitCost({
-        ingredients: (byRecipe.get(recipe.id) ?? []).map((row) => ({
-          quantity: row.quantity,
-          averageUnitCost: row.averageUnitCost,
-        })),
-        prepTimeMinutes: recipe.prepTimeMinutes,
-        hourlyLaborCost,
-        yieldQuantity: recipe.yieldQuantity,
-      });
-      if (!breakdown.costComplete)
-        throw badRequest(`Recipe ${recipe.name} has incomplete ingredient costs`);
-      const { retailPrice, appliedMarginPercent } = calculateRetailPrice(breakdown.unitCost, shopMargin, recipe.targetMarginPct);
-      return {
-        recipeId: recipe.id,
-        name: recipe.name,
-        quantity: item.quantity,
-        costComplete: breakdown.costComplete,
-        unitCost: breakdown.unitCost,
-        unitPrice: item.unitPrice ?? retailPrice,
-        appliedProfitMargin: appliedMarginPercent,
-        retailPrice,
-      };
-    });
   }
   async list(actor: ActorContext, query: ListOrdersInput): Promise<ListOrdersOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
@@ -102,19 +63,6 @@ export class OrdersService {
       },
     };
   }
-  async quote(actor: ActorContext, body: QuoteOrderInput): Promise<QuoteOrderOutput> {
-    requireActorRole(actor, ['owner', 'admin', 'member']);
-    const items = await this.price(actor, body.items);
-    const deliveryFee = body.deliveryFee ?? toNumber(actor.shop.deliveryBaseFee);
-    const totals = calculateOrderTotals({ items, deliveryFee });
-    return {
-      items,
-      deliveryDistanceKm: body.deliveryDistanceKm,
-      baseFee: toNumber(actor.shop.deliveryBaseFee),
-      ratePerKm: 0,
-      ...totals,
-    };
-  }
   async create(actor: ActorContext, body: CreateOrderInput): Promise<CreateOrderOutput> {
     requireActorRole(actor, ['owner', 'admin']);
     if (!this.transaction) {
@@ -132,7 +80,7 @@ export class OrdersService {
       return result;
     }
     const shop = await this.persistence.currentShop(actor.shop.id);
-    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, body.items.map(item => item.recipeId), true);
+    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, body.items.map(item => item.recipeId));
     const states: OrderReviewState[] = [];
     const priced: PricedOrderItem[] = [];
     for (const item of body.items) {
@@ -161,7 +109,7 @@ export class OrdersService {
       }
       states.push({ recipeId: recipe.id, reason: null, name: recipe.name, unitPrice: orderPricing.unitPrice, costComplete: orderPricing.costComplete });
       priced.push({ recipeId: recipe.id, name: recipe.name, quantity: item.quantity, unitCost: knownUnitCost,
-        unitPrice: item.unitPrice ?? retailPrice, costComplete: orderPricing.costComplete, retailPrice,
+        unitPrice: item.unitPrice ?? retailPrice, costComplete: orderPricing.costComplete,
         appliedProfitMargin: toNumber(recipe.targetMarginPct ?? shop.targetProfitMargin) });
     }
     try {

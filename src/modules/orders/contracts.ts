@@ -30,7 +30,6 @@ export const createOrderSchema = z.object({
   deliveryDate: z.string().date().refine(value => !value.startsWith('0000-'), 'Date must have a nonzero year').optional(),
   destinationAddress: htmlFree(z.string().trim().min(1).max(300)),
   deliveryFee: deliveryFeeSchema.optional(),
-  deliveryDistanceKm: z.coerce.number().min(0).max(20000).default(0),
   documentUrl: htmlFree(z.string().trim().max(500)).nullable().optional(),
   items: z.array(orderItemSchema).min(1).max(100),
   confirmedUnavailableRecipeIds: z.array(z.string().uuid()).max(100).optional(),
@@ -60,9 +59,7 @@ export const listOrdersSchema = z.object({
   search: z.string().trim().max(120).optional(), status: z.enum(ORDER_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).default(0),
 }).strict();
-export const quoteOrderSchema = z.object({ deliveryFee: deliveryFeeSchema.optional(), deliveryDistanceKm: z.coerce.number().min(0).default(0), items: z.array(orderItemSchema).min(1) });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
-export type QuoteOrderInput = z.infer<typeof quoteOrderSchema>;
 export type ListOrdersInput = z.infer<typeof listOrdersSchema>;
 /** Decimals remain strings; deliveryDate is YYYY-MM-DD, timestamps are ISO. */
 export interface OrderDto {
@@ -102,7 +99,6 @@ export interface PricedOrderItem {
   unitCost: number;
   unitPrice: number;
   appliedProfitMargin: number;
-  retailPrice: number;
 }
 export interface OrderTotals {
   totalCost: number;
@@ -110,12 +106,6 @@ export interface OrderTotals {
   deliveryFee: number;
   netProfit: number;
   profitMarginPercent: number;
-}
-export interface QuoteOrderOutput extends OrderTotals {
-  items: PricedOrderItem[];
-  deliveryDistanceKm: number;
-  baseFee: number;
-  ratePerKm: number;
 }
 export interface CreateOrderOutput {
   order: OrderDto;

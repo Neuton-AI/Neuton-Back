@@ -24,7 +24,6 @@ import {
   createOrderSchema,
   listOrdersSchema,
   orderIdSchema,
-  quoteOrderSchema,
 } from './contracts.js';
 @Controller('api/v1/orders')
 @UseGuards(ShopGuard)
@@ -44,12 +43,6 @@ export class OrdersController {
     const id = orderIdSchema.parse(params).id;
     const read = () => this.orders.detail(actor, id);
     return request.headers['x-sync-snapshot'] === 'true' ? this.sync.snapshot(actor, 'order', id, read) : read();
-  }
-
-  @Post('quote')
-  @HttpCode(200)
-  quote(@CurrentActor() actor: ActorContext, @Body() body: unknown) {
-    return this.orders.quote(actor, quoteOrderSchema.parse(body));
   }
 
   @Post()

@@ -98,7 +98,7 @@ test('POST /orders always creates processing orders, even when the client sends 
   try {
     const { status, body } = await h.post('/api/v1/orders', {
       customerName: 'Dana',
-      deliveryDistanceKm: 0,
+
       // A stray / forged field must never promote the order to delivered.
       status: 'delivered',
       items: [{ recipeId: RECIPE_ID, quantity: 2 }],
@@ -255,7 +255,7 @@ test('POST /orders freezes the recipe name onto every line as it is created', as
   try {
     const { status } = await h.post('/api/v1/orders', {
       customerName: 'Dana',
-      deliveryDistanceKm: 0,
+
       items: [{ recipeId: RECIPE_ID, quantity: 2 }],
     });
     assert.equal(status, 201);
@@ -318,7 +318,7 @@ test('POST /orders claims the next per-shop number inside the creation transacti
   try {
     const { status, body } = await h.post('/api/v1/orders', {
       customerName: 'Dana',
-      deliveryDistanceKm: 0,
+
       items: [{ recipeId: RECIPE_ID, quantity: 2 }],
     });
     assert.equal(status, 201);
@@ -470,90 +470,37 @@ test('POST /orders/:id/verify cannot revive a cancelled order', async () => {
 
 /* ------------------------------------------- whole-unit quantities (N-112) */
 
-test('POST /orders/quote rejects a fractional quantity with 400, never pricing it', async () => {
+test('POST /orders rejects fractional, zero and negative quantities before checking prices', async () => {
   const h = await harness();
   try {
-    for (const quantity of [1.5, 2.7]) {
-      const { status, body } = await h.post('/api/v1/orders/quote', {
+    for (const quantity of [1.5, 2.7, 0, -5]) {
+      const { status, body } = await h.post('/api/v1/orders', {
+        customerName: 'Dana', destinationAddress: 'Market Street',
         items: [{ recipeId: RECIPE_ID, quantity }],
       });
       assert.equal(status, 400, `quantity=${quantity} must be rejected`);
       assert.equal(body.error.code, 'VALIDATION_ERROR');
-      const issue = body.error.details[0];
-      assert.deepEqual(issue.path, ['items', 0, 'quantity']);
-      assert.match(issue.message, /positive integer/i);
-    }
-    assert.deepEqual(
-      h.db.calls,
-      [],
-      'a rejected quantity must not reach the pricing queries',
-    );
-  } finally {
-    await h.close();
-  }
-});
-
-test('POST /orders/quote still rejects zero and negative quantities with 400', async () => {
-  const h = await harness();
-  try {
-    for (const quantity of [0, -5]) {
-      const { status, body } = await h.post('/api/v1/orders/quote', {
-        items: [{ recipeId: RECIPE_ID, quantity }],
-      });
-      assert.equal(status, 400, `quantity=${quantity} must be rejected`);
-      assert.equal(body.error.code, 'VALIDATION_ERROR');
+      assert.deepEqual(body.error.details[0].path, ['items', 0, 'quantity']);
       assert.match(body.error.details[0].message, /positive integer/i);
     }
+    assert.deepEqual(h.db.calls, [], 'a rejected quantity must not reach pricing or writes');
   } finally {
     await h.close();
   }
 });
 
-test('POST /orders/quote prices a whole-number quantity', async () => {
-  const h = await harness('owner', recipeResponses());
-  try {
-    const { status, body } = await h.post('/api/v1/orders/quote', {
-      items: [{ recipeId: RECIPE_ID, quantity: 2 }],
-    });
-    assert.equal(status, 200);
-    assert.equal(body.items[0].quantity, 2);
-  } finally {
-    await h.close();
-  }
-});
-
-test('POST /orders rejects a fractional quantity with 400 as well', async () => {
+test('POST /orders rejects competing reviewed and override prices before pricing', async () => {
   const h = await harness('owner');
   try {
-    const { status, body } = await h.post('/api/v1/orders', {
-      deliveryDistanceKm: 0,
-      items: [{ recipeId: RECIPE_ID, quantity: 1.5 }],
+    const result = await h.post('/api/v1/orders', {
+      customerName: 'Dana', destinationAddress: 'Market Street', deliveryDate: '2026-11-20',
+      items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 20, expectedUnitPrice: '3.13' }],
     });
-    assert.equal(status, 400);
-    assert.equal(body.error.code, 'VALIDATION_ERROR');
-    assert.match(body.error.details[0].message, /positive integer/i);
-    assert.deepEqual(h.db.calls, [], 'the order must not be created from a fractional line');
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error.code, 'VALIDATION_ERROR');
+    assert.deepEqual(result.body.error.details[0].path, ['items', 0, 'unitPrice']);
+    assert.deepEqual(h.db.calls, []);
   } finally {
     await h.close();
   }
 });
-
-for (const endpoint of ['/api/v1/orders/quote', '/api/v1/orders']) {
-  test(`${endpoint} rejects unresolved costing even with an explicit selling price`, async () => {
-    const h = await harness('owner', {
-      'select:recipes': [[recipeRow]],
-      'select:recipeIngredients': [[{ recipeId: RECIPE_ID, quantity: '200', averageUnitCost: null }]],
-    });
-    try {
-      const result = await h.post(endpoint, { items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 20, ...(endpoint.endsWith('quote') ? {} : { expectedUnitPrice: '3.13' }) }] });
-      assert.equal(result.status, 400);
-      if (endpoint.endsWith('quote')) {
-        assert.match(result.body.error.message, /incomplete ingredient costs/);
-      } else {
-        assert.equal(result.body.error.code, 'VALIDATION_ERROR');
-      }
-      assert.equal(h.db.callsTo('insert', 'orders').length, 0);
-      assert.equal(h.db.callsTo('insert', 'orderItems').length, 0);
-    } finally { await h.close(); }
-  });
-}

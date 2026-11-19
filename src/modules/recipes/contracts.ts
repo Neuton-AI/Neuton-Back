@@ -61,17 +61,6 @@ export interface RecipeDetailDto extends CostedRecipeDto {
   sources: RecipeSourceDto[];
 }
 
-export interface OrderableRecipeDto {
-  id: string;
-  name: string;
-  imageUrl: string | null;
-  yieldQuantity: string;
-  yieldUnit: string;
-  costComplete: true;
-  unitCost: number | null;
-  retailPrice: number | null;
-}
-
 export interface RecipeIngredientCostDto {
   id: string;
   name: string;

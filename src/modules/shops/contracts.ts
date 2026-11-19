@@ -18,8 +18,6 @@ export const shopSettingsSchema = z.object({
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).optional(),
   /** Store default for new order fees; zero is a valid default, not a minimum. */
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).optional(),
-  /** @deprecated Compatibility field; shop delivery previews ignore distance pricing. */
-  deliveryRatePerKm: z.coerce.number().min(0).max(100_000).optional(),
   currency: htmlFree(z.string().trim().length(3).toUpperCase()).optional(),
   timezone: htmlFree(z.string().trim().min(1).max(80)).optional(),
 });
@@ -39,7 +37,6 @@ export const createShopSchema = z.object({
   hourlyLaborCost: z.coerce.number().min(0).max(100_000).default(18),
   /** Keep the existing new-shop default while using it as the default order fee. */
   deliveryBaseFee: z.coerce.number().min(0).max(100_000).default(3),
-  deliveryRatePerKm: z.coerce.number().min(0).max(100_000).default(0.8),
 });
 
 export const updateProfileSchema = z.object({
@@ -51,9 +48,6 @@ export const passwordSchema = z.object({
   currentPassword: existingPasswordSchema,
   newPassword: newPasswordSchema,
 });
-export const deliverySchema = z
-  .object({ distanceKm: z.coerce.number().finite().min(0).default(0) })
-  .strict();
 export interface ShopDto {
   id: string;
   name: string;

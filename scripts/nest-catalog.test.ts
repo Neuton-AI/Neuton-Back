@@ -139,19 +139,14 @@ test('Nest recipe list/detail preserve reviewed values with explicit nested DTOs
   }
 });
 
-test('static orderable route includes costed out-of-stock recipes and excludes unresolved costs', async () => {
-  const database = new FakeDb({
-    'select:recipes': [[{ ...recipe, status: 'verified' }, { ...recipe, id: category.id, status: 'verified' }]],
-    'select:recipeIngredients': [[ingredient], [{ ...ingredient, averageUnitCost: null }]],
-  });
+test('the retired orderable path cannot list recipes or reach storage', async () => {
+  const database = new FakeDb();
   const nest = await buildNestCatalogApp(database as unknown as Database);
   try {
     const response = await request(nest.app.getHttpServer()).get('/api/v1/recipes/orderable').set(headers);
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { recipes: [{
-      id: recipe.id, name: recipe.name, imageUrl: null, yieldQuantity: '2.000', yieldUnit: 'portion',
-      costComplete: true, unitCost: 0.1, retailPrice: 0.13,
-    }] });
+    assert.equal(response.status, 400, 'the remaining recipe detail route rejects non-UUID paths');
+    assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+    assert.equal(database.calls.length, 0);
     assert.equal((await request(nest.app.getHttpServer()).get('/api/v1/recipes/not-a-uuid').set(headers)).status, 400);
     assert.equal((await request(nest.app.getHttpServer()).get(`/api/v1/recipes/${recipe.id}`).set(headers)).status, 404);
   } finally {

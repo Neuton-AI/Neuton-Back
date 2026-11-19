@@ -15,7 +15,7 @@ test('business service refuses member mutations before touching persistence', as
   const repository = new OrdersPersistence({} as never);
   const service = new OrdersService(repository, new OrdersAudit());
   await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444'), { statusCode: 403 });
-  await assert.rejects(service.create(actorFor('member'), { customerName: 'Dana', destinationAddress: 'Market Street', items: [], deliveryDistanceKm: 0 }), { statusCode: 403 });
+  await assert.rejects(service.create(actorFor('member'), { customerName: 'Dana', destinationAddress: 'Market Street', items: [] }), { statusCode: 403 });
 });
 import request from 'supertest';
 import { FakeDb } from './support/fakeDb.js';
@@ -57,7 +57,7 @@ test('Nest orders preserves list/detail strings, dates, snapshot names and expli
     await h.close();
   }
 });
-test('Nest quote and create preserve pricing and force processing with transactional invoice numbering', async () => {
+test('Nest create uses transactional invoice numbering and the old quote path is unavailable', async () => {
   const fake = new FakeDb({
     ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]], 'insert:orders': [[storedOrder]], 'insert:orderItems': [[]]
   });
@@ -80,9 +80,7 @@ test('Nest quote and create preserve pricing and force processing with transacti
     const quote = await request(h.app.getHttpServer()).post('/api/v1/orders/quote').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', deliveryDistanceKm: 2, items: [{
           recipeId: RECIPE_ID, quantity: 2, unitPrice: 5
         }] });
-    assert.equal(quote.status, 200);
-    assert.equal(quote.body.deliveryFee, 5);
-    assert.equal(quote.body.totalAmount, 15);
+    assert.equal(quote.status, 404);
   }
   finally {
     await h.close();
@@ -114,7 +112,6 @@ test('Nest order authorization, missing resources and input validation have stab
     assert.equal((await request(server).get(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 404);
     assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 403);
     assert.equal((await request(server).post('/api/v1/orders').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: RECIPE_ID, quantity: 1 }] })).status, 403);
-    assert.equal((await request(server).post('/api/v1/orders/quote').set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street', items: [{ recipeId: RECIPE_ID, quantity: 1.5 }] })).status, 400);
   }
   finally {
     await h.close();
@@ -175,32 +172,26 @@ test('list and detail expose unknown historical dates and frozen line completene
 });
 
 for (const fee of [undefined, 0, 2.35, '1.23']) {
-  test(`quote/create use final fee ${String(fee)} and ignore distance rates`, async () => {
-    for (const endpoint of ['/api/v1/orders/quote', '/api/v1/orders']) {
-      const fake = new FakeDb({ ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]],
-        'insert:orders': [[storedOrder]], 'insert:orderItems': [[]] });
-      const h = await buildNestOrdersApp('owner', fake as never);
-      try {
-        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth).send({ customerName: 'Dana', destinationAddress: 'Market Street',
-          deliveryDistanceKm: 20000, ...(fee === undefined ? {} : { deliveryFee: fee }),
-          items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 5 }],
-        });
-        assert.equal(result.status, endpoint.endsWith('quote') ? 200 : 201, result.text);
-        const totals = endpoint.endsWith('quote') ? result.body : result.body.totals;
-        const expectedFee = fee === undefined ? 5 : Number(fee);
-        assert.equal(totals.deliveryFee, expectedFee);
-        assert.equal(totals.totalAmount, 5 + expectedFee);
-        assert.equal(totals.netProfit, 3, 'delivery remains excluded from profit');
-        if (endpoint.endsWith('quote')) {
-          assert.equal(result.body.ratePerKm, 0);
-        } else {
-          const inserted = fake.onlyCallTo('insert', 'orders').values as Record<string, unknown>;
-          assert.equal(inserted.deliveryFee, expectedFee.toFixed(2));
-          assert.equal(inserted.deliveryDistanceKm, '0.00');
-        }
-      } finally {
-        await h.close();
-      }
+  test(`create uses final fee ${String(fee)} and ignores retired distance inputs`, async () => {
+    const fake = new FakeDb({ ...pricingResponses(), 'update:shops': [[{ lastOrderNumber: 1 }]],
+      'insert:orders': [[storedOrder]], 'insert:orderItems': [[]] });
+    const h = await buildNestOrdersApp('owner', fake as never);
+    try {
+      const result = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth)
+        .send({ customerName: 'Dana', destinationAddress: 'Market Street',
+          deliveryDistanceKm: 'obsolete', deliveryFee: fee,
+          items: [{ recipeId: RECIPE_ID, quantity: 1, unitPrice: 5 }] });
+      assert.equal(result.status, 201, result.text);
+      const { totals } = result.body;
+      const expectedFee = fee === undefined ? 5 : Number(fee);
+      assert.equal(totals.deliveryFee, expectedFee);
+      assert.equal(totals.totalAmount, 5 + expectedFee);
+      assert.equal(totals.netProfit, 3, 'delivery remains excluded from profit');
+      const inserted = fake.onlyCallTo('insert', 'orders').values as Record<string, unknown>;
+      assert.equal(inserted.deliveryFee, expectedFee.toFixed(2));
+      assert.equal(inserted.deliveryDistanceKm, '0.00');
+    } finally {
+      await h.close();
     }
   });
 }
@@ -210,11 +201,9 @@ test('final delivery fees reject invalid values before pricing or persistence', 
   const h = await buildNestOrdersApp('owner', fake as never);
   try {
     for (const fee of ['', null, -1, 1.001, 100000000, '0x10', '1e2', {}]) {
-      for (const endpoint of ['/api/v1/orders', '/api/v1/orders/quote']) {
-        const result = await request(h.app.getHttpServer()).post(endpoint).set(auth)
-          .send({ customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: fee, items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
-        assert.equal(result.status, 400, `invalid fee ${JSON.stringify(fee)}`);
-      }
+      const result = await request(h.app.getHttpServer()).post('/api/v1/orders').set(auth)
+        .send({ customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: fee, items: [{ recipeId: RECIPE_ID, quantity: 1 }] });
+      assert.equal(result.status, 400, `invalid fee ${JSON.stringify(fee)}`);
     }
     assert.equal(fake.calls.length, 0);
   } finally {

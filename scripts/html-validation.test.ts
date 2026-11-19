@@ -71,7 +71,7 @@ test('POST /orders refuses the ticket payloads with 400 and writes nothing', asy
       customerName: '<script>alert(1)</script><img src=x onerror=alert(2)>',
       destinationAddress: '<svg onload=alert(3)>',
       orderDate: '2026-10-08T09:00:00.000Z',
-      deliveryDistanceKm: 0,
+
       items: [{ recipeId: RECIPE_ID, quantity: 1 }],
     });
 
@@ -118,7 +118,7 @@ test('POST /orders stores plain text verbatim — the guard rejects, it never re
     const { status } = await post(h, '/api/v1/orders', {
       customerName,
       destinationAddress,
-      deliveryDistanceKm: 0,
+
       items: [{ recipeId: RECIPE_ID, quantity: 1 }],
     });
 

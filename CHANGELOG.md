@@ -12,11 +12,14 @@
   including known production cost and costing completeness.
 
 ### Changed
-- Shop delivery previews return the store default, including zero, without distance charges.
 - New order input requires a customer and address and validates bounded expected prices and confirmed exclusions.
 - Reviewed orders require a delivery date. Older clients can still omit the date.
-- Order quotes and creation use the final delivery fee or shop default, without distance rates.
+- Order creation uses the final delivery fee or shop default, without distance rates.
 
 ### Fixed
 - Recipes with invalid yield report a pricing-data error without manufacturing a
   price or preventing other catalog recipes from loading.
+
+### Removed
+- Retire the legacy recipe picker, order quote and delivery preview endpoints. New Order uses synced recipes, local totals and the shop's fixed delivery fee.
+- Ignore the old distance and per-kilometre rate write fields. Saved delivery values remain available on reads.
