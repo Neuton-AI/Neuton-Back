@@ -51,9 +51,9 @@ test('order verification cannot overwrite a concurrent cancellation, verificatio
     await connection.unsafe(`CREATE TEMP TABLE orders (
       id uuid PRIMARY KEY, order_number integer NOT NULL, shop_id uuid NOT NULL,
       user_id uuid, customer_name text, order_date timestamptz DEFAULT now(),
-      destination_address text, delivery_distance_km numeric DEFAULT 0,
+      destination_address text, delivery_date date, delivery_distance_km numeric DEFAULT 0,
       delivery_fee numeric DEFAULT 0, applied_profit_margin numeric,
-      total_cost numeric DEFAULT 0, total_amount numeric DEFAULT 0,
+      total_cost numeric DEFAULT 0, total_amount numeric DEFAULT 0, profit_snapshot numeric,
       document_url text, status text DEFAULT 'processing',
       created_at timestamptz DEFAULT now(), deleted_at timestamptz
     )`);
@@ -71,7 +71,12 @@ test('order verification cannot overwrite a concurrent cancellation, verificatio
       const verifying = app.app.inject({ method: 'POST', url: `/api/v1/orders/${ORDER_ID}/verify` });
       // Injection is lazy until consumed.
       const result = Promise.resolve(verifying);
-      await selected.promise;
+      await Promise.race([
+        selected.promise,
+        result.then(response => {
+          throw new Error(`Verification ended before its read barrier: ${response.statusCode} ${response.body}`);
+        }),
+      ]);
       if (competitor === 'cancelled') {
         // Exercise the real cancellation transaction, including its row lock.
         app.use({ db: database });

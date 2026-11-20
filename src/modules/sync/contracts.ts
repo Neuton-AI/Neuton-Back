@@ -25,4 +25,6 @@ export interface SyncMutation {
   path: string;
   body: unknown;
   status: number;
+  /** Internal caller policy; applied before the outer transaction's first read. */
+  transactionIsolation?: 'serializable';
 }

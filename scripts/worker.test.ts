@@ -755,7 +755,7 @@ const CATALOG_RECIPE = {
 test('order: prices matched lines from the catalog and folds in the delivery fee', async () => {
   const { db, deps, job, jobData } = harness({
     responses: {
-      'select:orders': [[{ ...ORDER }]],
+      'select:orders': [[{ ...ORDER, profitSnapshot: '999.00' }]],
       'select:recipes': [[{ ...CATALOG_RECIPE }]],
       'select:shops': [[{ hourlyLaborCost: '0', targetProfitMargin: '50.00' }]],
       'select:recipeIngredients': [[{ recipeId: 'rec-1', quantity: '2.000', averageUnitCost: '3.0000' }]],
@@ -783,6 +783,7 @@ test('order: prices matched lines from the catalog and folds in the delivery fee
   const patch = db.onlyCallTo('update', 'orders').set as Record<string, unknown>;
   assert.equal(patch.totalCost, '12.00');
   assert.equal(patch.totalAmount, '23.00');
+  assert.equal(patch.profitSnapshot, null, 'replaced financial lines cannot keep the prior profit snapshot');
   assert.equal(patch.customerName, 'Dana');
   assert.equal(patch.destinationAddress, '12 Hayarkon');
 });

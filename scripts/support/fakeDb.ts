@@ -206,6 +206,11 @@ export class FakeDb {
     return new FakeQuery(this, 'delete', tableName(table));
   }
 
+  transactionIsolation?: string;
+  async setTransaction(config: { isolationLevel?: string }): Promise<void> {
+    this.transactionIsolation = config.isolationLevel;
+  }
+
   async transaction<T>(run: (tx: FakeDb) => Promise<T>): Promise<T> {
     this.transactionCount++;
     this.depth++;

@@ -49,7 +49,7 @@ async function seedShop(): Promise<string> {
 
   const [recipe] = await db
     .insert(recipes)
-    .values({ shopId: SHOP_ID, name: 'Focaccia' })
+    .values({ shopId: SHOP_ID, name: 'Focaccia', status: 'verified' })
     .returning();
   if (!recipe) throw new Error('fixture: recipe insert returned no row');
 
@@ -88,7 +88,8 @@ test('parallel creates come out as one gapless per-shop sequence', { skip }, asy
           url: '/api/v1/orders',
           payload: {
             customerName: `Order ${index}`,
-            deliveryDistanceKm: 0,
+            destinationAddress: 'Market Street',
+
             items: [{ recipeId, quantity: 1 }],
           },
         }),
@@ -131,7 +132,8 @@ test('a cancelled order keeps its number and it is never handed out again', { sk
       url: '/api/v1/orders',
       payload: {
         customerName: 'Voided sale',
-        deliveryDistanceKm: 0,
+        destinationAddress: 'Market Street',
+
         items: [{ recipeId, quantity: 1 }],
       },
     });

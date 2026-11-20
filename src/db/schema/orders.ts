@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
+  date,
   index,
   integer,
   numeric,
@@ -29,6 +31,8 @@ export const orders = pgTable('orders', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
   customerName: text('customer_name'),
   orderDate: timestamp('order_date', { withTimezone: true }).notNull().defaultNow(),
+  /** Requested calendar date; null means historically unknown. */
+  deliveryDate: date('delivery_date', { mode: 'string' }),
   destinationAddress: text('destination_address'),
   deliveryDistanceKm: numeric('delivery_distance_km', { precision: 8, scale: 2 })
     .notNull()
@@ -37,6 +41,8 @@ export const orders = pgTable('orders', {
   appliedProfitMargin: numeric('applied_profit_margin', { precision: 5, scale: 2 }),
   totalCost: numeric('total_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull().default('0.00'),
+  /** Partial-order profit freezes calculation precision lost by 2dp line costs. */
+  profitSnapshot: numeric('profit_snapshot', { precision: 10, scale: 2 }),
   documentUrl: text('document_url'),
   status: text('status').notNull().default('processing'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -69,6 +75,8 @@ export const orderItems = pgTable('order_items', {
    */
   recipeName: text('recipe_name'),
   quantity: numeric('quantity', { precision: 12, scale: 3 }).notNull().default('1'),
+  /** Frozen at creation; null preserves unknown legacy provenance. */
+  costComplete: boolean('cost_complete'),
   unitCost: numeric('unit_cost', { precision: 10, scale: 2 }).notNull().default('0.00'),
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({

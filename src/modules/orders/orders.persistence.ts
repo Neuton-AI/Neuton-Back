@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
 import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
-import { money, quantity as qty, toNumber } from '../../lib/money.js';
+import { orderProfitCorrection } from '../../lib/orderProfit.js';
+import { money, quantity as qty } from '../../lib/money.js';
+import { retryTransaction } from '../../lib/transactionRetry.js';
 import { notFound } from '../../lib/errors.js';
 import type { CreateOrderInput, ListOrdersInput, OrderDto, PricedOrderItem, OrderTotals } from './contracts.js';
 export const ORDERS_DATABASE = Symbol('ORDERS_DATABASE');
@@ -17,6 +19,7 @@ export function mapOrder(order: Order): OrderDto {
     userId: order.userId,
     customerName: order.customerName,
     orderDate: order.orderDate.toISOString(),
+    deliveryDate: order.deliveryDate ?? null,
     destinationAddress: order.destinationAddress,
     deliveryDistanceKm: order.deliveryDistanceKm,
     deliveryFee: order.deliveryFee,
@@ -32,11 +35,24 @@ export function mapOrder(order: Order): OrderDto {
 @Injectable()
 export class OrdersPersistence {
   constructor(@Inject(ORDERS_DATABASE) readonly database: Database | OrdersTransaction = db) {}
+  async runSerializable<T>(operation: (tx: OrdersTransaction) => Promise<T>): Promise<T> {
+    return retryTransaction(() => this.database.transaction(async (tx) => {
+      await tx.setTransaction({ isolationLevel: 'serializable' });
+      return operation(tx);
+    }));
+  }
+  async currentShop(shopId: string) {
+    const [shop] = await this.database.select().from(shops).where(eq(shops.id, shopId)).limit(1);
+    if (!shop) throw notFound('Shop not found');
+    return shop;
+  }
   async pricingInputs(shopId: string, recipeIds: string[]) {
     const recipeRows = await this.database
       .select()
       .from(recipes)
-      .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)));
+      .where(and(eq(recipes.shopId, shopId), inArray(recipes.id, recipeIds)))
+      .orderBy(asc(recipes.id))
+      .for('key share');
     const ingredientRows = await this.database
       .select({
         recipeId: recipeIngredients.recipeId,
@@ -46,7 +62,7 @@ export class OrdersPersistence {
       .from(recipeIngredients)
       .leftJoin(inventoryItems, and(eq(inventoryItems.id, recipeIngredients.inventoryItemId), eq(inventoryItems.shopId, shopId)))
       .leftJoin(generalPrices, eq(generalPrices.id, recipeIngredients.generalPriceId))
-      .where(eq(recipeIngredients.shopId, shopId));
+      .where(and(eq(recipeIngredients.shopId, shopId), inArray(recipeIngredients.recipeId, recipeIds)));
     return { recipeRows, ingredientRows };
   }
   async list(shopId: string, query: ListOrdersInput) {
@@ -61,7 +77,7 @@ export class OrdersPersistence {
     if (query.status)
       conditions.push(eq(orders.status, query.status));
     const rows = await this.database
-      .select()
+      .select({ ...getTableColumns(orders), profitCorrection: orderProfitCorrection })
       .from(orders)
       .where(and(...conditions))
       // Secondary key is the invoice number (N-105): it is issued in creation
@@ -77,7 +93,7 @@ export class OrdersPersistence {
     return { rows, total: totalRows[0]?.count ?? 0 };
   }
   async find(shopId: string, id: string) {
-    const [order] = await this.database.select().from(orders)
+    const [order] = await this.database.select({ ...getTableColumns(orders), profitCorrection: orderProfitCorrection }).from(orders)
       .where(and(eq(orders.id, id), eq(orders.shopId, shopId), isNull(orders.deletedAt))).limit(1);
     if (!order)
       throw notFound('Order not found');
@@ -93,6 +109,7 @@ export class OrdersPersistence {
         // lines down with it.
         name: orderItemRecipeName,
         quantity: orderItems.quantity,
+        costComplete: orderItems.costComplete,
         unitCost: orderItems.unitCost,
         unitPrice: orderItems.unitPrice,
       })
@@ -115,7 +132,7 @@ export class OrdersPersistence {
       }))),
     };
   }
-  async create(shopId: string, userId: string, body: CreateOrderInput, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
+  async create(shopId: string, userId: string, body: CreateOrderInput & { orderDate: Date }, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
       // One `UPDATE … RETURNING` both claims the next number and locks the
       // shop row until this transaction ends (N-105): concurrent creates queue
@@ -136,15 +153,17 @@ export class OrdersPersistence {
           shopId: shopId,
           userId: userId,
           customerName: body.customerName ?? null,
-          orderDate: body.orderDate ?? new Date(),
+          orderDate: body.orderDate,
+          deliveryDate: body.deliveryDate ?? null,
           destinationAddress: body.destinationAddress ?? null,
-          deliveryDistanceKm: toNumber(body.deliveryDistanceKm).toFixed(2),
+          deliveryDistanceKm: '0.00',
           deliveryFee: money(totals.deliveryFee),
           appliedProfitMargin: priced[0]?.appliedProfitMargin !== undefined
             ? priced[0].appliedProfitMargin.toFixed(2)
             : null,
           totalCost: money(totals.totalCost),
           totalAmount: money(totals.totalAmount),
+          profitSnapshot: priced.some(item => item.costComplete === false) ? money(totals.netProfit) : null,
           documentUrl: body.documentUrl ?? null,
           // The client can never set the lifecycle state on create:
           // every order starts as `processing`.
@@ -162,6 +181,7 @@ export class OrdersPersistence {
         // prefers this over the live name (N-107).
         recipeName: item.name,
         quantity: qty(item.quantity),
+        costComplete: item.costComplete,
         unitCost: money(item.unitCost),
         unitPrice: money(item.unitPrice),
       })));

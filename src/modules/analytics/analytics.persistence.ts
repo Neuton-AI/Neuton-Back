@@ -1,5 +1,5 @@
 import type {DashboardSummary} from './contracts.js';
-import { and, desc, eq, isNull, ne, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, isNull, ne, sql, type SQL } from 'drizzle-orm';
 import { Inject, Injectable } from '@nestjs/common';
 import { mapOrder } from '../orders/orders.persistence.js';
 import { db, type Database } from '../../db/client.js';
@@ -12,7 +12,8 @@ import {
   recipes,
 } from '../../db/schema/index.js';
 
-import { toNumber } from '../../lib/money.js';
+import { round, toNumber } from '../../lib/money.js';
+import { orderProfitCorrection, partialLineProfitCorrection, readOrderProfit, storedOrderProfit } from '../../lib/orderProfit.js';
 import { average, median } from '../../lib/pricing.js';
 
 export type Period = '7d' | '30d' | '90d' | '12m';
@@ -70,8 +71,10 @@ export function netProfitOf(
   delivery: number,
   cost: number,
   expenses: number,
+  profitCorrection = 0,
 ): number {
-  return revenue - delivery - cost - expenses;
+  const profit = revenue - delivery - cost - expenses;
+  return round(profit - profitCorrection, 2);
 }
 
 /**
@@ -172,6 +175,7 @@ export class AnalyticsPersistence {
         .select({
           revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
           cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+          profitCorrection: sql<string>`coalesce(sum(${orderProfitCorrection}),0)`,
           delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
           count: sql<number>`count(*)::int`,
         })
@@ -194,6 +198,7 @@ export class AnalyticsPersistence {
           revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
           delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
           cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+          profitCorrection: sql<string>`coalesce(sum(${orderProfitCorrection}),0)`,
         })
         .from(orders)
         .where(
@@ -221,13 +226,14 @@ export class AnalyticsPersistence {
     const productionCost = toNumber(orderTotals[0]?.cost);
     const expenses = toNumber(expenseTotals[0]?.expenses);
 
-    const netProfit = netProfitOf(revenue, delivery, productionCost, expenses);
+    const netProfit = netProfitOf(revenue, delivery, productionCost, expenses, toNumber(orderTotals[0]?.profitCorrection));
     const previousRevenue = toNumber(previousOrderTotals[0]?.revenue);
     const previousProfit = netProfitOf(
       previousRevenue,
       toNumber(previousOrderTotals[0]?.delivery),
       toNumber(previousOrderTotals[0]?.cost),
       toNumber(previousExpenseTotals[0]?.expenses),
+      toNumber(previousOrderTotals[0]?.profitCorrection),
     );
     const previousExpenses = toNumber(previousExpenseTotals[0]?.expenses);
 
@@ -275,7 +281,7 @@ export class AnalyticsPersistence {
     const deps = this.deps,
       shop = { id: shopId };
     const rows = await deps.db
-      .select()
+      .select({ ...getTableColumns(orders), profitCorrection: orderProfitCorrection })
       .from(orders)
       .where(and(eq(orders.shopId, shop.id), countedAsSale))
       .orderBy(desc(orders.orderDate))
@@ -284,12 +290,7 @@ export class AnalyticsPersistence {
     return {
       orders: rows.map((order) => ({
         ...mapOrder(order),
-        netProfit: netProfitOf(
-          toNumber(order.totalAmount),
-          toNumber(order.deliveryFee),
-          toNumber(order.totalCost),
-          0,
-        ),
+        netProfit: readOrderProfit(order),
       })),
     };
   }
@@ -330,6 +331,7 @@ async function topPerformingItem(
       unitsSold: sql<string>`coalesce(sum(${orderItems.quantity}),0)`,
       revenue: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitPrice}),0)`,
       cost: sql<string>`coalesce(sum(${orderItems.quantity} * ${orderItems.unitCost}),0)`,
+      profitCorrection: sql<string>`coalesce(sum(${partialLineProfitCorrection}),0)`,
     })
     .from(orderItems)
     .leftJoin(recipes, eq(recipes.id, orderItems.recipeId))
@@ -356,7 +358,7 @@ async function topPerformingItem(
     imageUrl: row.imageUrl,
     unitsSold: toNumber(row.unitsSold),
     revenue,
-    netProfit: Math.round((revenue - cost) * 100) / 100,
+    netProfit: round(revenue - cost - toNumber(row.profitCorrection), 2),
   };
 }
 
@@ -367,7 +369,7 @@ async function orderProfitStats(
 ) {
   const rows = await deps.db
     .select({
-      netProfit: sql<string>`${orders.totalAmount} - ${orders.deliveryFee} - ${orders.totalCost}`,
+      netProfit: storedOrderProfit,
     })
     .from(orders)
     .where(
@@ -430,6 +432,7 @@ async function profitGraph(
       revenue: sql<string>`coalesce(sum(${orders.totalAmount}),0)`,
       delivery: sql<string>`coalesce(sum(${orders.deliveryFee}),0)`,
       cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
+      profitCorrection: sql<string>`coalesce(sum(${orderProfitCorrection}),0)`,
     })
     .from(orders)
     .where(
@@ -464,7 +467,7 @@ async function profitGraph(
    */
   const byDay = new Map<
     string,
-    { revenue: number; delivery: number; cost: number; expenses: number }
+    { revenue: number; delivery: number; cost: number; expenses: number; profitCorrection: number }
   >();
   for (const row of rows) {
     byDay.set(row.day, {
@@ -472,6 +475,7 @@ async function profitGraph(
       delivery: toNumber(row.delivery),
       cost: toNumber(row.cost),
       expenses: 0,
+      profitCorrection: toNumber(row.profitCorrection),
     });
   }
   for (const row of expenses) {
@@ -480,6 +484,7 @@ async function profitGraph(
       delivery: 0,
       cost: 0,
       expenses: 0,
+      profitCorrection: 0,
     };
     byDay.set(row.day, {
       ...day,
@@ -495,7 +500,7 @@ async function profitGraph(
       expenses: day.expenses,
       netProfit:
         Math.round(
-          netProfitOf(day.revenue, day.delivery, day.cost, day.expenses) * 100,
+          netProfitOf(day.revenue, day.delivery, day.cost, day.expenses, day.profitCorrection) * 100,
         ) / 100,
     }))
     .filter((day) => day.netProfit !== 0);

@@ -39,6 +39,9 @@ export class SyncPersistence {
       ...(input.baseVersion === undefined ? {} : { baseVersion: input.baseVersion }),
     });
     return this.database.transaction(async (tx) => {
+      if (input.transactionIsolation === 'serializable') {
+        await tx.setTransaction({ isolationLevel: 'serializable' });
+      }
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtextextended(${actor.shopId},161))`,
       );

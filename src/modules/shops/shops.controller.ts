@@ -9,7 +9,6 @@ import {
   Patch,
   HttpCode,
   Inject,
-  Query,
   Req,
   Res,
   UseGuards,
@@ -33,7 +32,6 @@ import {
   shopSettingsSchema,
   updateProfileSchema,
   passwordSchema,
-  deliverySchema,
 } from './contracts.js';
 @Controller('api/v1')
 export class ShopsController {
@@ -86,11 +84,5 @@ export class ShopsController {
     setSessionCookie(response, secret, session);
     request.log.info({ event: 'session_replaced', userId: session.userId, sessionId: session.id }, 'Password changed and sessions revoked');
     return { ok: true };
-  }
-  @Get('shop/delivery-preview') @UseGuards(ShopGuard) delivery(
-    @CurrentActor() actor: ActorContext,
-    @Query() query: unknown,
-  ) {
-    return this.shops.delivery(actor, deliverySchema.parse(query).distanceKm);
   }
 }

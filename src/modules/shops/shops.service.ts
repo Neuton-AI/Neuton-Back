@@ -13,7 +13,6 @@ import type {
   passwordSchema,
 } from './contracts.js';
 import { recordAudit, type AuditEvent } from '../../lib/audit.js';
-import { toNumber } from '../../lib/money.js';
 import { conflict, forbidden, notFound, unauthorized } from '../../lib/errors.js';
 import { SyncEvents } from '../sync/sync-events.js';
 import { deleteOwnedShop } from './shop-deletion.persistence.js';
@@ -124,16 +123,5 @@ export class ShopsService {
   password(actor: SessionActor, body: z.infer<typeof passwordSchema>, platform: string) {
     if (!actor.session) throw unauthorized();
     return this.auth.changePassword(actor.session, body, platform);
-  }
-  delivery(actor: ActorContext, distanceKm: number) {
-    requireActorRole(actor, ['owner', 'admin', 'member']);
-    const base = toNumber(actor.shop.deliveryBaseFee),
-      rate = toNumber(actor.shop.deliveryRatePerKm);
-    return {
-      distanceKm,
-      baseFee: base,
-      ratePerKm: rate,
-      deliveryFee: Math.round((base + distanceKm * rate) * 100) / 100,
-    };
   }
 }
