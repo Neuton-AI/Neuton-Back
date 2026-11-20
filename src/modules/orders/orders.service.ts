@@ -9,6 +9,24 @@ import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
+
+function isDeliveryBeforeOrder(deliveryDate: string, orderDate: Date, timeZone: string): boolean {
+  const options: Intl.DateTimeFormatOptions = {
+    calendar: 'gregory', era: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+  };
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone });
+  } catch (cause) {
+    if (!(cause instanceof RangeError)) throw cause;
+    formatter = new Intl.DateTimeFormat('en-US', { ...options, timeZone: 'UTC' });
+  }
+  const parts = Object.fromEntries(formatter.formatToParts(orderDate).map(({ type, value }) => [type, value]));
+  if (parts.era === 'BC') return false;
+  const orderDay = Number(parts.year) * 10000 + Number(parts.month) * 100 + Number(parts.day);
+  return Number(deliveryDate.replaceAll('-', '')) < orderDay;
+}
+
 export const ORDERS_COMMIT_EFFECTS = Symbol('ORDERS_COMMIT_EFFECTS');
 export type AfterCommit = (effect: () => Promise<void>) => void;
 @Injectable()
@@ -80,6 +98,10 @@ export class OrdersService {
       return result;
     }
     const shop = await this.persistence.currentShop(actor.shop.id);
+    const orderDate = body.orderDate ?? new Date();
+    if (body.deliveryDate && isDeliveryBeforeOrder(body.deliveryDate, orderDate, shop.timezone)) {
+      throw badRequest('Delivery date must be on or after the order date.');
+    }
     const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, body.items.map(item => item.recipeId));
     const states: OrderReviewState[] = [];
     const priced: PricedOrderItem[] = [];
@@ -125,7 +147,7 @@ export class OrdersService {
     if (totals.totalAmount > 99_999_999.99 || totals.totalCost > 99_999_999.99) {
       throw badRequest('Order total exceeds the supported amount.');
     }
-    const created = await this.persistence.create(shop.id, actor.user.id, body, priced, totals, this.transaction);
+    const created = await this.persistence.create(shop.id, actor.user.id, { ...body, orderDate }, priced, totals, this.transaction);
     await this.committed(async () => {
       await this.audit.record(actor, {
         shopId: actor.shop.id,

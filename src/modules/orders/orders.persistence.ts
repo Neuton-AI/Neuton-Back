@@ -132,7 +132,7 @@ export class OrdersPersistence {
       }))),
     };
   }
-  async create(shopId: string, userId: string, body: CreateOrderInput, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
+  async create(shopId: string, userId: string, body: CreateOrderInput & { orderDate: Date }, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
       // One `UPDATE … RETURNING` both claims the next number and locks the
       // shop row until this transaction ends (N-105): concurrent creates queue
@@ -153,7 +153,7 @@ export class OrdersPersistence {
           shopId: shopId,
           userId: userId,
           customerName: body.customerName ?? null,
-          orderDate: body.orderDate ?? new Date(),
+          orderDate: body.orderDate,
           deliveryDate: body.deliveryDate ?? null,
           destinationAddress: body.destinationAddress ?? null,
           deliveryDistanceKm: '0.00',

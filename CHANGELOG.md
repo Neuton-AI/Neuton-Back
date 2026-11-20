@@ -17,6 +17,7 @@
 - Order creation uses the final delivery fee or shop default, without distance rates.
 
 ### Fixed
+- Order creation rejects delivery dates before the order date in the shop's timezone.
 - Recipes with invalid yield report a pricing-data error without manufacturing a
   price or preventing other catalog recipes from loading.
 

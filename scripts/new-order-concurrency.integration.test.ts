@@ -29,7 +29,7 @@ async function fixture() {
     targetProfitMargin: '30', hourlyLaborCost: '0', deliveryBaseFee: '5', deliveryRatePerKm: '999',
   }, userId);
   const headers = { cookie: '__Host-neuton-session=test-session', 'x-shop-id': shopId };
-  const payload = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryDate: '2026-11-20', deliveryFee: '0.00',
+  const payload = { customerName: 'Dana', destinationAddress: 'Market Street', orderDate: '2026-11-20T12:00:00Z', deliveryDate: '2026-11-20', deliveryFee: '0.00',
     items: [{ recipeId, quantity: 1, expectedUnitPrice: '2.60' }] };
   const save = (sync = false) => app.inject({ method: 'POST', url: '/api/v1/orders', payload,
     headers: { ...headers, ...(sync ? { 'x-sync-id': randomUUID(), 'x-sync-version': String(Date.now()) } : {}) } });

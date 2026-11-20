@@ -146,7 +146,7 @@ test(
         values (${shopId}::uuid,${orderRecipeId}::uuid,${inventoryId}::uuid,'Flour','Flour',1,'g','g',1)`);
       const rejectedMutation = randomUUID();
       const constraintName = `sync_order_rollback_${shopId.replaceAll('-', '')}`;
-      const orderPayload = { customerName: 'Dana', destinationAddress: 'Market Street', deliveryFee: '0.00', deliveryDistanceKm: 123, deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
+      const orderPayload = { customerName: 'Dana', destinationAddress: 'Market Street', orderDate: '2024-02-29T12:00:00Z', deliveryFee: '0.00', deliveryDistanceKm: 123, deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
       const orderVersion = Date.now() + 100_000;
       const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
         app.inject({ method, url: `/api/v1/orders${path}`, headers: {
