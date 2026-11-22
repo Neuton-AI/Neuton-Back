@@ -141,12 +141,12 @@ test(
       // mutation without publishing a successful order audit.
       const orderRecipeId = randomUUID();
       await db.execute(sql`insert into recipes(id,shop_id,name,status)
-        values (${orderRecipeId}::uuid,${shopId}::uuid,'Order fixture','unverified')`);
+        values (${orderRecipeId}::uuid,${shopId}::uuid,'Order fixture','verified')`);
       await db.execute(sql`insert into recipe_ingredients(shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,quantity,raw_src_unit,base_unit,base_unit_amount)
         values (${shopId}::uuid,${orderRecipeId}::uuid,${inventoryId}::uuid,'Flour','Flour',1,'g','g',1)`);
       const rejectedMutation = randomUUID();
       const constraintName = `sync_order_rollback_${shopId.replaceAll('-', '')}`;
-      const orderPayload = { items: [{ recipeId: orderRecipeId, quantity: 1 }] };
+      const orderPayload = { customerName: 'Dana', destinationAddress: 'Market Street', orderDate: '2024-02-29T12:00:00Z', deliveryFee: '0.00', deliveryDistanceKm: 123, deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
       const orderVersion = Date.now() + 100_000;
       const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
         app.inject({ method, url: `/api/v1/orders${path}`, headers: {
@@ -192,6 +192,15 @@ test(
       const created = await mutateOrder('POST', '', createMutation, orderVersion);
       assert.equal(created.statusCode, 201, created.body);
       const createdOrderId = created.json().order.id;
+      assert.equal(created.json().order.deliveryDate, '2024-02-29');
+      assert.equal(created.json().order.deliveryFee, '0.00');
+      assert.equal(created.json().order.deliveryDistanceKm, '0.00');
+      const downloaded = await app.inject({ method: 'GET', url: `/api/v1/orders/${createdOrderId}`,
+        headers: { ...headers, 'x-sync-snapshot': 'true' } });
+      assert.equal(downloaded.statusCode, 200, downloaded.body);
+      assert.equal(downloaded.json().order.deliveryDate, '2024-02-29');
+      assert.equal(downloaded.json().order.items[0].costComplete, true);
+      assert.equal(typeof downloaded.json().syncVersion, 'number');
       assert.deepEqual((await mutateOrder('POST', '', createMutation, orderVersion)).json(), created.json());
       assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED']);
       const orderState = () => db.execute(sql`select status from orders where id=${createdOrderId}::uuid`);

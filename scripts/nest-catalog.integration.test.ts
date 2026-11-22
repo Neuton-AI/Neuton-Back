@@ -81,7 +81,7 @@ test('Nest catalog SQL isolates shops and applies inventory and recipe lifecycle
     assert.deepEqual(recipeNames(await get('/recipes?includeUnverified=true')), ['Draft', 'Verified']);
     assert.deepEqual(recipeNames(await get('/recipes?includeInactive=true&includeUnverified=true')), ['Draft', 'Inactive', 'Verified']);
     assert.deepEqual(recipeNames(await get('/recipes?includeUnverified=true&search=dRaFt')), ['Draft']);
-    assert.deepEqual(recipeNames(await get('/recipes/orderable')), ['Verified']);
+    assert.equal((await get('/recipes/orderable')).status, 400);
     const draft = await get(`/recipes/${draftId}`);
     assert.equal(draft.status, 200, 'unverified recipes remain available for review');
     assert.equal(draft.body.recipe.costing.ingredients[0].rawName, 'Reviewed flour');

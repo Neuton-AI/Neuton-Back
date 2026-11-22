@@ -82,6 +82,8 @@ test('netProfitOf deducts delivery, production cost and recorded expenses', () =
   assert.equal(netProfitOf(300, 20, 120, 45), 115);
   assert.equal(netProfitOf(100, 0, 0, 0), 100);
   assert.equal(netProfitOf(0, 5, 10, 1), -16, 'a loss stays negative');
+  assert.equal(netProfitOf(0.3, 0.1, 0.2, 0), 0, 'currency arithmetic must not turn a zero snapshot into residual profit');
+  assert.equal(netProfitOf(300, 20, 120, 45, 25), 90, 'partial-profit correction leaves expenses and delivery deductions intact');
 });
 
 /* ------------------------------------------------- undated receipts (N-7) */

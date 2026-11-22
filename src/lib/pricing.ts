@@ -1,4 +1,4 @@
-import { round, toNumber } from './money.js';
+import { money, round, toNumber, unitCost } from './money.js';
 
 export interface RecipeIngredientInput {
   /** Converted amount in the canonical base unit. */
@@ -14,8 +14,7 @@ export interface UnitCostInput {
   yieldQuantity: number | string | null | undefined;
 }
 
-export interface UnitCostBreakdown {
-  costComplete: boolean;
+interface UnitCostSubtotal {
   unresolvedCount: number;
   /** Resolved ingredient subtotal; partial when costComplete is false. */
   ingredientsCost: number;
@@ -23,9 +22,26 @@ export interface UnitCostBreakdown {
   laborCost: number;
   /** materials + labor */
   batchCost: number;
-  /** batchCost ÷ yield quantity */
-  unitCost: number;
   yieldQuantity: number;
+}
+
+export type UnitCostBreakdown = UnitCostSubtotal & (
+  | { costComplete: true; unitCost: number }
+  | { costComplete: false; unitCost: number | null }
+);
+
+export interface OrderPricing {
+  unitPrice: string;
+  unitCost: string;
+  costComplete: boolean;
+}
+
+export interface OrderPricingResult {
+  orderPricing: OrderPricing | null;
+  orderPricingError: {
+    code: 'INVALID_RECIPE_YIELD';
+    message: string;
+  } | null;
 }
 
 export interface StockCheckInput {
@@ -56,21 +72,55 @@ export function ingredientLineCost(ingredient: RecipeIngredientInput): number | 
 export function calculateUnitCost(input: UnitCostInput): UnitCostBreakdown {
   const lineCosts = input.ingredients.map(ingredientLineCost);
   const unresolvedCount = lineCosts.filter((cost) => cost === null).length;
-  const costComplete = input.ingredients.length > 0 && unresolvedCount === 0 &&
-    Number.isFinite(Number(input.yieldQuantity)) && Number(input.yieldQuantity) > 0;
+  const yieldQuantity = Number(input.yieldQuantity);
+  const validYield = Number.isFinite(yieldQuantity) && yieldQuantity > 0;
+  const costComplete = input.ingredients.length > 0 && unresolvedCount === 0 && validYield;
   const ingredientsCost = lineCosts.reduce<number>((sum, cost) => sum + (cost ?? 0), 0);
   const laborCost = (input.prepTimeMinutes / 60) * toNumber(input.hourlyLaborCost);
   const batchCost = ingredientsCost + laborCost;
-  const yieldQuantity = Math.max(toNumber(input.yieldQuantity), 0.000001);
-
-  return {
-    costComplete,
+  const subtotal = {
     unresolvedCount,
     ingredientsCost: round(ingredientsCost, 4),
     laborCost: round(laborCost, 4),
     batchCost: round(batchCost, 4),
-    unitCost: round(batchCost / yieldQuantity, 4),
-    yieldQuantity,
+    yieldQuantity: toNumber(input.yieldQuantity),
+  };
+  if (costComplete) {
+    return { ...subtotal, costComplete: true, unitCost: round(batchCost / yieldQuantity, 4) };
+  }
+  return {
+    ...subtotal,
+    costComplete: false,
+    unitCost: validYield ? round(batchCost / yieldQuantity, 4) : null,
+  };
+}
+
+/** Shared selling policy for catalog projections and reviewed order creation. */
+export function calculateOrderPricing(
+  breakdown: UnitCostBreakdown,
+  shopMarginPercent: number | string | null | undefined,
+  recipeMarginPercent?: number | string | null,
+): OrderPricingResult {
+  if (breakdown.unitCost === null) {
+    return {
+      orderPricing: null,
+      orderPricingError: {
+        code: 'INVALID_RECIPE_YIELD',
+        message: 'Recipe yield must be a finite positive number',
+      },
+    };
+  }
+  let sellingPrice = breakdown.unitCost;
+  if (breakdown.costComplete) {
+    sellingPrice = calculateRetailPrice(breakdown.unitCost, shopMarginPercent, recipeMarginPercent).retailPrice;
+  }
+  return {
+    orderPricing: {
+      unitPrice: money(sellingPrice),
+      unitCost: unitCost(breakdown.unitCost),
+      costComplete: breakdown.costComplete,
+    },
+    orderPricingError: null,
   };
 }
 
@@ -148,11 +198,11 @@ export function applyWeightedAverage(
 }
 
 export interface OrderTotalsInput {
-  items: { quantity: number; unitCost: number; unitPrice: number }[];
+  items: { quantity: number; unitCost: number; unitPrice: number; costComplete?: boolean | null }[];
   deliveryFee: number;
 }
 
-/** Net profit = billed amount − delivery fee − production cost. */
+/** Known partial costs remain in totals; partial-cost sales contribute no profit. */
 export function calculateOrderTotals(input: OrderTotalsInput) {
   const totalCost = input.items.reduce(
     (sum, item) => sum + item.quantity * item.unitCost,
@@ -164,7 +214,13 @@ export function calculateOrderTotals(input: OrderTotalsInput) {
   );
   const totalAmount = round(itemsSubtotal + input.deliveryFee, 2);
   const deliveryFee = round(input.deliveryFee, 2);
-  const netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  let netProfit = round(totalAmount - deliveryFee - totalCost, 2);
+  if (input.items.some(item => item.costComplete === false)) {
+    const completeItems = input.items.filter(item => item.costComplete !== false);
+    const completeRevenue = completeItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const completeCost = completeItems.reduce((sum, item) => sum + item.quantity * item.unitCost, 0);
+    netProfit = round(completeRevenue - completeCost, 2);
+  }
 
   return {
     totalCost: round(totalCost, 2),

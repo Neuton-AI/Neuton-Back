@@ -96,7 +96,6 @@ export class ShopsPersistence {
           targetProfitMargin: body.targetProfitMargin.toFixed(2),
           hourlyLaborCost: body.hourlyLaborCost.toFixed(2),
           deliveryBaseFee: body.deliveryBaseFee.toFixed(2),
-          deliveryRatePerKm: body.deliveryRatePerKm.toFixed(2),
         })
         .returning();
       if (!shop) throw new Error('Shop insert returned no row');
@@ -129,9 +128,6 @@ export class ShopsPersistence {
     }
     if (body.deliveryBaseFee !== undefined) {
       patch.deliveryBaseFee = body.deliveryBaseFee.toFixed(2);
-    }
-    if (body.deliveryRatePerKm !== undefined) {
-      patch.deliveryRatePerKm = body.deliveryRatePerKm.toFixed(2);
     }
     if (body.slug !== undefined && body.slug !== shop.slug) {
       const taken = await this.database
