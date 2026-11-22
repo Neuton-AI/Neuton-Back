@@ -54,12 +54,37 @@ export const createOrderSchema = z.object({
   });
 });
 export const orderIdSchema = z.object({ id: z.string().uuid() });
+const savedOrderItemSchema = z.object({
+  lineId: z.string().uuid(),
+  quantity: z.number().positive().max(999_999_999.999).multipleOf(0.001),
+}).strict();
+const newOrderItemSchema = orderItemSchema.pick({ recipeId: true, quantity: true }).extend({
+  expectedUnitPrice: orderItemSchema.shape.expectedUnitPrice.unwrap(),
+}).strict();
+export const updateOrderSchema = z.object({
+  customerName: htmlFree(z.string().trim().min(1).max(160)).optional(),
+  destinationAddress: htmlFree(z.string().trim().min(1).max(300)).optional(),
+  orderDate: z.string().datetime({ offset: true }).transform(value => new Date(value)).optional(),
+  deliveryDate: z.string().date().refine(value => !value.startsWith('0000-')).nullable().optional(),
+  deliveryFee: deliveryFeeSchema,
+  items: z.array(z.union([savedOrderItemSchema, newOrderItemSchema])).min(1).max(100),
+  confirmedUnavailableRecipeIds: z.array(z.string().uuid()).max(100).optional(),
+}).strict().superRefine((body, context) => {
+  const saved = body.items.filter(item => 'lineId' in item).map(item => item.lineId);
+  const added = body.items.filter(item => 'recipeId' in item).map(item => item.recipeId);
+  const confirmed = body.confirmedUnavailableRecipeIds ?? [];
+  if (new Set(saved).size !== saved.length || new Set(added).size !== added.length ||
+      new Set(confirmed).size !== confirmed.length || confirmed.some(id => !added.includes(id))) {
+    context.addIssue({ code: 'custom', path: ['items'], message: 'Order lines and confirmed exclusions must be unique and valid.' });
+  }
+});
 export const listOrdersSchema = z.object({
   from: z.coerce.date().optional(), to: z.coerce.date().optional(),
   search: z.string().trim().max(120).optional(), status: z.enum(ORDER_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50), offset: z.coerce.number().int().min(0).default(0),
 }).strict();
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+export type UpdateOrderInput = z.infer<typeof updateOrderSchema>;
 export type ListOrdersInput = z.infer<typeof listOrdersSchema>;
 /** Decimals remain strings; deliveryDate is YYYY-MM-DD, timestamps are ISO. */
 export interface OrderDto {

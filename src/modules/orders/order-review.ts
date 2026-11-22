@@ -6,14 +6,18 @@ export type OrderReviewState =
   | { recipeId: string; reason: null; name: string; unitPrice: string; costComplete: boolean };
 
 /** Validate the complete submitted set before any number or order is written. */
-export function reviewOrder(body: CreateOrderInput, states: readonly OrderReviewState[]): void {
+export function reviewOrder(
+  body: Pick<CreateOrderInput, 'items' | 'confirmedUnavailableRecipeIds'>,
+  states: readonly OrderReviewState[],
+  retainedCount = 0,
+): void {
   const confirmed = new Set(body.confirmedUnavailableRecipeIds ?? []);
   const unavailable = states.flatMap(state => state.reason === null ? [] : [state]);
   const currentItems = states.flatMap(state => {
     if (state.reason !== null) return [];
     return [{ recipeId: state.recipeId, name: state.name.slice(0, 160), unitPrice: state.unitPrice, costComplete: state.costComplete }];
   });
-  if (currentItems.length === 0) {
+  if (currentItems.length + retainedCount === 0) {
     throw new AppError(409, 'NO_AVAILABLE_ITEMS', 'No selected items are currently available.');
   }
   const priceChanges: Array<{ recipeId: string; name: string; expectedUnitPrice: string; currentUnitPrice: string }> = [];

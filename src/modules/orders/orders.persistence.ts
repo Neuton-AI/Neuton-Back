@@ -7,8 +7,8 @@ import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { orderProfitCorrection } from '../../lib/orderProfit.js';
 import { money, quantity as qty } from '../../lib/money.js';
 import { retryTransaction } from '../../lib/transactionRetry.js';
-import { notFound } from '../../lib/errors.js';
-import type { CreateOrderInput, ListOrdersInput, OrderDto, PricedOrderItem, OrderTotals } from './contracts.js';
+import { conflict, notFound } from '../../lib/errors.js';
+import type { CreateOrderInput, ListOrdersInput, OrderDto, PricedOrderItem, OrderTotals, UpdateOrderInput } from './contracts.js';
 export const ORDERS_DATABASE = Symbol('ORDERS_DATABASE');
 export type OrdersTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 export function mapOrder(order: Order): OrderDto {
@@ -188,6 +188,49 @@ export class OrdersPersistence {
       return order;
     };
     return transaction ? write(transaction) : this.database.transaction(write);
+  }
+  async edit(
+    order: Order,
+    body: UpdateOrderInput,
+    saved: { id: string; quantity: number }[],
+    added: PricedOrderItem[],
+    removedIds: string[],
+    totals: OrderTotals,
+    profitSnapshot: string | null,
+  ) {
+    const changed = await this.database.update(orders).set({
+      customerName: body.customerName,
+      destinationAddress: body.destinationAddress,
+      orderDate: body.orderDate,
+      deliveryDate: body.deliveryDate,
+      deliveryFee: money(totals.deliveryFee),
+      totalAmount: money(totals.totalAmount),
+      totalCost: money(totals.totalCost),
+      profitSnapshot,
+    }).where(and(eq(orders.id, order.id), eq(orders.shopId, order.shopId),
+      eq(orders.status, 'processing'), isNull(orders.deletedAt))).returning({ id: orders.id });
+    if (!changed.length) throw conflict('Only processing orders can be edited.');
+
+    const lineScope = and(eq(orderItems.orderId, order.id), eq(orderItems.shopId, order.shopId));
+    if (removedIds.length) {
+      await this.database.delete(orderItems).where(and(lineScope, inArray(orderItems.id, removedIds)));
+    }
+    for (const line of saved) {
+      await this.database.update(orderItems).set({ quantity: qty(line.quantity) })
+        .where(and(lineScope, eq(orderItems.id, line.id)));
+    }
+    if (added.length) {
+      await this.database.insert(orderItems).values(added.map(item => ({
+        shopId: order.shopId,
+        orderId: order.id,
+        recipeId: item.recipeId,
+        recipeName: item.name,
+        quantity: qty(item.quantity),
+        costComplete: item.costComplete,
+        unitCost: money(item.unitCost),
+        unitPrice: money(item.unitPrice),
+      })));
+    }
   }
   async verify(shopId: string, id: string) {
     const [updated] = await this.database.update(orders)

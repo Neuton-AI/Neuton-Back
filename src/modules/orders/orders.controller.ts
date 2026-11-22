@@ -2,6 +2,9 @@ import type { Response } from 'express';
 import type { HttpRequest } from '../../http/request-context.js';
 import { syncMutation, sendMutation } from '../../http/sync-mutation.js';
 import { SyncService } from '../sync/sync.service.js';
+import { syncVersionSchema } from '../sync/contracts.js';
+import { conflict } from '../../lib/errors.js';
+import { z } from 'zod';
 import {
   Req,
   Res,
@@ -12,6 +15,7 @@ import {
   HttpCode,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -24,6 +28,7 @@ import {
   createOrderSchema,
   listOrdersSchema,
   orderIdSchema,
+  updateOrderSchema,
 } from './contracts.js';
 @Controller('api/v1/orders')
 @UseGuards(ShopGuard)
@@ -74,6 +79,35 @@ export class OrdersController {
         return service.create(actor, input);
       },
     );
+    return sendMutation(response, result);
+  }
+
+  @Patch(':id')
+  async edit(
+    @CurrentActor() actor: ActorContext,
+    @Param() params: unknown,
+    @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const id = orderIdSchema.parse(params).id;
+    const mutation = syncMutation(request, 'order', id);
+    const mutationId = z.string().uuid().parse(mutation.mutationId);
+    const version = syncVersionSchema.parse(mutation.version);
+    const baseVersion = syncVersionSchema.parse(mutation.baseVersion);
+    const input = updateOrderSchema.parse(body);
+    const result = await this.sync.mutate(
+      actor,
+      { ...mutation, mutationId, version, baseVersion, transactionIsolation: 'serializable' },
+      async (tx, afterCommit) => {
+        if (!tx || !afterCommit) throw new Error('Order edit requires a sync transaction');
+        const detail = await this.orders.inTransaction(tx, afterCommit).edit(actor, id, input);
+        return { ...detail, syncVersion: version };
+      },
+    );
+    if (typeof result.body === 'object' && result.body && 'syncConflict' in result.body) {
+      throw conflict('This order changed. Reopen it before saving your changes.');
+    }
     return sendMutation(response, result);
   }
 

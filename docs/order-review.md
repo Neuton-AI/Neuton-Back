@@ -14,3 +14,11 @@ Sources: [PostgreSQL isolation](https://www.postgresql.org/docs/current/transact
 
 
 Verification includes 18 disposable-PostgreSQL scenarios covering ordinary and sync-wrapped shop races, ingredient price/link/insertion changes, shared general prices, recipe status/deactivation/deletion, exact sync replay, renewed review, malformed yield and foreign IDs. A test-only barrier pauses after source reads and before invoice allocation; no production test hook is introduced. Existing ten-way numbering, sync rollback/replay and order-transition regression tests remain required. The transition fixture includes the additive delivery-date column and fails fast if its read cannot reach the barrier.
+
+## Editing an order
+
+Shop owners and admins can edit processing orders with `PATCH /api/v1/orders/:id`. Load a current detail snapshot with `X-Sync-Snapshot: true`. Send its `syncVersion` as `X-Sync-Base-Version`, a greater revision as `X-Sync-Version`, and a UUID as `X-Sync-Id`. Identical retries can reuse the same headers and body. A stale revision or an order that has left processing returns HTTP 409.
+
+The body includes the saved delivery fee and the complete desired set of lines. Reference an existing line by `lineId` and `quantity`. Add a new line with `recipeId`, `quantity`, and `expectedUnitPrice`. Omitted saved lines are removed. Existing lines retain their price, name, and cost snapshots. New lines go through the same pricing and availability review as creation, including `confirmedUnavailableRecipeIds` when needed.
+
+Send changed customer, address, and date fields with the update. The response contains the full saved order and its new `syncVersion`. The order ID, invoice number, and attachments carry through the edit.

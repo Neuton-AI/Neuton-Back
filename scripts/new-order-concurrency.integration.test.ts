@@ -53,6 +53,68 @@ async function waitForRead(gate: ReturnType<typeof pauseBeforeOrderWrite>) {
     setTimeout(() => reject(new Error('Creation did not reach the source-read barrier')), 10_000).unref();
   })]);
 }
+
+test('editing retains saved prices and invoice number, reviews new prices and rejects stale saves', {
+  skip: skipWithoutDisposableDatabase, timeout: 30_000,
+}, async () => {
+  const f = await fixture();
+  f.gate.release();
+  try {
+    const created = await f.save();
+    assert.equal(created.statusCode, 201, created.body);
+    const order = created.json().order;
+    const url = `/api/v1/orders/${order.id}`;
+    const read = () => f.app.inject({ method: 'GET', url, headers: { ...f.headers, 'x-sync-snapshot': 'true' } });
+    const before = await read();
+    assert.equal(before.statusCode, 200, before.body);
+    const { syncVersion, order: { items: [saved] } } = before.json();
+    const addedId = randomUUID();
+    await f.db.execute(f.sql`UPDATE recipes SET is_active=false, name='Renamed' WHERE id=${f.recipeId}::uuid`);
+    await f.db.execute(f.sql`INSERT INTO recipes(id,shop_id,name,status) VALUES (${addedId}::uuid,${f.shopId}::uuid,'Cake','verified')`);
+    await f.db.execute(f.sql`INSERT INTO recipe_ingredients(shop_id,recipe_id,inventory_item_id,raw_name,raw_material_name,quantity,raw_src_unit,base_unit,base_unit_amount)
+      VALUES (${f.shopId}::uuid,${addedId}::uuid,${f.inventoryId}::uuid,'Flour','Flour',1,'each','each',1)`);
+
+    const edit = (price: string, base: number, mutationId = randomUUID(), version = Math.max(Date.now(), base + 1)) =>
+      f.app.inject({
+        method: 'PATCH', url,
+        headers: { ...f.headers, 'x-sync-id': mutationId, 'x-sync-version': String(version), 'x-sync-base-version': String(base) },
+        payload: {
+          customerName: 'Maya', deliveryFee: '0.00',
+          items: [{ lineId: saved.id, quantity: 2 }, { recipeId: addedId, quantity: 1, expectedUnitPrice: price }],
+        },
+      });
+
+    const priceConflict = await edit('1.00', syncVersion);
+    assert.equal(priceConflict.statusCode, 409, priceConflict.body);
+    assert.equal(priceConflict.json().error.code, 'ORDER_REVIEW_REQUIRED');
+    const mutationId = randomUUID();
+    const version = Math.max(Date.now(), syncVersion + 1);
+    const updated = await edit('2.60', syncVersion, mutationId, version);
+    assert.equal(updated.statusCode, 200, updated.body);
+    const next = updated.json();
+    assert.equal(next.syncVersion, version);
+    assert.equal(next.order.id, order.id);
+    assert.equal(next.order.orderNumber, order.orderNumber);
+    assert.equal(next.order.customerName, 'Maya');
+    assert.equal(next.order.totalAmount, '7.80');
+    const retained = next.order.items.find((line: { id: string }) => line.id === saved.id);
+    assert.equal(retained.quantity, '2.000');
+    assert.equal(retained.name, saved.name);
+    assert.equal(retained.unitPrice, saved.unitPrice);
+    assert.deepEqual((await edit('2.60', syncVersion, mutationId, version)).json(), next);
+    assert.equal((await edit('2.60', syncVersion)).statusCode, 409);
+    assert.equal((await f.counts())?.number, 1);
+
+    const delivered = await f.app.inject({ method: 'POST', url: `${url}/verify`, headers: f.headers });
+    assert.equal(delivered.statusCode, 200, delivered.body);
+    const deliveredVersion = (await read()).json().syncVersion;
+    const locked = await edit('2.60', deliveredVersion);
+    assert.equal(locked.statusCode, 409, locked.body);
+    assert.match(locked.body, /Only processing orders can be edited/);
+  } finally {
+    await f.close();
+  }
+});
 for (const sync of [false, true]) {
   test(`shop price race reruns review without invoice, audit or receipt effects (sync=${sync})`, { skip: skipWithoutDisposableDatabase, timeout: 30_000 }, async () => {
     const f = await fixture();

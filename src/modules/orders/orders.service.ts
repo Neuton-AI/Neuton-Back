@@ -7,7 +7,7 @@ import { AppError, badRequest, conflict } from '../../lib/errors.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
-import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput } from './contracts.js';
+import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, UpdateOrderInput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
 
 function isDeliveryBeforeOrder(deliveryDate: string, orderDate: Date, timeZone: string): boolean {
@@ -102,10 +102,38 @@ export class OrdersService {
     if (body.deliveryDate && isDeliveryBeforeOrder(body.deliveryDate, orderDate, shop.timezone)) {
       throw badRequest('Delivery date must be on or after the order date.');
     }
-    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, body.items.map(item => item.recipeId));
+    const priced = await this.priceNewLines(actor, shop, body.items, body.confirmedUnavailableRecipeIds);
+    const deliveryFee = body.deliveryFee ?? toNumber(shop.deliveryBaseFee);
+    const totals = calculateOrderTotals({ items: priced, deliveryFee });
+    if (totals.totalAmount > 99_999_999.99 || totals.totalCost > 99_999_999.99) {
+      throw badRequest('Order total exceeds the supported amount.');
+    }
+    const created = await this.persistence.create(shop.id, actor.user.id, { ...body, orderDate }, priced, totals, this.transaction);
+    await this.committed(async () => {
+      await this.audit.record(actor, {
+        shopId: actor.shop.id,
+        userId: actor.user.id,
+        eventType: 'ORDER_CREATED',
+        resourceId: created.id,
+        ipAddress: actor.ipAddress,
+        metadata: { totalAmount: totals.totalAmount, items: priced.length },
+      });
+      actor.log.info({ event: 'order_created', orderId: created.id }, 'order created');
+    });
+    return { order: mapOrder(created), totals };
+  }
+  private async priceNewLines(
+    actor: ActorContext,
+    shop: Awaited<ReturnType<OrdersPersistence['currentShop']>>,
+    items: CreateOrderInput['items'],
+    confirmedUnavailableRecipeIds?: string[],
+    retainedCount = 0,
+  ): Promise<PricedOrderItem[]> {
+    if (!items.length) return [];
+    const { recipeRows, ingredientRows } = await this.persistence.pricingInputs(shop.id, items.map(item => item.recipeId));
     const states: OrderReviewState[] = [];
     const priced: PricedOrderItem[] = [];
-    for (const item of body.items) {
+    for (const item of items) {
       const recipe = recipeRows.find(row => row.id === item.recipeId);
       if (!recipe) {
         states.push({ recipeId: item.recipeId, reason: 'NOT_FOUND' });
@@ -135,32 +163,74 @@ export class OrdersService {
         appliedProfitMargin: toNumber(recipe.targetMarginPct ?? shop.targetProfitMargin) });
     }
     try {
-      reviewOrder(body, states);
+      reviewOrder({ items, confirmedUnavailableRecipeIds }, states, retainedCount);
     } catch (error) {
       if (error instanceof AppError) {
         actor.log.info({ event: 'order_review_rejected', code: error.code }, 'order requires updated review');
       }
       throw error;
     }
-    const deliveryFee = body.deliveryFee ?? toNumber(shop.deliveryBaseFee);
-    const totals = calculateOrderTotals({ items: priced, deliveryFee });
-    if (totals.totalAmount > 99_999_999.99 || totals.totalCost > 99_999_999.99) {
+    return priced;
+  }
+
+  async edit(actor: ActorContext, id: string, body: UpdateOrderInput): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    const order = await this.persistence.find(actor.shop.id, id);
+    if (order.status !== 'processing') throw conflict('Only processing orders can be edited.');
+    const shop = await this.persistence.currentShop(actor.shop.id);
+    const deliveryDate = body.deliveryDate === undefined ? order.deliveryDate : body.deliveryDate;
+    if ((body.deliveryDate !== undefined || body.orderDate) && deliveryDate &&
+        isDeliveryBeforeOrder(deliveryDate, body.orderDate ?? order.orderDate, shop.timezone)) {
+      throw badRequest('Delivery date must be on or after the order date.');
+    }
+
+    const { items } = await this.persistence.detailLines(shop.id, id);
+    const byId = new Map(items.map(line => [line.id, line]));
+    const retained = body.items.filter(line => 'lineId' in line).map(line => {
+      const item = byId.get(line.lineId);
+      if (!item) throw badRequest('A saved line does not belong to this order.');
+      return { ...item, quantity: line.quantity };
+    });
+    const newLines = body.items.filter(line => 'recipeId' in line);
+    const added = await this.priceNewLines(actor, shop, newLines, body.confirmedUnavailableRecipeIds, retained.length);
+    const retainedIds = new Set(retained.map(line => line.id));
+    const removedIds = items.filter(line => !retainedIds.has(line.id)).map(line => line.id);
+    const changed = retained.filter(line => line.quantity !== Number(byId.get(line.id)?.quantity));
+    const linesChanged = changed.length > 0 || removedIds.length > 0 || added.length > 0;
+    const totals = calculateOrderTotals({
+      deliveryFee: body.deliveryFee,
+      items: [...retained.map(line => ({
+        quantity: line.quantity,
+        unitCost: toNumber(line.unitCost),
+        unitPrice: toNumber(line.unitPrice),
+        costComplete: line.costComplete,
+      })), ...added],
+    });
+    let profitSnapshot = order.profitSnapshot;
+    if (linesChanged) {
+      profitSnapshot = [...retained, ...added].some(line => line.costComplete === false) ? money(totals.netProfit) : null;
+    } else {
+      // Preserve historical accounting and any sub-cent costing on metadata-only edits.
+      totals.totalCost = toNumber(order.totalCost);
+      totals.totalAmount = Number(money(toNumber(order.totalAmount) - toNumber(order.deliveryFee) + body.deliveryFee));
+    }
+    if (totals.totalAmount < 0 || totals.totalAmount > 99_999_999.99 || totals.totalCost > 99_999_999.99) {
       throw badRequest('Order total exceeds the supported amount.');
     }
-    const created = await this.persistence.create(shop.id, actor.user.id, { ...body, orderDate }, priced, totals, this.transaction);
+    await this.persistence.edit(order, body, changed, added, removedIds, totals, profitSnapshot);
     await this.committed(async () => {
       await this.audit.record(actor, {
-        shopId: actor.shop.id,
+        shopId: shop.id,
         userId: actor.user.id,
-        eventType: 'ORDER_CREATED',
-        resourceId: created.id,
+        eventType: 'ORDER_UPDATED',
+        resourceId: id,
         ipAddress: actor.ipAddress,
-        metadata: { totalAmount: totals.totalAmount, items: priced.length },
+        metadata: { totalAmount: totals.totalAmount, items: retained.length + added.length },
       });
-      actor.log.info({ event: 'order_created', orderId: created.id }, 'order created');
     });
-    return { order: mapOrder(created), totals };
+    return this.detail(actor, id);
   }
+
   async verify(actor: ActorContext, id: string): Promise<OrderMutationOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const order = await this.persistence.find(actor.shop.id, id);
