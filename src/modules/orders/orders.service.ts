@@ -9,6 +9,7 @@ import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
 import type { CancellationDecision, CancelOrderOutput, CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, RecordPaymentInput, UpdateOrderInput } from './contracts.js';
+import type { RecordRefundInput } from './contracts.js';
 import { cancelProcessingOrder } from './order-cancellation.persistence.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
 import { minorUnits, summarizeOrderPayments } from './order-payment-summary.js';
@@ -300,6 +301,22 @@ export class OrdersService {
       throw conflict('The payment exceeds the current balance due.');
     }
     await this.persistence.insertPayment(order, { ...input, recordedByUserId: actor.user.id });
+    return this.detail(actor, id);
+  }
+  async recordRefund(actor: ActorContext, id: string, input: RecordRefundInput): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Recording a refund requires a transaction');
+    const order = await this.persistence.find(actor.shop.id, id);
+    if (order.status !== 'cancelled') throw conflict('Only Canceled orders can have a refund recorded.');
+    const history = await this.persistence.paymentHistory(actor.shop.id, [id]);
+    const summary = summarizeOrderPayments(order.status, order.totalAmount, history.get(id) ?? []);
+    if (summary.status !== 'pending_refund') throw conflict('This order has no refund due.');
+    await this.persistence.insertPayment(order, {
+      kind: 'refund',
+      amount: summary.refundDue,
+      occurredAt: input.occurredAt,
+      recordedByUserId: actor.user.id,
+    });
     return this.detail(actor, id);
   }
   async cancel(actor: ActorContext, id: string, decision: CancellationDecision): Promise<CancelOrderOutput> {

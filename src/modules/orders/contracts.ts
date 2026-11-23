@@ -4,15 +4,19 @@ import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
 
 export const undoDeliverySchema = z.object({ confirmedMarkedByMistake: z.literal(true) }).strict();
+const paymentOccurredAtSchema = z.string().datetime({ offset: true })
+  .refine(value => !value.startsWith('0000-') && Number.isFinite(Date.parse(value)), 'Invalid payment timestamp')
+  .transform(value => new Date(value));
+
 export const recordPaymentSchema = z.object({
   kind: z.enum(['deposit', 'payment']),
   amount: z.string().regex(/^(0|[1-9]\d{0,7})\.\d{2}$/)
     .refine(amount => amount !== '0.00', 'Payment must be positive'),
-  occurredAt: z.string().datetime({ offset: true })
-    .refine(value => !value.startsWith('0000-') && Number.isFinite(Date.parse(value)), 'Invalid payment timestamp')
-    .transform(value => new Date(value)),
+  occurredAt: paymentOccurredAtSchema,
 }).strict();
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
+export const recordRefundSchema = z.object({ occurredAt: paymentOccurredAtSchema }).strict();
+export type RecordRefundInput = z.infer<typeof recordRefundSchema>;
 
 export const cancelOrderSchema = z.object({
   madeItems: z.boolean(),
