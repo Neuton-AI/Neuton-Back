@@ -8,9 +8,9 @@ import { recordAudit } from '../../lib/audit.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
-import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, UpdateOrderInput } from './contracts.js';
+import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, RecordPaymentInput, UpdateOrderInput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
-import { summarizeOrderPayments } from './order-payment-summary.js';
+import { minorUnits, summarizeOrderPayments } from './order-payment-summary.js';
 
 function isDeliveryBeforeOrder(deliveryDate: string, orderDate: Date, timeZone: string): boolean {
   const options: Intl.DateTimeFormatOptions = {
@@ -281,6 +281,19 @@ export class OrdersService {
       ipAddress: actor.ipAddress,
       metadata: { from: 'delivered', to: 'processing' },
     }, this.transaction);
+    return this.detail(actor, id);
+  }
+  async recordPayment(actor: ActorContext, id: string, input: RecordPaymentInput): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Recording a payment requires a transaction');
+    const order = await this.persistence.find(actor.shop.id, id);
+    if (order.status !== 'processing') throw conflict('Only Processing orders can receive payments.');
+    const history = await this.persistence.paymentHistory(actor.shop.id, [id]);
+    const summary = summarizeOrderPayments(order.status, order.totalAmount, history.get(id) ?? []);
+    if (minorUnits(input.amount) > minorUnits(summary.balanceDue)) {
+      throw conflict('The payment exceeds the current balance due.');
+    }
+    await this.persistence.insertPayment(order, { ...input, recordedByUserId: actor.user.id });
     return this.detail(actor, id);
   }
   async cancel(actor: ActorContext, id: string): Promise<{ ok: true }> {

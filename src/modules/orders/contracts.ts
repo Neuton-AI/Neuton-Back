@@ -1,9 +1,18 @@
 import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
-
-export const undoDeliverySchema = z.object({ confirmedMarkedByMistake: z.literal(true) }).strict();
 import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
+
+export const undoDeliverySchema = z.object({ confirmedMarkedByMistake: z.literal(true) }).strict();
+export const recordPaymentSchema = z.object({
+  kind: z.enum(['deposit', 'payment']),
+  amount: z.string().regex(/^(0|[1-9]\d{0,7})\.\d{2}$/)
+    .refine(amount => amount !== '0.00', 'Payment must be positive'),
+  occurredAt: z.string().datetime({ offset: true })
+    .refine(value => !value.startsWith('0000-') && Number.isFinite(Date.parse(value)), 'Invalid payment timestamp')
+    .transform(value => new Date(value)),
+}).strict();
+export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
 const deliveryFeeSchema = z.union([
   z.number().finite().min(0).max(99_999_999.99).multipleOf(0.01),
   z.string().max(11).regex(/^(0|[1-9]\d{0,7})(\.\d{1,2})?$/).transform(Number),

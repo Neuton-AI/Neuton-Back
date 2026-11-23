@@ -2,7 +2,7 @@ import type { OrderPaymentDto, OrderPaymentSummary } from './contracts.js';
 
 type Payment = Pick<OrderPaymentDto, 'kind' | 'amount'> & { occurredAt: Date };
 
-function minorUnits(amount: string): bigint {
+export function minorUnits(amount: string): bigint {
   const [whole, fraction = ''] = amount.split('.');
   return BigInt(`${whole}${fraction.padEnd(2, '0')}`);
 }

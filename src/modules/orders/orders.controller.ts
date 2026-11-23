@@ -28,6 +28,7 @@ import {
   createOrderSchema,
   listOrdersSchema,
   orderIdSchema,
+  recordPaymentSchema,
   undoDeliverySchema,
   updateOrderSchema,
 } from './contracts.js';
@@ -164,6 +165,36 @@ export class OrdersController {
     );
     if (typeof result.body === 'object' && result.body && 'syncConflict' in result.body) {
       throw conflict('This order changed. Reopen it before undoing delivery.');
+    }
+    return sendMutation(response, result);
+  }
+
+  @Post(':id/payments')
+  @HttpCode(200)
+  async recordPayment(
+    @CurrentActor() actor: ActorContext,
+    @Param() params: unknown,
+    @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const id = orderIdSchema.parse(params).id;
+    const mutation = syncMutation(request, 'order', id);
+    const mutationId = z.string().uuid().parse(mutation.mutationId);
+    const version = syncVersionSchema.parse(mutation.version);
+    const baseVersion = syncVersionSchema.parse(mutation.baseVersion);
+    const input = recordPaymentSchema.parse(body);
+    const result = await this.sync.mutate(
+      actor,
+      { ...mutation, mutationId, version, baseVersion, requireExistingDocument: true },
+      async (tx, afterCommit) => {
+        if (!tx || !afterCommit) throw new Error('Recording a payment requires a sync transaction');
+        const detail = await this.orders.inTransaction(tx, afterCommit).recordPayment(actor, id, input);
+        return { ...detail, syncVersion: version };
+      },
+    );
+    if (typeof result.body === 'object' && result.body && 'syncConflict' in result.body) {
+      throw conflict('This order changed. Reopen it before recording a payment.');
     }
     return sendMutation(response, result);
   }

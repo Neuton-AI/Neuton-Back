@@ -265,6 +265,13 @@ export class OrdersPersistence {
       .returning({ id: orders.id });
     if (!updated) throw conflict('Only a Delivered order can have its delivery undone.');
   }
+  async insertPayment(order: Order, payment: Pick<typeof orderPayments.$inferInsert,
+    'kind' | 'amount' | 'occurredAt' | 'recordedByUserId'>) {
+    await this.database.insert(orderPayments).values({ ...payment, orderId: order.id });
+    // Run the existing order document version trigger for a payment-only change.
+    await this.database.update(orders).set({ status: order.status })
+      .where(and(eq(orders.id, order.id), eq(orders.shopId, order.shopId)));
+  }
   async cancel(shopId: string, id: string, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
       const rows = await tx
