@@ -148,10 +148,11 @@ test(
       const constraintName = `sync_order_rollback_${shopId.replaceAll('-', '')}`;
       const orderPayload = { customerName: 'Dana', destinationAddress: 'Market Street', orderDate: '2024-02-29T12:00:00Z', deliveryFee: '0.00', deliveryDistanceKm: 123, deliveryDate: '2024-02-29', items: [{ recipeId: orderRecipeId, quantity: 1 }] };
       const orderVersion = Date.now() + 100_000;
-      const mutateOrder = (method: 'POST' | 'DELETE', path: string, mutation: string, version: number) =>
-        app.inject({ method, url: `/api/v1/orders${path}`, headers: {
+      const mutateOrder = (path: string, mutation: string, version: number, payload?: object, baseVersion?: number) =>
+        app.inject({ method: 'POST', url: `/api/v1/orders${path}`, headers: {
           ...headers, 'x-sync-id': mutation, 'x-sync-version': String(version),
-        }, ...(path === '' ? { payload: orderPayload } : {}) });
+          ...(baseVersion === undefined ? {} : { 'x-sync-base-version': String(baseVersion) }),
+        }, payload });
       const audits = () => db.execute(sql`select event_type from audit_logs
         where shop_id=${shopId}::uuid and event_type like 'ORDER_%' order by created_at`);
       const rejectReceipt = async (mutate: () => ReturnType<typeof mutateOrder>) => {
@@ -183,13 +184,13 @@ test(
       assert.deepEqual([...await db.execute(sql`select id,raw_name,quantity,base_unit_amount
         from recipe_ingredients where recipe_id=${recipeId}::uuid order by id`)], ingredientsBefore);
       assert.equal((await recipeAudits())[0]?.count, auditCountBefore, 'rolled-back verification emits no audit');
-      await rejectReceipt(() => mutateOrder('POST', '', rejectedMutation, orderVersion));
+      await rejectReceipt(() => mutateOrder('', rejectedMutation, orderVersion, orderPayload));
       assert.equal((await db.execute(sql`select count(*)::int as count from orders where shop_id=${shopId}::uuid`))[0]?.count, 0);
       assert.equal((await db.execute(sql`select last_order_number from shops where id=${shopId}::uuid`))[0]?.last_order_number, 0);
       assert.equal((await audits()).length, 0);
 
       const createMutation = randomUUID();
-      const created = await mutateOrder('POST', '', createMutation, orderVersion);
+      const created = await mutateOrder('', createMutation, orderVersion, orderPayload);
       assert.equal(created.statusCode, 201, created.body);
       const createdOrderId = created.json().order.id;
       assert.equal(created.json().order.deliveryDate, '2024-02-29');
@@ -201,27 +202,36 @@ test(
       assert.equal(downloaded.json().order.deliveryDate, '2024-02-29');
       assert.equal(downloaded.json().order.items[0].costComplete, true);
       assert.equal(typeof downloaded.json().syncVersion, 'number');
-      assert.deepEqual((await mutateOrder('POST', '', createMutation, orderVersion)).json(), created.json());
+      assert.deepEqual((await mutateOrder('', createMutation, orderVersion, orderPayload)).json(), created.json());
       assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED']);
       const orderState = () => db.execute(sql`select status from orders where id=${createdOrderId}::uuid`);
 
-      await rejectReceipt(() => mutateOrder('POST', `/${createdOrderId}/verify`, rejectedMutation, orderVersion + 100));
+      const verify = (id: string) => mutateOrder(`/${createdOrderId}/verify`, id, orderVersion + 100);
+      await rejectReceipt(() => verify(rejectedMutation));
       assert.equal((await orderState())[0]?.status, 'processing');
       assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED']);
       const verifyMutation = randomUUID();
-      const verified = await mutateOrder('POST', `/${createdOrderId}/verify`, verifyMutation, orderVersion + 100);
+      const verified = await verify(verifyMutation);
       assert.equal(verified.statusCode, 200, verified.body);
-      assert.deepEqual((await mutateOrder('POST', `/${createdOrderId}/verify`, verifyMutation, orderVersion + 100)).json(), verified.json());
+      assert.deepEqual((await verify(verifyMutation)).json(), verified.json());
       assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED']);
 
-      await rejectReceipt(() => mutateOrder('DELETE', `/${createdOrderId}`, rejectedMutation, orderVersion + 200));
-      assert.equal((await orderState())[0]?.status, 'delivered');
-      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED']);
+      const undo = await mutateOrder(`/${createdOrderId}/undo-delivery`, randomUUID(), orderVersion + 200,
+        { confirmedMarkedByMistake: true }, orderVersion + 100);
+      assert.equal(undo.statusCode, 200, undo.body);
+      const cancel = (id: string) => mutateOrder(`/${createdOrderId}/cancel`, id, orderVersion + 300,
+        { madeItems: false, stockItems: [] }, undo.json().syncVersion);
+      await rejectReceipt(() => cancel(rejectedMutation));
+      assert.equal((await orderState())[0]?.status, 'processing');
+      const beforeCancelAudits = ['ORDER_CREATED', 'ORDER_DELIVERED', 'ORDER_DELIVERY_UNDONE'];
+      assert.deepEqual((await audits()).map(row => row.event_type), beforeCancelAudits);
       const cancelMutation = randomUUID();
-      const cancelled = await mutateOrder('DELETE', `/${createdOrderId}`, cancelMutation, orderVersion + 200);
+      const cancelled = await cancel(cancelMutation);
       assert.equal(cancelled.statusCode, 200, cancelled.body);
-      assert.deepEqual((await mutateOrder('DELETE', `/${createdOrderId}`, cancelMutation, orderVersion + 200)).json(), cancelled.json());
-      assert.deepEqual((await audits()).map(row => row.event_type), ['ORDER_CREATED', 'ORDER_DELIVERED', 'ORDER_CANCELLED']);
+      assert.deepEqual(cancelled.json(), { outcome: 'deleted', orderId: createdOrderId });
+      assert.deepEqual((await cancel(cancelMutation)).json(), cancelled.json());
+      assert.equal((await check()).json().toPull.find((document: { id: string }) => document.id === createdOrderId).deleted, true);
+      assert.deepEqual((await audits()).map(row => row.event_type), [...beforeCancelAudits, 'ORDER_CANCELLED']);
 
       const beforeDelete = (await check()).json().toPull.find((document: { id: string }) => document.id === recipeId).updatedAt;
       assert.ok(beforeDelete > beforeShopChange);

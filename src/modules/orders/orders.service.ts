@@ -4,11 +4,15 @@ import { requireActorRole } from '../identity/authorization.js';
 import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.persistence.js';
 import { OrdersAudit } from './orders.audit.js';
 import { AppError, badRequest, conflict } from '../../lib/errors.js';
+import { recordAudit } from '../../lib/audit.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
-import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, UpdateOrderInput } from './contracts.js';
+import type { CancellationDecision, CancelOrderOutput, CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, RecordPaymentInput, UpdateOrderInput } from './contracts.js';
+import type { RecordRefundInput } from './contracts.js';
+import { cancelProcessingOrder } from './order-cancellation.persistence.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
+import { minorUnits, summarizeOrderPayments } from './order-payment-summary.js';
 
 function isDeliveryBeforeOrder(deliveryDate: string, orderDate: Date, timeZone: string): boolean {
   const options: Intl.DateTimeFormatOptions = {
@@ -52,10 +56,12 @@ export class OrdersService {
   async list(actor: ActorContext, query: ListOrdersInput): Promise<ListOrdersOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const { rows, total } = await this.persistence.list(actor.shop.id, query);
+    const history = await this.persistence.paymentHistory(actor.shop.id, rows.map(order => order.id));
     return {
       orders: rows.map(order => ({
         ...mapOrder(order),
         netProfit: readOrderProfit(order),
+        paymentSummary: summarizeOrderPayments(order.status, order.totalAmount, history.get(order.id) ?? []),
       })),
       total,
     };
@@ -63,7 +69,12 @@ export class OrdersService {
   async detail(actor: ActorContext, id: string): Promise<OrderDetailOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const order = await this.persistence.find(actor.shop.id, id);
-    const { items, sources } = await this.persistence.detailLines(actor.shop.id, id);
+    const [{ items, sources }, history, stock] = await Promise.all([
+      this.persistence.detailLines(actor.shop.id, id),
+      this.persistence.paymentHistory(actor.shop.id, [id]),
+      order.cancellationMadeItems === true ? this.persistence.stockAdded(actor.shop.id, id) : [],
+    ]);
+    const payments = history.get(id) ?? [];
     return {
       order: {
         ...mapOrder(order),
@@ -78,6 +89,19 @@ export class OrdersService {
         })),
         sources,
         netProfit: readOrderProfit(order),
+        paymentSummary: summarizeOrderPayments(order.status, order.totalAmount, payments),
+        paymentHistory: payments.map(payment => ({
+          id: payment.id,
+          kind: payment.kind,
+          amount: payment.amount,
+          occurredAt: payment.occurredAt.toISOString(),
+          recordedAt: payment.recordedAt.toISOString(),
+          recordedByUserId: payment.recordedByUserId,
+        })),
+        cancellationMadeItems: order.cancellationMadeItems ?? null,
+        cancelledAt: order.cancelledAt?.toISOString() ?? null,
+        cancelledByUserId: order.cancelledByUserId ?? null,
+        stockAdded: stock.map(({ shopId: _shopId, createdAt, ...row }) => ({ ...row, createdAt: createdAt.toISOString() })),
       },
     };
   }
@@ -252,22 +276,56 @@ export class OrdersService {
     });
     return { order: mapOrder(next) };
   }
-  async cancel(actor: ActorContext, id: string): Promise<{ ok: true }> {
+  async undoDelivery(actor: ActorContext, id: string): Promise<OrderDetailOutput> {
     requireActorRole(actor, ['owner', 'admin']);
-    const previousStatus = await this.persistence.cancel(actor.shop.id, id);
-    if (previousStatus) {
-      await this.committed(async () => {
-        await this.audit.record(actor, {
-          shopId: actor.shop.id,
-          userId: actor.user.id,
-          eventType: 'ORDER_CANCELLED',
-          resourceId: id,
-          ipAddress: actor.ipAddress,
-          metadata: { from: previousStatus, to: 'cancelled' },
-        });
-        actor.log.info({ event: 'order_cancelled', orderId: id }, 'order cancelled');
-      });
+    if (!this.transaction) throw new Error('Undo delivery requires a transaction');
+    await this.persistence.undoDelivery(actor.shop.id, id);
+    await recordAudit({
+      shopId: actor.shop.id,
+      userId: actor.user.id,
+      eventType: 'ORDER_DELIVERY_UNDONE',
+      resourceId: id,
+      ipAddress: actor.ipAddress,
+      metadata: { from: 'delivered', to: 'processing' },
+    }, this.transaction);
+    return this.detail(actor, id);
+  }
+  async recordPayment(actor: ActorContext, id: string, input: RecordPaymentInput): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Recording a payment requires a transaction');
+    const order = await this.persistence.find(actor.shop.id, id);
+    if (order.status !== 'processing') throw conflict('Only Processing orders can receive payments.');
+    const history = await this.persistence.paymentHistory(actor.shop.id, [id]);
+    const summary = summarizeOrderPayments(order.status, order.totalAmount, history.get(id) ?? []);
+    if (minorUnits(input.amount) > minorUnits(summary.balanceDue)) {
+      throw conflict('The payment exceeds the current balance due.');
     }
-    return { ok: true };
+    await this.persistence.insertPayment(order, { ...input, recordedByUserId: actor.user.id });
+    return this.detail(actor, id);
+  }
+  async recordRefund(actor: ActorContext, id: string, input: RecordRefundInput): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Recording a refund requires a transaction');
+    const order = await this.persistence.find(actor.shop.id, id);
+    if (order.status !== 'cancelled') throw conflict('Only Canceled orders can have a refund recorded.');
+    const history = await this.persistence.paymentHistory(actor.shop.id, [id]);
+    const summary = summarizeOrderPayments(order.status, order.totalAmount, history.get(id) ?? []);
+    if (summary.status !== 'pending_refund') throw conflict('This order has no refund due.');
+    await this.persistence.insertPayment(order, {
+      kind: 'refund',
+      amount: summary.refundDue,
+      occurredAt: input.occurredAt,
+      recordedByUserId: actor.user.id,
+    });
+    return this.detail(actor, id);
+  }
+  async cancel(actor: ActorContext, id: string, decision: CancellationDecision): Promise<CancelOrderOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Order cancellation requires a transaction');
+    const outcome = await cancelProcessingOrder(this.transaction, { shopId: actor.shop.id, orderId: id,
+      userId: actor.user.id, ipAddress: actor.ipAddress, traceId: actor.traceId }, decision);
+    if (outcome === 'deleted') return { outcome, orderId: id };
+    const { order } = await this.detail(actor, id);
+    return { outcome, order, stockAdded: order.stockAdded };
   }
 }

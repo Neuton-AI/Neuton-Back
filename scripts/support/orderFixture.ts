@@ -19,6 +19,9 @@ export function orderRow(overrides: Partial<Order> = {}): Order {
     status: 'processing',
     createdAt: new Date('2026-06-15'),
     deletedAt: null,
+    cancellationMadeItems: null,
+    cancelledAt: null,
+    cancelledByUserId: null,
     ...overrides,
   };
 }

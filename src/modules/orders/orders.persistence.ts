@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
-import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
+import { orders, orderItems, orderItemRecipeName, orderPayments, finishedStock, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { orderProfitCorrection } from '../../lib/orderProfit.js';
@@ -99,6 +99,20 @@ export class OrdersPersistence {
       throw notFound('Order not found');
     return order;
   }
+  async paymentHistory(shopId: string, ids: string[]) {
+    if (!ids.length) return new Map<string, (typeof orderPayments.$inferSelect)[]>();
+    const rows = await this.database.select(getTableColumns(orderPayments)).from(orderPayments)
+      .innerJoin(orders, and(eq(orders.id, orderPayments.orderId), eq(orders.shopId, shopId), isNull(orders.deletedAt)))
+      .where(inArray(orderPayments.orderId, ids))
+      .orderBy(asc(orderPayments.occurredAt), asc(orderPayments.recordedAt), asc(orderPayments.id));
+    const history = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const payments = history.get(row.orderId);
+      if (payments) payments.push(row);
+      else history.set(row.orderId, [row]);
+    }
+    return history;
+  }
   async detailLines(shopId: string, id: string) {
     const items = await this.database
       .select({
@@ -131,6 +145,12 @@ export class OrdersPersistence {
         ...(source.preview ? { preview: source.preview } : {}),
       }))),
     };
+  }
+  async stockAdded(shopId: string, orderId: string) {
+    return this.database.select({ ...getTableColumns(finishedStock) }).from(finishedStock)
+      .innerJoin(orderItems, eq(orderItems.id, finishedStock.sourceOrderItemId))
+      .where(and(eq(finishedStock.shopId, shopId), eq(orderItems.orderId, orderId)))
+      .orderBy(asc(finishedStock.sourceOrderItemId));
   }
   async create(shopId: string, userId: string, body: CreateOrderInput & { orderDate: Date }, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
@@ -244,28 +264,18 @@ export class OrdersPersistence {
       .returning();
     return updated;
   }
-  async cancel(shopId: string, id: string, transaction?: OrdersTransaction) {
-    const write = async (tx: OrdersTransaction) => {
-      const rows = await tx
-        .select({ id: orders.id, status: orders.status })
-        .from(orders)
-        .where(and(eq(orders.id, id), eq(orders.shopId, shopId), isNull(orders.deletedAt)))
-        .limit(1)
-        .for('update');
-      const order = rows[0];
-      if (!order)
-        throw notFound('Order not found');
-      if (order.status === 'cancelled')
-        return null;
-      const updated = await tx
-        .update(orders)
-        .set({ status: 'cancelled' })
-        .where(and(eq(orders.id, id), eq(orders.shopId, shopId)))
-        .returning({ id: orders.id });
-      if (!updated[0])
-        throw notFound('Order not found');
-      return order.status;
-    };
-    return transaction ? write(transaction) : this.database.transaction(write);
+  async undoDelivery(shopId: string, id: string) {
+    const [updated] = await this.database.update(orders)
+      .set({ status: 'processing' })
+      .where(and(eq(orders.id, id), eq(orders.shopId, shopId), eq(orders.status, 'delivered'), isNull(orders.deletedAt)))
+      .returning({ id: orders.id });
+    if (!updated) throw conflict('Only a Delivered order can have its delivery undone.');
+  }
+  async insertPayment(order: Order, payment: Pick<typeof orderPayments.$inferInsert,
+    'kind' | 'amount' | 'occurredAt' | 'recordedByUserId'>) {
+    await this.database.insert(orderPayments).values({ ...payment, orderId: order.id });
+    // Run the existing order document version trigger for a payment-only change.
+    await this.database.update(orders).set({ status: order.status })
+      .where(and(eq(orders.id, order.id), eq(orders.shopId, order.shopId)));
   }
 }

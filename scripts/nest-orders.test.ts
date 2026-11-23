@@ -14,7 +14,8 @@ test('create input rejects fractional quantity and strips caller supplied lifecy
 test('business service refuses member mutations before touching persistence', async () => {
   const repository = new OrdersPersistence({} as never);
   const service = new OrdersService(repository, new OrdersAudit());
-  await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444'), { statusCode: 403 });
+  await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444',
+    { madeItems: false, stockItems: [] }), { statusCode: 403 });
   await assert.rejects(service.create(actorFor('member'), { customerName: 'Dana', destinationAddress: 'Market Street', items: [] }), { statusCode: 403 });
 });
 import request from 'supertest';
@@ -25,6 +26,9 @@ const ORDER_ID = '44444444-4444-4444-4444-444444444444';
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const storedOrder: Order = {
   profitSnapshot: null,
+  cancellationMadeItems: null,
+  cancelledAt: null,
+  cancelledByUserId: null,
   deliveryDate: null,
   id: ORDER_ID, orderNumber: 1, shopId: SHOP_ID, userId: USER_ID, customerName: 'Dana', orderDate: new Date('2026-01-01T00:00:00Z'), destinationAddress: null, deliveryDistanceKm: '0.00', deliveryFee: '5.00', appliedProfitMargin: '30.00', totalCost: '4.00', totalAmount: '15.00', documentUrl: null, status: 'processing', createdAt: new Date('2026-01-01T00:00:00Z'), deletedAt: null
 };
@@ -35,8 +39,9 @@ function pricingResponses() { return { 'select:shops': [[actorFor().shop]], 'sel
         recipeId: RECIPE_ID, quantity: '1', averageUnitCost: '2.00'
       }]] }; }
 test('Nest orders preserves list/detail strings, dates, snapshot names and explicit output mapping', async () => {
+  const secondOrder = { ...storedOrder, id: '55555555-5555-5555-5555-555555555555', orderNumber: 2 };
   const fake = new FakeDb({
-    'select:orders': [[{ ...storedOrder, privateColumn: 'secret' }], [{ count: 1 }], [storedOrder]], 'select:orderItems': [[{
+    'select:orders': [[{ ...storedOrder, privateColumn: 'secret' }, secondOrder], [{ count: 2 }], [storedOrder]], 'select:orderItems': [[{
           id: RECIPE_ID, recipeId: RECIPE_ID, name: 'Frozen name', quantity: '2.000', unitCost: '2.00', unitPrice: '5.00'
         }]], 'select:mediaUploads': [[{ sources: [] }]]
   });
@@ -44,7 +49,9 @@ test('Nest orders preserves list/detail strings, dates, snapshot names and expli
   try {
     const list = await request(h.app.getHttpServer()).get('/api/v1/orders?status=processing').set(auth);
     assert.equal(list.status, 200);
-    assert.equal(list.body.total, 1);
+    assert.equal(list.body.total, 2);
+    assert.equal(fake.callsTo('select', 'orderPayments').length, 1);
+    assert.equal(list.body.orders[1].paymentSummary.status, 'unpaid');
     assert.equal(list.body.orders[0].netProfit, 6);
     assert.equal(list.body.orders[0].totalAmount, '15.00');
     assert.equal(list.body.orders[0].orderDate, '2026-01-01T00:00:00.000Z');
@@ -86,17 +93,17 @@ test('Nest create uses transactional invoice numbering and the old quote path is
     await h.close();
   }
 });
-test('Nest verify enforces terminal and compare-and-set errors; cancel remains idempotent', async () => {
-  const fake = new FakeDb({ 'select:orders': [[storedOrder], [{ ...storedOrder, status: 'delivered' }], [storedOrder], [{ id: ORDER_ID, status: 'processing' }], [{ id: ORDER_ID, status: 'cancelled' }]], 'update:orders': [[{ ...storedOrder, status: 'delivered' }], [], [{ id: ORDER_ID }]] });
+test('Nest verify enforces terminal and compare-and-set errors; legacy cancellation requires a reload', async () => {
+  const fake = new FakeDb({ 'select:orders': [[storedOrder], [{ ...storedOrder, status: 'delivered' }], [storedOrder]],
+    'update:orders': [[{ ...storedOrder, status: 'delivered' }], []] });
   const h = await buildNestOrdersApp('owner', fake as never);
   try {
     const server = h.app.getHttpServer();
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 200);
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 400);
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 409);
-    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 200);
-    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 200);
-    assert.deepEqual(h.audits.map(audit => audit.eventType), ['ORDER_DELIVERED', 'ORDER_CANCELLED']);
+    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 409);
+    assert.deepEqual(h.audits.map(audit => audit.eventType), ['ORDER_DELIVERED']);
   }
   finally {
     await h.close();

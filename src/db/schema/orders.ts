@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   date,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -47,11 +49,29 @@ export const orders = pgTable('orders', {
   status: text('status').notNull().default('processing'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  cancellationMadeItems: boolean('cancellation_made_items'),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, { onDelete: 'set null' }),
 }, (t) => ({
   shopDateIdx: index('orders_shop_id_order_date_idx').on(t.shopId, t.orderDate),
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
   shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
   shopOrderNumberUnique: uniqueIndex('orders_shop_id_order_number_unique').on(t.shopId, t.orderNumber),
+}));
+
+export const orderPayments = pgTable('order_payments', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'restrict' }),
+  kind: text('kind', { enum: ['deposit', 'payment', 'refund'] }).notNull(),
+  amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+}, (t) => ({
+  orderIdx: index('order_payments_order_id_idx').on(t.orderId),
+  refundUnique: uniqueIndex('order_payments_one_refund_per_order').on(t.orderId).where(sql`${t.kind} = 'refund'`),
+  kindCheck: check('order_payments_kind_check', sql`${t.kind} IN ('deposit', 'payment', 'refund')`),
+  positiveAmount: check('order_payments_positive_amount', sql`${t.amount} > 0 AND ${t.amount} <> 'NaN'::numeric`),
 }));
 
 export const orderItems = pgTable('order_items', {
@@ -81,6 +101,26 @@ export const orderItems = pgTable('order_items', {
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({
   orderIdx: index('order_items_order_id_idx').on(t.orderId),
+  stockSource: uniqueIndex('order_items_stock_source_unique').on(t.id, t.shopId, t.recipeId),
+}));
+
+export const finishedStock = pgTable('finished_stock', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'restrict' }),
+  recipeId: uuid('recipe_id').notNull().references(() => recipes.id, { onDelete: 'restrict' }),
+  sourceOrderItemId: uuid('source_order_item_id').notNull(),
+  quantityAdded: integer('quantity_added').notNull(),
+  quantityRemaining: integer('quantity_remaining').notNull(),
+  unitCost: numeric('unit_cost', { precision: 10, scale: 2 }).notNull(),
+  costComplete: boolean('cost_complete'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  shopIdx: index('finished_stock_shop_id_idx').on(t.shopId),
+  lineUnique: uniqueIndex('finished_stock_source_line_unique').on(t.sourceOrderItemId),
+  sourceLine: foreignKey({ name: 'finished_stock_source_line_fk', columns: [t.sourceOrderItemId, t.shopId, t.recipeId],
+    foreignColumns: [orderItems.id, orderItems.shopId, orderItems.recipeId] }).onDelete('restrict'),
+  quantityCheck: check('finished_stock_quantities_check',
+    sql`${t.quantityAdded} > 0 AND ${t.quantityRemaining} BETWEEN 0 AND ${t.quantityAdded}`),
 }));
 
 /**

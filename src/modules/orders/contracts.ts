@@ -2,6 +2,33 @@ import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
 import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
+
+export const undoDeliverySchema = z.object({ confirmedMarkedByMistake: z.literal(true) }).strict();
+const paymentOccurredAtSchema = z.string().datetime({ offset: true })
+  .refine(value => !value.startsWith('0000-') && Number.isFinite(Date.parse(value)), 'Invalid payment timestamp')
+  .transform(value => new Date(value));
+
+export const recordPaymentSchema = z.object({
+  kind: z.enum(['deposit', 'payment']),
+  amount: z.string().regex(/^(0|[1-9]\d{0,7})\.\d{2}$/)
+    .refine(amount => amount !== '0.00', 'Payment must be positive'),
+  occurredAt: paymentOccurredAtSchema,
+}).strict();
+export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
+export const recordRefundSchema = z.object({ occurredAt: paymentOccurredAtSchema }).strict();
+export type RecordRefundInput = z.infer<typeof recordRefundSchema>;
+
+export const cancelOrderSchema = z.object({
+  madeItems: z.boolean(),
+  stockItems: z.array(z.object({
+    orderItemId: z.string().uuid(),
+    quantity: z.number().int().min(1).max(999_999_999),
+  }).strict()).max(100).refine(items => {
+    const distinctIds = new Set(items.map(item => item.orderItemId.toLowerCase()));
+    return distinctIds.size === items.length;
+  }, 'Select each order line only once.'),
+}).strict();
+export type CancellationDecision = z.infer<typeof cancelOrderSchema>;
 const deliveryFeeSchema = z.union([
   z.number().finite().min(0).max(99_999_999.99).multipleOf(0.01),
   z.string().max(11).regex(/^(0|[1-9]\d{0,7})(\.\d{1,2})?$/).transform(Number),
@@ -139,6 +166,7 @@ export interface CreateOrderOutput {
 export interface ListOrdersOutput {
   orders: (OrderDto & {
     netProfit: number;
+    paymentSummary: OrderPaymentSummary;
   })[];
   total: number;
 }
@@ -155,7 +183,46 @@ export interface OrderDetailOutput {
     items: OrderItemDto[];
     sources: OrderSourceDto[];
     netProfit: number;
+    paymentSummary: OrderPaymentSummary;
+    paymentHistory: OrderPaymentDto[];
+    cancellationMadeItems: boolean | null;
+    cancelledAt: string | null;
+    cancelledByUserId: string | null;
+    stockAdded: FinishedStockDto[];
   };
 }
 
+export interface FinishedStockDto {
+  id: string;
+  recipeId: string;
+  sourceOrderItemId: string;
+  quantityAdded: number;
+  quantityRemaining: number;
+  unitCost: string;
+  costComplete: boolean | null;
+  createdAt: string;
+}
+
+export type CancelOrderOutput =
+  | { outcome: 'deleted'; orderId: string }
+  | { outcome: 'cancelled'; order: OrderDetailOutput['order']; stockAdded: FinishedStockDto[] };
+
 export interface OrderMutationOutput { order: OrderDto }
+
+export interface OrderPaymentSummary {
+  status: 'unpaid' | 'deposited' | 'paid' | 'pending_refund' | 'refunded';
+  totalReceived: string;
+  balanceDue: string;
+  refundDue: string;
+  depositAmount: string;
+  depositDate: string | null;
+}
+
+export interface OrderPaymentDto {
+  id: string;
+  kind: 'deposit' | 'payment' | 'refund';
+  amount: string;
+  occurredAt: string;
+  recordedAt: string;
+  recordedByUserId: string | null;
+}

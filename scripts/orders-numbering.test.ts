@@ -20,6 +20,7 @@ import {
   shops,
 } from '../src/db/schema/index.js';
 import { buildOrdersApp, SHOP_ID, USER_ID } from './support/ordersApp.js';
+import { cancelProcessingOrder } from '../src/modules/orders/order-cancellation.persistence.js';
 
 const skip = skipWithoutDisposableDatabase;
 
@@ -144,11 +145,9 @@ test('a cancelled order keeps its number and it is never handed out again', { sk
     const issued = first.json().order as { id: string; orderNumber: number };
     assert.equal(issued.orderNumber, 1);
 
-    const cancelled = await testApp.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/orders/${issued.id}`,
-    });
-    assert.equal(cancelled.statusCode, 200);
+    const cancel = (orderId: string, madeItems: boolean) => db.transaction(tx => cancelProcessingOrder(tx,
+      { shopId: SHOP_ID, userId: USER_ID, traceId: 'numbering-test', orderId }, { madeItems, stockItems: [] }));
+    assert.equal(await cancel(issued.id, true), 'cancelled');
 
     const [voided] = await db
       .select()
@@ -174,6 +173,8 @@ test('a cancelled order keeps its number and it is never handed out again', { sk
     const shown = read.json().order as { status: string; orderNumber: number };
     assert.equal(shown.status, 'cancelled');
     assert.equal(shown.orderNumber, 1, 'the void stays readable, number and all');
+    assert.equal(await cancel(next.json().order.id, false), 'deleted');
+    assert.equal((await create()).json().order.orderNumber, 3);
   } finally {
     await testApp.close();
     await dropShop();

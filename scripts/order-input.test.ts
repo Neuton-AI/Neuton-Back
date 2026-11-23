@@ -1,7 +1,7 @@
 import './support/testEnv.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createOrderSchema } from '../src/modules/orders/contracts.js';
+import { cancelOrderSchema, createOrderSchema } from '../src/modules/orders/contracts.js';
 
 const recipeId = '11111111-1111-1111-1111-111111111111';
 const otherId = '22222222-2222-2222-2222-222222222222';
@@ -41,4 +41,18 @@ test('legacy omission keeps unknown date and no review consent while requiring c
   assert.equal(parsed.deliveryFee, undefined);
   assert.equal(parsed.confirmedUnavailableRecipeIds, undefined);
   assert.equal(parsed.items[0]?.expectedUnitPrice, undefined);
+});
+
+test('cancellation validates that each finished-stock selection refers to a distinct order line', () => {
+  const orderItemId = 'abcdef01-1111-4111-8111-111111111111';
+  const selection = { orderItemId, quantity: 1 };
+  const distinct = { orderItemId: otherId, quantity: 2 };
+
+  assert.deepEqual(cancelOrderSchema.parse({ madeItems: true, stockItems: [selection, distinct] }).stockItems, [selection, distinct]);
+  assert.deepEqual(cancelOrderSchema.parse({ madeItems: true, stockItems: [] }).stockItems, []);
+
+  for (const duplicateId of [orderItemId, orderItemId.toUpperCase()]) {
+    const input = { madeItems: true, stockItems: [selection, { orderItemId: duplicateId, quantity: 2 }] };
+    assert.throws(() => cancelOrderSchema.parse(input), /Select each order line only once/);
+  }
 });
