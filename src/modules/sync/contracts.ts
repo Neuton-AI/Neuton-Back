@@ -25,6 +25,8 @@ export interface SyncMutation {
   path: string;
   body: unknown;
   status: number;
+  /** Return 404 for a missing scoped document after checking for a replay. */
+  requireExistingDocument?: boolean;
   /** Internal caller policy; applied before the outer transaction's first read. */
   transactionIsolation?: 'serializable';
 }

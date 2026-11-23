@@ -4,6 +4,7 @@ import { requireActorRole } from '../identity/authorization.js';
 import { OrdersPersistence, mapOrder, type OrdersTransaction } from './orders.persistence.js';
 import { OrdersAudit } from './orders.audit.js';
 import { AppError, badRequest, conflict } from '../../lib/errors.js';
+import { recordAudit } from '../../lib/audit.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
@@ -251,6 +252,20 @@ export class OrdersService {
       actor.log.info({ event: 'order_delivered', orderId: id }, 'order delivered');
     });
     return { order: mapOrder(next) };
+  }
+  async undoDelivery(actor: ActorContext, id: string): Promise<OrderDetailOutput> {
+    requireActorRole(actor, ['owner', 'admin']);
+    if (!this.transaction) throw new Error('Undo delivery requires a transaction');
+    await this.persistence.undoDelivery(actor.shop.id, id);
+    await recordAudit({
+      shopId: actor.shop.id,
+      userId: actor.user.id,
+      eventType: 'ORDER_DELIVERY_UNDONE',
+      resourceId: id,
+      ipAddress: actor.ipAddress,
+      metadata: { from: 'delivered', to: 'processing' },
+    }, this.transaction);
+    return this.detail(actor, id);
   }
   async cancel(actor: ActorContext, id: string): Promise<{ ok: true }> {
     requireActorRole(actor, ['owner', 'admin']);

@@ -244,6 +244,13 @@ export class OrdersPersistence {
       .returning();
     return updated;
   }
+  async undoDelivery(shopId: string, id: string) {
+    const [updated] = await this.database.update(orders)
+      .set({ status: 'processing' })
+      .where(and(eq(orders.id, id), eq(orders.shopId, shopId), eq(orders.status, 'delivered'), isNull(orders.deletedAt)))
+      .returning({ id: orders.id });
+    if (!updated) throw conflict('Only a Delivered order can have its delivery undone.');
+  }
   async cancel(shopId: string, id: string, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
       const rows = await tx

@@ -1,4 +1,4 @@
-import { db } from '../db/client.js';
+import { db, type Database } from '../db/client.js';
 import { auditLogs } from '../db/schema/index.js';
 
 export type AuditEvent =
@@ -11,6 +11,7 @@ export type AuditEvent =
   | 'ORDER_CREATED'
   | 'ORDER_UPDATED'
   | 'ORDER_DELIVERED'
+  | 'ORDER_DELIVERY_UNDONE'
   | 'ORDER_CANCELLED'
   | 'RECIPE_CREATED'
   | 'RECIPE_UPDATED'
@@ -29,8 +30,8 @@ export interface AuditInput {
 }
 
 /** Structured security/event trail written to `audit_logs` (and mirrored to Pino). */
-export async function recordAudit(input: AuditInput): Promise<void> {
-  await db.insert(auditLogs).values({
+export async function recordAudit(input: AuditInput, database: Pick<Database, 'insert'> = db): Promise<void> {
+  await database.insert(auditLogs).values({
     shopId: input.shopId,
     userId: input.userId,
     eventType: input.eventType,

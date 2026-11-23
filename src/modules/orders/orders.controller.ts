@@ -28,6 +28,7 @@ import {
   createOrderSchema,
   listOrdersSchema,
   orderIdSchema,
+  undoDeliverySchema,
   updateOrderSchema,
 } from './contracts.js';
 @Controller('api/v1/orders')
@@ -134,6 +135,36 @@ export class OrdersController {
         return service.verify(actor, id);
       },
     );
+    return sendMutation(response, result);
+  }
+
+  @Post(':id/undo-delivery')
+  @HttpCode(200)
+  async undoDelivery(
+    @CurrentActor() actor: ActorContext,
+    @Param() params: unknown,
+    @Body() body: unknown,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const id = orderIdSchema.parse(params).id;
+    const mutation = syncMutation(request, 'order', id);
+    const mutationId = z.string().uuid().parse(mutation.mutationId);
+    const version = syncVersionSchema.parse(mutation.version);
+    const baseVersion = syncVersionSchema.parse(mutation.baseVersion);
+    undoDeliverySchema.parse(body);
+    const result = await this.sync.mutate(
+      actor,
+      { ...mutation, mutationId, version, baseVersion, requireExistingDocument: true },
+      async (tx, afterCommit) => {
+        if (!tx || !afterCommit) throw new Error('Undo delivery requires a sync transaction');
+        const detail = await this.orders.inTransaction(tx, afterCommit).undoDelivery(actor, id);
+        return { ...detail, syncVersion: version };
+      },
+    );
+    if (typeof result.body === 'object' && result.body && 'syncConflict' in result.body) {
+      throw conflict('This order changed. Reopen it before undoing delivery.');
+    }
     return sendMutation(response, result);
   }
 

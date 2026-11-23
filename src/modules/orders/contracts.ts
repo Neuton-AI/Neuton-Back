@@ -1,5 +1,7 @@
 import type { SourcePreview } from '../../db/schema/uploads.js';
 import { z } from 'zod';
+
+export const undoDeliverySchema = z.object({ confirmedMarkedByMistake: z.literal(true) }).strict();
 import { htmlFree } from '../../lib/safeText.js';
 import { ORDER_STATUSES } from '../../db/schema/enums.js';
 const deliveryFeeSchema = z.union([

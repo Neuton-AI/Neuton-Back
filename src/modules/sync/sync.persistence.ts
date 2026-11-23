@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
 import type { DocumentMeta } from '../../lib/documentSync.js';
 import type { SyncMutation } from './contracts.js';
-import { conflict } from '../../lib/errors.js';
+import { conflict, notFound } from '../../lib/errors.js';
 export const SYNC_DATABASE = Symbol('SYNC_DATABASE');
 export type SyncTransaction = Parameters<
   Parameters<Database['transaction']>[0]
@@ -62,12 +62,15 @@ export class SyncPersistence {
           recipe: 'recipes',
           order: 'orders',
         }[input.kind];
-        await tx.execute(
+        const locked = await tx.execute(
           sql`select id from ${sql.identifier(table)} where shop_id=${actor.shopId}::uuid and id=${input.documentId}::uuid for update`,
         );
         const versions = await tx.execute(
           sql`select * from document_versions where shop_id=${actor.shopId}::uuid and kind=${input.kind} and id=${input.documentId}::uuid`,
         );
+        if (input.requireExistingDocument && (!locked[0] || versions[0]?.deleted)) {
+          throw notFound('Document not found');
+        }
         if (
           !versions[0] ||
           versions[0].deleted ||
