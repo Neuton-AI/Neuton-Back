@@ -1,8 +1,36 @@
 import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import postgres from 'postgres';
+
+test('payment migration leaves preexisting orders untouched with empty histories', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 10000,
+}, async () => {
+  const connection = postgres(testDatabaseUrl!);
+  const schemaName = `payment_upgrade_${randomUUID().replaceAll('-', '')}`;
+  const orderId = randomUUID();
+  const rollback = new Error('Discard the isolated upgrade fixture');
+  try {
+    await assert.rejects(connection.begin(async tx => {
+      await tx`CREATE SCHEMA ${tx(schemaName)}`;
+      await tx`SET LOCAL search_path TO ${tx(schemaName)}, public`;
+      await tx`CREATE TABLE orders (LIKE public.orders INCLUDING ALL)`;
+      const [before] = await tx`INSERT INTO orders (id, shop_id, order_number, status, total_amount)
+        VALUES (${orderId}, ${randomUUID()}, 1, 'delivered', 19.37) RETURNING *`;
+      const migration = readFileSync(new URL('../drizzle/0042_order_payments.sql', import.meta.url), 'utf8');
+      await tx.unsafe(migration);
+      const [after] = await tx`SELECT * FROM orders WHERE id = ${orderId}`;
+      assert.deepEqual(after, before);
+      assert.equal((await tx`SELECT id FROM order_payments WHERE order_id = ${orderId}`).length, 0);
+      throw rollback;
+    }), error => error === rollback);
+  } finally {
+    await connection.end();
+  }
+});
 
 test('order payment history enforces amount, kind, refund uniqueness, and ownership constraints', {
   skip: skipWithoutDisposableDatabase,
