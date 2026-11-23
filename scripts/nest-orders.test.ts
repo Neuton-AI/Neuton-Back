@@ -14,7 +14,8 @@ test('create input rejects fractional quantity and strips caller supplied lifecy
 test('business service refuses member mutations before touching persistence', async () => {
   const repository = new OrdersPersistence({} as never);
   const service = new OrdersService(repository, new OrdersAudit());
-  await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444'), { statusCode: 403 });
+  await assert.rejects(service.cancel(actorFor('member'), '44444444-4444-4444-4444-444444444444',
+    { madeItems: false, stockItems: [] }), { statusCode: 403 });
   await assert.rejects(service.create(actorFor('member'), { customerName: 'Dana', destinationAddress: 'Market Street', items: [] }), { statusCode: 403 });
 });
 import request from 'supertest';
@@ -92,17 +93,17 @@ test('Nest create uses transactional invoice numbering and the old quote path is
     await h.close();
   }
 });
-test('Nest verify enforces terminal and compare-and-set errors; cancel remains idempotent', async () => {
-  const fake = new FakeDb({ 'select:orders': [[storedOrder], [{ ...storedOrder, status: 'delivered' }], [storedOrder], [{ id: ORDER_ID, status: 'processing' }], [{ id: ORDER_ID, status: 'cancelled' }]], 'update:orders': [[{ ...storedOrder, status: 'delivered' }], [], [{ id: ORDER_ID }]] });
+test('Nest verify enforces terminal and compare-and-set errors; legacy cancellation requires a reload', async () => {
+  const fake = new FakeDb({ 'select:orders': [[storedOrder], [{ ...storedOrder, status: 'delivered' }], [storedOrder]],
+    'update:orders': [[{ ...storedOrder, status: 'delivered' }], []] });
   const h = await buildNestOrdersApp('owner', fake as never);
   try {
     const server = h.app.getHttpServer();
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 200);
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 400);
     assert.equal((await request(server).post(`/api/v1/orders/${ORDER_ID}/verify`).set(auth)).status, 409);
-    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 200);
-    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 200);
-    assert.deepEqual(h.audits.map(audit => audit.eventType), ['ORDER_DELIVERED', 'ORDER_CANCELLED']);
+    assert.equal((await request(server).delete(`/api/v1/orders/${ORDER_ID}`).set(auth)).status, 409);
+    assert.deepEqual(h.audits.map(audit => audit.eventType), ['ORDER_DELIVERED']);
   }
   finally {
     await h.close();

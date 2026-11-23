@@ -399,56 +399,16 @@ test('GET /orders accepts ?status=cancelled so a void stays findable', async () 
   }
 });
 
-/* ------------------------------------------------- void instead of delete */
-
-test('DELETE /orders/:id cancels the order so its number is never freed', async () => {
-  const h = await harness('owner', {
-    'select:orders': [
-      [{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'processing', orderNumber: 42, deletedAt: null }],
-    ],
-    'update:orders': [[{ ...orderRow, id: ORDER_ID, status: 'cancelled', orderNumber: 42 }]],
-  });
+test('DELETE /orders/:id directs old clients to the new flow without touching the order', async () => {
+  const h = await harness();
   try {
     const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
-    assert.equal(status, 200);
-    assert.deepEqual(body, { ok: true });
-
-    assert.deepEqual(
-      h.db.callsTo('delete', 'orders'),
-      [],
-      'the row — and with it the issued number — must outlive the cancel',
-    );
-    const update = h.db.onlyCallTo('update', 'orders');
-    assert.deepEqual(update.set, { status: 'cancelled' });
-  } finally {
-    await h.close();
-  }
-});
-
-test('DELETE /orders/:id answers the same way on an order that is already cancelled', async () => {
-  const h = await harness('owner', {
-    'select:orders': [
-      [{ ...orderRow, id: ORDER_ID, shopId: SHOP_ID, status: 'cancelled', orderNumber: 42, deletedAt: null }],
-    ],
-  });
-  try {
-    const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
-    assert.equal(status, 200);
-    assert.deepEqual(body, { ok: true });
-    assert.deepEqual(h.db.callsTo('update', 'orders'), [], 'a void never writes itself twice');
-    assert.deepEqual(h.db.callsTo('delete', 'orders'), []);
-  } finally {
-    await h.close();
-  }
-});
-
-test('DELETE /orders/:id reads a missing or cross-shop order as 404', async () => {
-  const h = await harness('owner', { 'select:orders': [[]] });
-  try {
-    const { status, body } = await h.del(`/api/v1/orders/${ORDER_ID}`);
-    assert.equal(status, 404);
-    assert.equal(body.error.code, 'NOT_FOUND');
+    assert.equal(status, 409);
+    assert.equal(body.error.code, 'CONFLICT');
+    assert.match(body.error.message, /Reload the app/);
+    assert.deepEqual(h.db.callsTo('select', 'orders'), []);
     assert.deepEqual(h.db.callsTo('update', 'orders'), []);
+    assert.deepEqual(h.db.callsTo('delete', 'orders'), []);
   } finally {
     await h.close();
   }

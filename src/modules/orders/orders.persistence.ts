@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
-import { orders, orderItems, orderItemRecipeName, orderPayments, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
+import { orders, orderItems, orderItemRecipeName, orderPayments, finishedStock, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { orderProfitCorrection } from '../../lib/orderProfit.js';
@@ -146,6 +146,12 @@ export class OrdersPersistence {
       }))),
     };
   }
+  async stockAdded(shopId: string, orderId: string) {
+    return this.database.select({ ...getTableColumns(finishedStock) }).from(finishedStock)
+      .innerJoin(orderItems, eq(orderItems.id, finishedStock.sourceOrderItemId))
+      .where(and(eq(finishedStock.shopId, shopId), eq(orderItems.orderId, orderId)))
+      .orderBy(asc(finishedStock.sourceOrderItemId));
+  }
   async create(shopId: string, userId: string, body: CreateOrderInput & { orderDate: Date }, priced: PricedOrderItem[], totals: OrderTotals, transaction?: OrdersTransaction) {
     const write = async (tx: OrdersTransaction) => {
       // One `UPDATE … RETURNING` both claims the next number and locks the
@@ -271,29 +277,5 @@ export class OrdersPersistence {
     // Run the existing order document version trigger for a payment-only change.
     await this.database.update(orders).set({ status: order.status })
       .where(and(eq(orders.id, order.id), eq(orders.shopId, order.shopId)));
-  }
-  async cancel(shopId: string, id: string, transaction?: OrdersTransaction) {
-    const write = async (tx: OrdersTransaction) => {
-      const rows = await tx
-        .select({ id: orders.id, status: orders.status })
-        .from(orders)
-        .where(and(eq(orders.id, id), eq(orders.shopId, shopId), isNull(orders.deletedAt)))
-        .limit(1)
-        .for('update');
-      const order = rows[0];
-      if (!order)
-        throw notFound('Order not found');
-      if (order.status === 'cancelled')
-        return null;
-      const updated = await tx
-        .update(orders)
-        .set({ status: 'cancelled' })
-        .where(and(eq(orders.id, id), eq(orders.shopId, shopId)))
-        .returning({ id: orders.id });
-      if (!updated[0])
-        throw notFound('Order not found');
-      return order.status;
-    };
-    return transaction ? write(transaction) : this.database.transaction(write);
   }
 }

@@ -8,7 +8,8 @@ import { recordAudit } from '../../lib/audit.js';
 import { money, toNumber } from '../../lib/money.js';
 import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
-import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, RecordPaymentInput, UpdateOrderInput } from './contracts.js';
+import type { CancellationDecision, CancelOrderOutput, CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, RecordPaymentInput, UpdateOrderInput } from './contracts.js';
+import { cancelProcessingOrder } from './order-cancellation.persistence.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
 import { minorUnits, summarizeOrderPayments } from './order-payment-summary.js';
 
@@ -67,9 +68,10 @@ export class OrdersService {
   async detail(actor: ActorContext, id: string): Promise<OrderDetailOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const order = await this.persistence.find(actor.shop.id, id);
-    const [{ items, sources }, history] = await Promise.all([
+    const [{ items, sources }, history, stock] = await Promise.all([
       this.persistence.detailLines(actor.shop.id, id),
       this.persistence.paymentHistory(actor.shop.id, [id]),
+      order.cancellationMadeItems === true ? this.persistence.stockAdded(actor.shop.id, id) : [],
     ]);
     const payments = history.get(id) ?? [];
     return {
@@ -95,6 +97,10 @@ export class OrdersService {
           recordedAt: payment.recordedAt.toISOString(),
           recordedByUserId: payment.recordedByUserId,
         })),
+        cancellationMadeItems: order.cancellationMadeItems ?? null,
+        cancelledAt: order.cancelledAt?.toISOString() ?? null,
+        cancelledByUserId: order.cancelledByUserId ?? null,
+        stockAdded: stock.map(({ shopId: _shopId, createdAt, ...row }) => ({ ...row, createdAt: createdAt.toISOString() })),
       },
     };
   }
@@ -296,22 +302,13 @@ export class OrdersService {
     await this.persistence.insertPayment(order, { ...input, recordedByUserId: actor.user.id });
     return this.detail(actor, id);
   }
-  async cancel(actor: ActorContext, id: string): Promise<{ ok: true }> {
+  async cancel(actor: ActorContext, id: string, decision: CancellationDecision): Promise<CancelOrderOutput> {
     requireActorRole(actor, ['owner', 'admin']);
-    const previousStatus = await this.persistence.cancel(actor.shop.id, id);
-    if (previousStatus) {
-      await this.committed(async () => {
-        await this.audit.record(actor, {
-          shopId: actor.shop.id,
-          userId: actor.user.id,
-          eventType: 'ORDER_CANCELLED',
-          resourceId: id,
-          ipAddress: actor.ipAddress,
-          metadata: { from: previousStatus, to: 'cancelled' },
-        });
-        actor.log.info({ event: 'order_cancelled', orderId: id }, 'order cancelled');
-      });
-    }
-    return { ok: true };
+    if (!this.transaction) throw new Error('Order cancellation requires a transaction');
+    const outcome = await cancelProcessingOrder(this.transaction, { shopId: actor.shop.id, orderId: id,
+      userId: actor.user.id, ipAddress: actor.ipAddress, traceId: actor.traceId }, decision);
+    if (outcome === 'deleted') return { outcome, orderId: id };
+    const { order } = await this.detail(actor, id);
+    return { outcome, order, stockAdded: order.stockAdded };
   }
 }

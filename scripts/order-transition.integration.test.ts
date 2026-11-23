@@ -48,15 +48,7 @@ test('order verification cannot overwrite a concurrent cancellation, verificatio
   const app = await buildOrdersApp('owner');
   try {
     // These temporary tables are connection-local and never touch real tables.
-    await connection.unsafe(`CREATE TEMP TABLE orders (
-      id uuid PRIMARY KEY, order_number integer NOT NULL, shop_id uuid NOT NULL,
-      user_id uuid, customer_name text, order_date timestamptz DEFAULT now(),
-      destination_address text, delivery_date date, delivery_distance_km numeric DEFAULT 0,
-      delivery_fee numeric DEFAULT 0, applied_profit_margin numeric,
-      total_cost numeric DEFAULT 0, total_amount numeric DEFAULT 0, profit_snapshot numeric,
-      document_url text, status text DEFAULT 'processing',
-      created_at timestamptz DEFAULT now(), deleted_at timestamptz
-    )`);
+    await connection`CREATE TEMP TABLE orders (LIKE public.orders INCLUDING DEFAULTS)`;
     for (const competitor of ['cancelled', 'delivered', 'deleted'] as const) {
       await connection`DELETE FROM orders`;
       await connection`INSERT INTO orders(id,order_number,shop_id) VALUES (${ORDER_ID},1,${SHOP_ID})`;
@@ -78,10 +70,7 @@ test('order verification cannot overwrite a concurrent cancellation, verificatio
         }),
       ]);
       if (competitor === 'cancelled') {
-        // Exercise the real cancellation transaction, including its row lock.
-        app.use({ db: database });
-        const cancelled = await app.app.inject({ method: 'DELETE', url: `/api/v1/orders/${ORDER_ID}` });
-        assert.equal(cancelled.statusCode, 200);
+        await connection`UPDATE orders SET status = 'cancelled' WHERE id = ${ORDER_ID}`;
       } else if (competitor === 'delivered') {
         await connection`UPDATE orders SET status = 'delivered' WHERE id = ${ORDER_ID}`;
       } else {

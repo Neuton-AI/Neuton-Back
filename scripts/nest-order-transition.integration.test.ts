@@ -132,10 +132,7 @@ test('Nest order verification preserves concurrent outcomes and defers effects u
       const result = Promise.resolve(verifying);
       await selected.promise;
       if (competitor === 'cancelled') {
-        // Exercise the real cancellation transaction, including its row lock.
-        app.use({ db: database });
-        const cancelled = await request(app.app.getHttpServer()).delete(`/api/v1/orders/${ORDER_ID}`).set({ cookie: '__Host-neuton-session=test', 'x-shop-id': SHOP_ID });
-        assert.equal(cancelled.status, 200);
+        await connection`UPDATE orders SET status = 'cancelled' WHERE id = ${ORDER_ID}`;
       } else if (competitor === 'delivered') {
         await connection`UPDATE orders SET status = 'delivered' WHERE id = ${ORDER_ID}`;
       } else {

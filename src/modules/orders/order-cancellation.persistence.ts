@@ -5,8 +5,7 @@ import { previewStoragePath, sourceStoragePaths } from '../../lib/documentPrevie
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { scheduleObjectDeletions } from '../../lib/storageCleanup.js';
 import type { OrdersTransaction } from './orders.persistence.js';
-
-export type CancellationDecision = { madeItems: boolean; stockItems: { orderItemId: string; quantity: number }[] };
+import type { CancellationDecision } from './contracts.js';
 
 async function unsharedPaths(tx: OrdersTransaction, shopId: string, paths: string[]) {
   if (!paths.length) return [];

@@ -13,6 +13,12 @@ export const recordPaymentSchema = z.object({
     .transform(value => new Date(value)),
 }).strict();
 export type RecordPaymentInput = z.infer<typeof recordPaymentSchema>;
+
+export const cancelOrderSchema = z.object({
+  madeItems: z.boolean(),
+  stockItems: z.array(z.object({ orderItemId: z.string().uuid(), quantity: z.number().int().min(1).max(999_999_999) }).strict()).max(100),
+}).strict();
+export type CancellationDecision = z.infer<typeof cancelOrderSchema>;
 const deliveryFeeSchema = z.union([
   z.number().finite().min(0).max(99_999_999.99).multipleOf(0.01),
   z.string().max(11).regex(/^(0|[1-9]\d{0,7})(\.\d{1,2})?$/).transform(Number),
@@ -169,8 +175,27 @@ export interface OrderDetailOutput {
     netProfit: number;
     paymentSummary: OrderPaymentSummary;
     paymentHistory: OrderPaymentDto[];
+    cancellationMadeItems: boolean | null;
+    cancelledAt: string | null;
+    cancelledByUserId: string | null;
+    stockAdded: FinishedStockDto[];
   };
 }
+
+export interface FinishedStockDto {
+  id: string;
+  recipeId: string;
+  sourceOrderItemId: string;
+  quantityAdded: number;
+  quantityRemaining: number;
+  unitCost: string;
+  costComplete: boolean | null;
+  createdAt: string;
+}
+
+export type CancelOrderOutput =
+  | { outcome: 'deleted'; orderId: string }
+  | { outcome: 'cancelled'; order: OrderDetailOutput['order']; stockAdded: FinishedStockDto[] };
 
 export interface OrderMutationOutput { order: OrderDto }
 

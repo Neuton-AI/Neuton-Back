@@ -22,9 +22,11 @@ import {
 } from '@nestjs/common';
 import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentActor } from '../identity/current-actor.js';
+import { requireActorRole } from '../identity/authorization.js';
 import type { ActorContext } from '../identity/contracts.js';
 import { OrdersService } from './orders.service.js';
 import {
+  cancelOrderSchema,
   createOrderSchema,
   listOrdersSchema,
   orderIdSchema,
@@ -199,25 +201,41 @@ export class OrdersController {
     return sendMutation(response, result);
   }
 
-  @Delete(':id')
+  @Post(':id/cancel')
+  @HttpCode(200)
   async cancel(
     @CurrentActor() actor: ActorContext,
     @Param() params: unknown,
+    @Body() body: unknown,
     @Req() request: HttpRequest,
     @Res({ passthrough: true }) response: Response,
   ) {
     const id = orderIdSchema.parse(params).id;
+    const mutation = syncMutation(request, 'order', id);
+    const mutationId = z.string().uuid().parse(mutation.mutationId);
+    const version = syncVersionSchema.parse(mutation.version);
+    const baseVersion = syncVersionSchema.parse(mutation.baseVersion);
+    const decision = cancelOrderSchema.parse(body);
     const result = await this.sync.mutate(
       actor,
-      syncMutation(request, 'order', id, 200),
+      { ...mutation, mutationId, version, baseVersion, requireExistingDocument: true },
       async (tx, afterCommit) => {
-        const service =
-          tx && afterCommit
-            ? this.orders.inTransaction(tx, afterCommit)
-            : this.orders;
-        return service.cancel(actor, id);
+        if (!tx || !afterCommit) throw new Error('Order cancellation requires a sync transaction');
+        const result = await this.orders.inTransaction(tx, afterCommit).cancel(actor, id, decision);
+        if (result.outcome === 'deleted') return result;
+        return { ...result, syncVersion: version };
       },
     );
+    if (typeof result.body === 'object' && result.body && 'syncConflict' in result.body) {
+      throw conflict('This order changed. Reload it before canceling.');
+    }
     return sendMutation(response, result);
+  }
+
+  @Delete(':id')
+  legacyCancel(@CurrentActor() actor: ActorContext, @Param() params: unknown) {
+    orderIdSchema.parse(params);
+    requireActorRole(actor, ['owner', 'admin']);
+    throw conflict('Reload the app and use Cancel from the order details.');
   }
 }
