@@ -35,8 +35,9 @@ function pricingResponses() { return { 'select:shops': [[actorFor().shop]], 'sel
         recipeId: RECIPE_ID, quantity: '1', averageUnitCost: '2.00'
       }]] }; }
 test('Nest orders preserves list/detail strings, dates, snapshot names and explicit output mapping', async () => {
+  const secondOrder = { ...storedOrder, id: '55555555-5555-5555-5555-555555555555', orderNumber: 2 };
   const fake = new FakeDb({
-    'select:orders': [[{ ...storedOrder, privateColumn: 'secret' }], [{ count: 1 }], [storedOrder]], 'select:orderItems': [[{
+    'select:orders': [[{ ...storedOrder, privateColumn: 'secret' }, secondOrder], [{ count: 2 }], [storedOrder]], 'select:orderItems': [[{
           id: RECIPE_ID, recipeId: RECIPE_ID, name: 'Frozen name', quantity: '2.000', unitCost: '2.00', unitPrice: '5.00'
         }]], 'select:mediaUploads': [[{ sources: [] }]]
   });
@@ -44,7 +45,9 @@ test('Nest orders preserves list/detail strings, dates, snapshot names and expli
   try {
     const list = await request(h.app.getHttpServer()).get('/api/v1/orders?status=processing').set(auth);
     assert.equal(list.status, 200);
-    assert.equal(list.body.total, 1);
+    assert.equal(list.body.total, 2);
+    assert.equal(fake.callsTo('select', 'orderPayments').length, 1);
+    assert.equal(list.body.orders[1].paymentSummary.status, 'unpaid');
     assert.equal(list.body.orders[0].netProfit, 6);
     assert.equal(list.body.orders[0].totalAmount, '15.00');
     assert.equal(list.body.orders[0].orderDate, '2026-01-01T00:00:00.000Z');

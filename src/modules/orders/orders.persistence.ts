@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type Database } from '../../db/client.js';
-import { orders, orderItems, orderItemRecipeName, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
+import { orders, orderItems, orderItemRecipeName, orderPayments, recipes, shops, mediaUploads, recipeIngredients, inventoryItems, generalPrices } from '../../db/schema/index.js';
 import type { Order } from '../../db/schema/orders.js';
 import { recipeIngredientUnitCost } from '../../lib/recipeCostQuery.js';
 import { orderProfitCorrection } from '../../lib/orderProfit.js';
@@ -98,6 +98,20 @@ export class OrdersPersistence {
     if (!order)
       throw notFound('Order not found');
     return order;
+  }
+  async paymentHistory(shopId: string, ids: string[]) {
+    if (!ids.length) return new Map<string, (typeof orderPayments.$inferSelect)[]>();
+    const rows = await this.database.select(getTableColumns(orderPayments)).from(orderPayments)
+      .innerJoin(orders, and(eq(orders.id, orderPayments.orderId), eq(orders.shopId, shopId), isNull(orders.deletedAt)))
+      .where(inArray(orderPayments.orderId, ids))
+      .orderBy(asc(orderPayments.occurredAt), asc(orderPayments.recordedAt), asc(orderPayments.id));
+    const history = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const payments = history.get(row.orderId);
+      if (payments) payments.push(row);
+      else history.set(row.orderId, [row]);
+    }
+    return history;
   }
   async detailLines(shopId: string, id: string) {
     const items = await this.database

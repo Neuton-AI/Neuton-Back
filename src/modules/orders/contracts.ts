@@ -141,6 +141,7 @@ export interface CreateOrderOutput {
 export interface ListOrdersOutput {
   orders: (OrderDto & {
     netProfit: number;
+    paymentSummary: OrderPaymentSummary;
   })[];
   total: number;
 }
@@ -157,7 +158,27 @@ export interface OrderDetailOutput {
     items: OrderItemDto[];
     sources: OrderSourceDto[];
     netProfit: number;
+    paymentSummary: OrderPaymentSummary;
+    paymentHistory: OrderPaymentDto[];
   };
 }
 
 export interface OrderMutationOutput { order: OrderDto }
+
+export interface OrderPaymentSummary {
+  status: 'unpaid' | 'deposited' | 'paid' | 'pending_refund' | 'refunded';
+  totalReceived: string;
+  balanceDue: string;
+  refundDue: string;
+  depositAmount: string;
+  depositDate: string | null;
+}
+
+export interface OrderPaymentDto {
+  id: string;
+  kind: 'deposit' | 'payment' | 'refund';
+  amount: string;
+  occurredAt: string;
+  recordedAt: string;
+  recordedByUserId: string | null;
+}

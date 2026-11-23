@@ -10,6 +10,7 @@ import { readOrderProfit } from '../../lib/orderProfit.js';
 import { calculateOrderPricing, calculateOrderTotals, calculateUnitCost } from '../../lib/pricing.js';
 import type { CreateOrderInput, ListOrdersInput, PricedOrderItem, CreateOrderOutput, ListOrdersOutput, OrderDetailOutput, OrderMutationOutput, UpdateOrderInput } from './contracts.js';
 import { reviewOrder, type OrderReviewState } from './order-review.js';
+import { summarizeOrderPayments } from './order-payment-summary.js';
 
 function isDeliveryBeforeOrder(deliveryDate: string, orderDate: Date, timeZone: string): boolean {
   const options: Intl.DateTimeFormatOptions = {
@@ -53,10 +54,12 @@ export class OrdersService {
   async list(actor: ActorContext, query: ListOrdersInput): Promise<ListOrdersOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const { rows, total } = await this.persistence.list(actor.shop.id, query);
+    const history = await this.persistence.paymentHistory(actor.shop.id, rows.map(order => order.id));
     return {
       orders: rows.map(order => ({
         ...mapOrder(order),
         netProfit: readOrderProfit(order),
+        paymentSummary: summarizeOrderPayments(order.status, order.totalAmount, history.get(order.id) ?? []),
       })),
       total,
     };
@@ -64,7 +67,11 @@ export class OrdersService {
   async detail(actor: ActorContext, id: string): Promise<OrderDetailOutput> {
     requireActorRole(actor, ['owner', 'admin', 'member']);
     const order = await this.persistence.find(actor.shop.id, id);
-    const { items, sources } = await this.persistence.detailLines(actor.shop.id, id);
+    const [{ items, sources }, history] = await Promise.all([
+      this.persistence.detailLines(actor.shop.id, id),
+      this.persistence.paymentHistory(actor.shop.id, [id]),
+    ]);
+    const payments = history.get(id) ?? [];
     return {
       order: {
         ...mapOrder(order),
@@ -79,6 +86,15 @@ export class OrdersService {
         })),
         sources,
         netProfit: readOrderProfit(order),
+        paymentSummary: summarizeOrderPayments(order.status, order.totalAmount, payments),
+        paymentHistory: payments.map(payment => ({
+          id: payment.id,
+          kind: payment.kind,
+          amount: payment.amount,
+          occurredAt: payment.occurredAt.toISOString(),
+          recordedAt: payment.recordedAt.toISOString(),
+          recordedByUserId: payment.recordedByUserId,
+        })),
       },
     };
   }
