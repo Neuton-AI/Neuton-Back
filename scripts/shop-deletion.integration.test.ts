@@ -110,7 +110,10 @@ test('owner delete removes one shop and refuses everyone else', {
     assert.ok(keptOrder);
     await connection`INSERT INTO order_payments (order_id, kind, amount, occurred_at, recorded_by_user_id) VALUES
       (${order.id}, 'deposit', 12.34, now(), ${owner.id}), (${keptOrder.id}, 'payment', 23.45, now(), ${owner.id})`;
-    await connection`INSERT INTO order_items (shop_id, order_id, recipe_id) VALUES (${shopId}, ${order.id}, ${recipe.id})`;
+    const [line] = await connection`INSERT INTO order_items (shop_id, order_id, recipe_id)
+      VALUES (${shopId}, ${order.id}, ${recipe.id}) RETURNING id`;
+    await connection`INSERT INTO finished_stock (shop_id, recipe_id, source_order_item_id, quantity_added, quantity_remaining, unit_cost)
+      VALUES (${shopId}, ${recipe.id}, ${line!.id}, 1, 1, 4.10)`;
     await connection`INSERT INTO receipts (shop_id, storage_path) VALUES (${shopId}, ${`${shopId}/receipts/note.jpg`})`;
     await connection`INSERT INTO media_uploads (shop_id, kind, sources) VALUES (${shopId}, 'recipe', ${connection.json([{
       sourceId: randomUUID(), storagePath: path, contentType: 'image/jpeg', originalFilename: null, byteSize: 4,
@@ -151,6 +154,7 @@ test('owner delete removes one shop and refuses everyone else', {
     assert.equal((await remove(owner, shopId, 'Doomed Shop')).status, 404);
     assert.equal((await api.get('/api/v1/sync/events').set({ Cookie: owner.cookie, 'x-shop-id': shopId })).status, 403);
     assert.equal((await connection`SELECT count(*)::int AS n FROM shops WHERE id = ${shopId}`)[0]?.n, 0);
+    assert.equal((await connection`SELECT count(*)::int AS n FROM finished_stock WHERE shop_id = ${shopId}`)[0]?.n, 0);
     assert.equal((await connection`SELECT count(*)::int AS n FROM shop_members WHERE shop_id = ${shopId}`)[0]?.n, 0);
     assert.equal((await connection`SELECT count(*)::int AS n FROM recipes WHERE shop_id = ${shopId}`)[0]?.n, 0);
     assert.equal((await connection`SELECT count(*)::int AS n FROM orders WHERE shop_id = ${shopId}`)[0]?.n, 0);

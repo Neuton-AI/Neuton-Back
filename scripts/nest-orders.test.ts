@@ -25,6 +25,9 @@ const ORDER_ID = '44444444-4444-4444-4444-444444444444';
 const RECIPE_ID = '11111111-1111-1111-1111-111111111111';
 const storedOrder: Order = {
   profitSnapshot: null,
+  cancellationMadeItems: null,
+  cancelledAt: null,
+  cancelledByUserId: null,
   deliveryDate: null,
   id: ORDER_ID, orderNumber: 1, shopId: SHOP_ID, userId: USER_ID, customerName: 'Dana', orderDate: new Date('2026-01-01T00:00:00Z'), destinationAddress: null, deliveryDistanceKm: '0.00', deliveryFee: '5.00', appliedProfitMargin: '30.00', totalCost: '4.00', totalAmount: '15.00', documentUrl: null, status: 'processing', createdAt: new Date('2026-01-01T00:00:00Z'), deletedAt: null
 };

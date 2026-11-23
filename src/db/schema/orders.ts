@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -48,6 +49,9 @@ export const orders = pgTable('orders', {
   status: text('status').notNull().default('processing'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  cancellationMadeItems: boolean('cancellation_made_items'),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+  cancelledByUserId: uuid('cancelled_by_user_id').references(() => users.id, { onDelete: 'set null' }),
 }, (t) => ({
   shopDateIdx: index('orders_shop_id_order_date_idx').on(t.shopId, t.orderDate),
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
@@ -97,6 +101,26 @@ export const orderItems = pgTable('order_items', {
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull().default('0.00'),
 }, (t) => ({
   orderIdx: index('order_items_order_id_idx').on(t.orderId),
+  stockSource: uniqueIndex('order_items_stock_source_unique').on(t.id, t.shopId, t.recipeId),
+}));
+
+export const finishedStock = pgTable('finished_stock', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  shopId: uuid('shop_id').notNull().references(() => shops.id, { onDelete: 'restrict' }),
+  recipeId: uuid('recipe_id').notNull().references(() => recipes.id, { onDelete: 'restrict' }),
+  sourceOrderItemId: uuid('source_order_item_id').notNull(),
+  quantityAdded: integer('quantity_added').notNull(),
+  quantityRemaining: integer('quantity_remaining').notNull(),
+  unitCost: numeric('unit_cost', { precision: 10, scale: 2 }).notNull(),
+  costComplete: boolean('cost_complete'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  shopIdx: index('finished_stock_shop_id_idx').on(t.shopId),
+  lineUnique: uniqueIndex('finished_stock_source_line_unique').on(t.sourceOrderItemId),
+  sourceLine: foreignKey({ name: 'finished_stock_source_line_fk', columns: [t.sourceOrderItemId, t.shopId, t.recipeId],
+    foreignColumns: [orderItems.id, orderItems.shopId, orderItems.recipeId] }).onDelete('restrict'),
+  quantityCheck: check('finished_stock_quantities_check',
+    sql`${t.quantityAdded} > 0 AND ${t.quantityRemaining} BETWEEN 0 AND ${t.quantityAdded}`),
 }));
 
 /**
