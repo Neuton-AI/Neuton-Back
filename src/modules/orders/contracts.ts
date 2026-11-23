@@ -20,7 +20,13 @@ export type RecordRefundInput = z.infer<typeof recordRefundSchema>;
 
 export const cancelOrderSchema = z.object({
   madeItems: z.boolean(),
-  stockItems: z.array(z.object({ orderItemId: z.string().uuid(), quantity: z.number().int().min(1).max(999_999_999) }).strict()).max(100),
+  stockItems: z.array(z.object({
+    orderItemId: z.string().uuid(),
+    quantity: z.number().int().min(1).max(999_999_999),
+  }).strict()).max(100).refine(items => {
+    const distinctIds = new Set(items.map(item => item.orderItemId.toLowerCase()));
+    return distinctIds.size === items.length;
+  }, 'Select each order line only once.'),
 }).strict();
 export type CancellationDecision = z.infer<typeof cancelOrderSchema>;
 const deliveryFeeSchema = z.union([

@@ -3,6 +3,9 @@ import type { OrderPaymentDto, OrderPaymentSummary } from './contracts.js';
 type Payment = Pick<OrderPaymentDto, 'kind' | 'amount'> & { occurredAt: Date };
 
 export function minorUnits(amount: string): bigint {
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(amount)) {
+    throw new RangeError('Expected a decimal amount with at most two fractional digits.');
+  }
   const [whole, fraction = ''] = amount.split('.');
   return BigInt(`${whole}${fraction.padEnd(2, '0')}`);
 }

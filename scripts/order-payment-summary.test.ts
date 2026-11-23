@@ -42,3 +42,12 @@ test('cancellation owes the full amount received until it has been refunded', ()
   assert.equal(refunded.refundDue, '0.00');
   assert.equal(refunded.totalReceived, '50.10');
 });
+
+test('payment summaries reject a three-decimal billed total', () => {
+  assert.throws(() => summarizeOrderPayments('processing', '0.123', []), RangeError);
+});
+
+test('payment summaries reject three-decimal entries in payment history', () => {
+  const excessivePrecision = { ...deposit, amount: '1.234' };
+  assert.throws(() => summarizeOrderPayments('cancelled', '240.00', [excessivePrecision]), RangeError);
+});
