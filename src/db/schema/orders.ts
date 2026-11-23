@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   date,
   index,
   integer,
@@ -52,6 +53,21 @@ export const orders = pgTable('orders', {
   shopDeletedIdx: index('orders_shop_id_deleted_at_idx').on(t.shopId, t.deletedAt),
   shopStatusIdx: index('orders_shop_id_status_idx').on(t.shopId, t.status),
   shopOrderNumberUnique: uniqueIndex('orders_shop_id_order_number_unique').on(t.shopId, t.orderNumber),
+}));
+
+export const orderPayments = pgTable('order_payments', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  orderId: uuid('order_id').notNull().references(() => orders.id, { onDelete: 'restrict' }),
+  kind: text('kind', { enum: ['deposit', 'payment', 'refund'] }).notNull(),
+  amount: numeric('amount', { precision: 10, scale: 2 }).notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  recordedAt: timestamp('recorded_at', { withTimezone: true }).notNull().defaultNow(),
+  recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+}, (t) => ({
+  orderIdx: index('order_payments_order_id_idx').on(t.orderId),
+  refundUnique: uniqueIndex('order_payments_one_refund_per_order').on(t.orderId).where(sql`${t.kind} = 'refund'`),
+  kindCheck: check('order_payments_kind_check', sql`${t.kind} IN ('deposit', 'payment', 'refund')`),
+  positiveAmount: check('order_payments_positive_amount', sql`${t.amount} > 0 AND ${t.amount} <> 'NaN'::numeric`),
 }));
 
 export const orderItems = pgTable('order_items', {

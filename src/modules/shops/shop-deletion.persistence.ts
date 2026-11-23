@@ -1,8 +1,10 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   mediaUploads,
   orderItems,
+  orderPayments,
+  orders,
   receipts,
   recipeIngredients,
   recipes,
@@ -67,6 +69,9 @@ export async function deleteOwnedShop(
       paths: await storagePaths(tx, shop.id),
     });
     // These children restrict each other, so remove them before the shop cascade.
+    await tx.delete(orderPayments).where(inArray(orderPayments.orderId,
+      tx.select({ id: orders.id }).from(orders).where(eq(orders.shopId, shop.id)),
+    ));
     await tx.delete(orderItems).where(eq(orderItems.shopId, shop.id));
     await tx.delete(recipeIngredients).where(eq(recipeIngredients.shopId, shop.id));
     await tx.delete(shops).where(eq(shops.id, shop.id));

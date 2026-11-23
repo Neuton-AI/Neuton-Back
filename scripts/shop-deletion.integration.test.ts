@@ -106,6 +106,10 @@ test('owner delete removes one shop and refuses everyone else', {
     await connection`INSERT INTO orders (shop_id, order_number) VALUES (${shopId}, 1)`;
     const [order] = await connection<{ id: string }[]>`SELECT id FROM orders WHERE shop_id = ${shopId}`;
     assert.ok(order);
+    const [keptOrder] = await connection<{ id: string }[]>`INSERT INTO orders (shop_id, order_number) VALUES (${keptId}, 1) RETURNING id`;
+    assert.ok(keptOrder);
+    await connection`INSERT INTO order_payments (order_id, kind, amount, occurred_at, recorded_by_user_id) VALUES
+      (${order.id}, 'deposit', 12.34, now(), ${owner.id}), (${keptOrder.id}, 'payment', 23.45, now(), ${owner.id})`;
     await connection`INSERT INTO order_items (shop_id, order_id, recipe_id) VALUES (${shopId}, ${order.id}, ${recipe.id})`;
     await connection`INSERT INTO receipts (shop_id, storage_path) VALUES (${shopId}, ${`${shopId}/receipts/note.jpg`})`;
     await connection`INSERT INTO media_uploads (shop_id, kind, sources) VALUES (${shopId}, 'recipe', ${connection.json([{
@@ -150,6 +154,8 @@ test('owner delete removes one shop and refuses everyone else', {
     assert.equal((await connection`SELECT count(*)::int AS n FROM shop_members WHERE shop_id = ${shopId}`)[0]?.n, 0);
     assert.equal((await connection`SELECT count(*)::int AS n FROM recipes WHERE shop_id = ${shopId}`)[0]?.n, 0);
     assert.equal((await connection`SELECT count(*)::int AS n FROM orders WHERE shop_id = ${shopId}`)[0]?.n, 0);
+    const remainingPayments = await connection`SELECT order_id FROM order_payments WHERE order_id IN (${order.id}, ${keptOrder.id})`;
+    assert.deepEqual(remainingPayments.map(payment => payment.order_id), [keptOrder.id]);
     assert.equal((await connection`SELECT count(*)::int AS n FROM storage_object_deletions WHERE shop_id = ${shopId}`)[0]?.n, 3);
     assert.equal((await connection`SELECT count(*)::int AS n FROM shops WHERE id = ${keptId}`)[0]?.n, 1);
     assert.equal((await connection`SELECT count(*)::int AS n FROM users WHERE id = ${owner.id}`)[0]?.n, 1);
