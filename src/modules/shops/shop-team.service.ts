@@ -8,6 +8,7 @@ import { conflict, forbidden, notFound } from '../../lib/errors.js';
 import { requireActorRole } from '../identity/authorization.js';
 import type { ActorContext } from '../identity/contracts.js';
 import type { SessionActor } from '../identity/session.guard.js';
+import { SyncEvents } from '../sync/sync-events.js';
 import type { OutgoingShopInvitation, SearchShopAccounts, SendShopInvitation, ShopAccountMatch, ShopTeamRole } from './shop-team.contracts.js';
 import { SHOPS_DATABASE } from './shops.persistence.js';
 
@@ -75,7 +76,10 @@ async function resolvePending(
 
 @Injectable()
 export class ShopTeamService {
-  constructor(@Inject(SHOPS_DATABASE) private readonly database: Database) {}
+  constructor(
+    @Inject(SHOPS_DATABASE) private readonly database: Database,
+    @Inject(SyncEvents) private readonly events: SyncEvents,
+  ) {}
 
   async roster(actor: ActorContext) {
     requireActorRole(actor, ['owner']);
@@ -104,6 +108,24 @@ export class ShopTeamService {
         metadata: { memberUserId: member.userId, previousRole: member.role, role },
       }, tx);
     });
+  }
+
+  async removeMember(actor: ActorContext, membershipId: string) {
+    requireActorRole(actor, ['owner']);
+    await this.database.transaction(async (tx) => {
+      const member = await lockManagedMember(tx, actor, membershipId);
+      await tx.delete(shopMembers).where(eq(shopMembers.id, member.id));
+      await recordAudit({
+        shopId: actor.shop.id,
+        userId: actor.user.id,
+        eventType: 'SHOP_MEMBER_REMOVED',
+        resourceId: member.id,
+        ipAddress: actor.ipAddress,
+        metadata: { memberUserId: member.userId, previousRole: member.role },
+      }, tx);
+    });
+    // Revalidate open streams on this process. Other instances recheck on heartbeat.
+    this.events.changed(actor.shop.id);
   }
 
   async searchAccounts(actor: ActorContext, { query, page }: SearchShopAccounts) {

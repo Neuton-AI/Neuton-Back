@@ -203,6 +203,56 @@ test('only the selected shop owner can change teammate roles, and existing sessi
   }
 });
 
+test('owner removal revokes existing access only in the selected shop and allows a new invitation', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 45000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Removal Owner');
+    const teammate = await account('Removed Teammate');
+    const shopId = await shop(owner, 'Removal Shop');
+    const otherShopId = await shop(teammate, 'Teammate Own Shop');
+    const ownerHeaders = { ...owner.headers, 'X-Shop-Id': shopId };
+    const teammateHeaders = { ...teammate.headers, 'X-Shop-Id': shopId };
+    const send = () => api.post(outgoingPath).set(ownerHeaders)
+      .send({ recipientId: teammate.id, offeredRole: 'admin' }).expect(201);
+    const firstInvite = (await send()).body.invitation.id as string;
+    await api.post(`${inboxPath}/${firstInvite}/accept`).set(teammate.headers).expect(200);
+    const roster = await api.get(rosterPath).set(ownerHeaders).expect(200);
+    const membershipId = roster.body.members[0].id as string;
+    const endpoint = `${rosterPath}/${membershipId}`;
+    const [ownerMembership] = await connection<{ id: string }[]>`
+      SELECT id FROM shop_members WHERE shop_id = ${shopId} AND user_id = ${owner.id}
+    `;
+
+    await api.get('/api/v1/shop').set(teammateHeaders).expect(200);
+    await api.delete(endpoint).set('X-Shop-Id', shopId).expect(401);
+    await api.delete(endpoint).set({ Origin: origin, Cookie: owner.headers.Cookie, 'X-Shop-Id': shopId }).expect(403);
+    await api.delete(endpoint).set(teammateHeaders).expect(403);
+    await api.delete(`${rosterPath}/${ownerMembership!.id}`).set(ownerHeaders).expect(404);
+    await api.delete(endpoint).set(ownerHeaders).expect('Cache-Control', 'no-store').expect(204);
+    await api.delete(endpoint).set(ownerHeaders).expect(404);
+    await api.patch(endpoint).set(ownerHeaders).send({ role: 'member' }).expect(404);
+    await api.get('/api/v1/shop').set(teammateHeaders).expect(403);
+    await api.get('/api/v1/shop').set({ ...teammateHeaders, 'X-Shop-Id': otherShopId }).expect(200);
+    const remaining = (await api.get('/api/v1/session').set(teammate.headers).expect(200)).body.memberships;
+    assert.deepEqual(remaining.map((item: { shop: { id: string }; role: string }) => [item.shop.id, item.role]),
+      [[otherShopId, 'owner']]);
+    await api.post(`${inboxPath}/${firstInvite}/accept`).set(teammate.headers).expect(409);
+    assert.notEqual((await send()).body.invitation.id, firstInvite);
+    const audit = await connection<{ metadata: object }[]>`
+      SELECT metadata FROM audit_logs WHERE shop_id = ${shopId} AND resource_id = ${membershipId}
+        AND event_type = 'SHOP_MEMBER_REMOVED'
+    `;
+    assert.deepEqual([...audit], [{ metadata: { memberUserId: teammate.id, previousRole: 'admin' } }]);
+  } finally {
+    await app.close();
+    await connection.end();
+  }
+});
+
 test('shop owners can search literal name or email fragments with scoped eligibility and pagination', {
   skip: skipWithoutDisposableDatabase,
   timeout: 30000,

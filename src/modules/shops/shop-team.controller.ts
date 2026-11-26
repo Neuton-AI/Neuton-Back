@@ -28,6 +28,13 @@ export class ShopTeamController {
     return this.team.changeRole(actor, shopTeamMembershipIdSchema.parse(membershipId), role);
   }
 
+  @Delete('members/:membershipId')
+  @HttpCode(204)
+  @Header('Cache-Control', 'no-store')
+  removeMember(@CurrentActor() actor: ActorContext, @Param('membershipId') membershipId: string) {
+    return this.team.removeMember(actor, shopTeamMembershipIdSchema.parse(membershipId));
+  }
+
   @Post('accounts/search')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
