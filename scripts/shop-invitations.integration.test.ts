@@ -5,10 +5,12 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import postgres from 'postgres';
 import request from 'supertest';
+import { waitForBlockedTransactions } from './support/postgresLocks.js';
 
 const origin = 'https://app.example.test';
 process.env.APP_ORIGIN = origin;
 const outgoingPath = '/api/v1/shop/team/invitations';
+const inboxPath = '/api/v1/shop-invitations';
 
 function cookieFrom(response: request.Response, name: string) {
   const cookies = response.headers['set-cookie'] as unknown as string[];
@@ -157,6 +159,96 @@ test('owner can send and list pending invites only in the selected shop', {
     const otherList = await list(foreignOwner, otherShopId).expect(200);
     assert.deepEqual(otherList.body.invitations.map((row: { offeredRole: string }) => row.offeredRole), ['member']);
     assert.equal((await connection`SELECT id FROM shop_members WHERE user_id = ${recipient.id}`).length, 0);
+  } finally {
+    await app.close();
+    await connection.end();
+  }
+});
+
+test('invitations resolve once through the owner and zero-shop recipient routes', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 45000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Inviting Owner');
+    const recipient = await account('Zero Shop Recipient');
+    const outsider = await account('Unrelated Owner');
+    const shopId = await shop(owner, 'Invitation Race Shop');
+    const otherShopId = await shop(outsider, 'Unrelated Shop');
+    const ownerHeaders = { ...owner.headers, 'X-Shop-Id': shopId };
+    const inbox = (actor: typeof owner) => api.get(inboxPath).set(actor.headers);
+    const respond = (actor: typeof owner, id: string, response: 'accept' | 'decline') =>
+      api.post(`${inboxPath}/${id}/${response}`).set(actor.headers);
+    const cancel = (id: string, headers = ownerHeaders) => api.delete(`${outgoingPath}/${id}`).set(headers);
+    const shopAccess = () => api.get('/api/v1/shop').set({ ...recipient.headers, 'X-Shop-Id': shopId });
+    const send = async () => {
+      const response = await api.post(outgoingPath).set(ownerHeaders)
+        .send({ recipientId: recipient.id, offeredRole: 'admin' }).expect(201);
+      return response.body.invitation.id as string;
+    };
+    const memberships = () => connection<{ role: string }[]>`
+      SELECT role FROM shop_members WHERE shop_id = ${shopId} AND user_id = ${recipient.id}
+    `;
+
+    await api.get(inboxPath).expect(401);
+    const session = await api.get('/api/v1/session').set(recipient.headers).expect(200);
+    assert.deepEqual(session.body.memberships, []);
+    const initialId = await send();
+    await shopAccess().expect(403);
+    const listing = await inbox(recipient).expect('Cache-Control', 'no-store').expect(200);
+    assert.equal(listing.body.invitations.length, 1);
+    assert.deepEqual(listing.body.invitations[0], {
+      id: initialId,
+      shopId,
+      shopName: 'Invitation Race Shop',
+      offeredRole: 'admin',
+      createdAt: listing.body.invitations[0].createdAt,
+      readAt: null,
+    });
+    assert.deepEqual((await inbox(outsider).expect(200)).body.invitations, []);
+    await respond(outsider, initialId, 'accept').expect(404);
+    await respond(outsider, initialId, 'decline').expect(404);
+    await cancel(initialId, { ...outsider.headers, 'X-Shop-Id': otherShopId }).expect(404);
+    await cancel(initialId, { ...outsider.headers, 'X-Shop-Id': shopId }).expect(403);
+    await api.post(`${inboxPath}/${initialId}/accept`).set({ Origin: origin, Cookie: recipient.headers.Cookie }).expect(403);
+
+    const accepted = await respond(recipient, initialId, 'accept').send({ offeredRole: 'owner' }).expect(200);
+    assert.deepEqual(accepted.body.membership, { shopId, role: 'admin' });
+    await shopAccess().expect(200);
+    assert.deepEqual((await memberships()).map((row) => row.role), ['admin']);
+    assert.deepEqual((await inbox(recipient).expect(200)).body.invitations, []);
+    await connection`DELETE FROM shop_members WHERE shop_id = ${shopId} AND user_id = ${recipient.id}`;
+    await respond(recipient, initialId, 'accept').expect(409);
+    await shopAccess().expect(403);
+
+    for (const competitor of ['decline', 'cancel'] as const) {
+      for (const acceptFirst of [true, false]) {
+        const id = await send();
+        const accept = () => respond(recipient, id, 'accept');
+        const close = () => competitor === 'cancel' ? cancel(id) : respond(recipient, id, 'decline');
+        const first = acceptFirst ? accept : close;
+        const second = acceptFirst ? close : accept;
+        const queued = await connection.begin(async (tx) => {
+          const [blocker] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid FROM shops WHERE id = ${shopId} FOR UPDATE`;
+          assert.ok(blocker);
+          const winner = first().then((response) => response.status);
+          await waitForBlockedTransactions(connection, blocker.pid, 1);
+          const loser = second().then((response) => response.status);
+          await waitForBlockedTransactions(connection, blocker.pid, 2);
+          return { winner, loser };
+        });
+        assert.deepEqual(await Promise.all([queued.winner, queued.loser]), [acceptFirst ? 200 : 204, 409]);
+        const [stored] = await connection<{ status: string }[]>`SELECT status FROM shop_invitations WHERE id = ${id}`;
+        let expectedStatus = 'accepted';
+        if (!acceptFirst) expectedStatus = competitor === 'cancel' ? 'canceled' : 'declined';
+        assert.equal(stored?.status, expectedStatus);
+        assert.deepEqual((await memberships()).map((row) => row.role), acceptFirst ? ['admin'] : []);
+        assert.deepEqual((await inbox(recipient).expect(200)).body.invitations, []);
+        await connection`DELETE FROM shop_members WHERE shop_id = ${shopId} AND user_id = ${recipient.id}`;
+      }
+    }
   } finally {
     await app.close();
     await connection.end();

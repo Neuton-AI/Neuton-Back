@@ -7,6 +7,7 @@ export const sendShopInvitationSchema = z.object({
 }).strict();
 
 export type SendShopInvitation = z.infer<typeof sendShopInvitationSchema>;
+export const shopInvitationIdSchema = z.string().uuid();
 
 export interface OutgoingShopInvitation {
   id: string;

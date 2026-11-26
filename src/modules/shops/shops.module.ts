@@ -5,11 +5,11 @@ import { SyncModule } from '../sync/sync.module.js';
 import { ShopsController } from './shops.controller.js';
 import { ShopsService } from './shops.service.js';
 import { ShopsPersistence, SHOPS_DATABASE } from './shops.persistence.js';
-import { ShopTeamController } from './shop-team.controller.js';
+import { ShopInvitationsController, ShopTeamController } from './shop-team.controller.js';
 import { ShopTeamService } from './shop-team.service.js';
 @Module({
   imports: [IdentityModule, SyncModule],
-  controllers: [ShopsController, ShopTeamController],
+  controllers: [ShopsController, ShopTeamController, ShopInvitationsController],
   providers: [
     ShopsService,
     ShopTeamService,
