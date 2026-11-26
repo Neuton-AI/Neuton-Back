@@ -4,11 +4,14 @@ Owner routes use the cookie session and the `X-Shop-Id` header to select the sho
 
 | Method and path | Behavior |
 | --- | --- |
+| `POST /api/v1/shop/team/accounts/search` | Accepts `{ query, page }` and returns `200` with `{ accounts, page, pageCount }`. A trimmed nonblank query matches literal parts of full names and emails case-insensitively. `page` defaults to 1. Results are ordered by email with up to four accounts per page. |
 | `GET /api/v1/shop/team/invitations` | Returns `{ invitations }` containing only pending invitations for the selected shop, newest first. |
 | `POST /api/v1/shop/team/invitations` | Accepts `{ recipientId, offeredRole }` and returns `201` with `{ invitation }`. The recipient must be an existing account. The offered role is `member` or `admin`. |
 | `DELETE /api/v1/shop/team/invitations/:invitationId` | Cancels a pending invitation from the selected shop and returns `204`. |
 
 Each outgoing invitation contains `id`, `recipientId`, `offeredRole`, `fullName`, `email`, and ISO `createdAt`. `fullName` can be `null`. Sending returns `409` if the account already belongs to the selected shop or has a pending invitation there. Sending an invitation leaves shop membership unchanged.
+
+Each search account contains `id`, nullable `fullName`, `email`, and the selected shop's `eligibility` (`eligible`, `member`, or `pending`). Submit the search term in the JSON body so it stays out of URL logging. An empty result page reports `pageCount: 0`.
 
 Inbox routes use the cookie session and work for accounts with zero shops. Writes require the session's CSRF proof. Responses use `Cache-Control: no-store`.
 

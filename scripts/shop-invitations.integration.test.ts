@@ -11,6 +11,7 @@ const origin = 'https://app.example.test';
 process.env.APP_ORIGIN = origin;
 const outgoingPath = '/api/v1/shop/team/invitations';
 const inboxPath = '/api/v1/shop-invitations';
+const searchPath = '/api/v1/shop/team/accounts/search';
 
 function cookieFrom(response: request.Response, name: string) {
   const cookies = response.headers['set-cookie'] as unknown as string[];
@@ -19,10 +20,10 @@ function cookieFrom(response: request.Response, name: string) {
   return cookie.split(';')[0]!;
 }
 
-async function invitationFixture() {
+async function invitationFixture(observe?: (event: Record<string, unknown>) => void) {
   const { AppModule } = await import('../src/app.js');
   const { testApplication } = await import('./support/httpClient.js');
-  const app = await testApplication(AppModule, [], { origins: [origin] });
+  const app = await testApplication(AppModule, [], { origins: [origin], observe });
   await app.listen(0, '127.0.0.1');
   const api = request(app.getHttpServer());
   const getProof = (cookie = '') => api.post('/api/v1/auth/csrf').set({ Origin: origin, Cookie: cookie }).expect(200);
@@ -102,6 +103,68 @@ test('the invitation migration preserves memberships and enforces the new storag
       await tx`DROP SCHEMA invitation_migration_rehearsal CASCADE`;
     });
   } finally {
+    await connection.end();
+  }
+});
+
+test('shop owners can search literal name or email fragments with scoped eligibility and pagination', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 30000,
+}, async () => {
+  const events: Record<string, unknown>[] = [];
+  const { app, api, account, shop } = await invitationFixture((event) => events.push(event));
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Search Owner');
+    const admin = await account('Search Admin');
+    const outsider = await account('Other Search Owner');
+    const shopId = await shop(owner, 'Search Shop');
+    const otherShopId = await shop(outsider, 'Other Search Shop');
+    const prefix = `kin${randomUUID().slice(0, 8)}`;
+    const names = [`Dana ${prefix}`, `Dana ${prefix}`, null, `Noah ${prefix}`, `Another ${prefix}`];
+    const rows = await Promise.all(names.map(async (fullName, index) => {
+      const [row] = await connection<{ id: string; email: string }[]>`
+        INSERT INTO users (email, full_name) VALUES (${`${prefix}-${index}@example.test`}, ${fullName}) RETURNING id, email
+      `;
+      assert.ok(row);
+      return row;
+    }));
+    const [knownMember, pending] = rows;
+    assert.ok(knownMember && pending);
+    await connection`INSERT INTO shop_members (shop_id, user_id, role) VALUES
+      (${shopId}, ${knownMember.id}, 'member'), (${shopId}, ${admin.id}, 'admin')`;
+    await connection`INSERT INTO shop_invitations (shop_id, recipient_id, offered_role) VALUES
+      (${shopId}, ${pending.id}, 'member')`;
+    const search = (actor: typeof owner, query: string, page = 1, scope = shopId) =>
+      api.post(searchPath).set({ ...actor.headers, 'X-Shop-Id': scope }).send({ query, page });
+
+    await search(admin, prefix).expect(403);
+    await search(owner, prefix, 1, otherShopId).expect(403);
+    await search(owner, '   ').expect(400);
+    await search(owner, prefix, 0).expect(400);
+    const first = await search(owner, ` ${prefix.toUpperCase()} `).expect('Cache-Control', 'no-store').expect(200);
+    assert.deepEqual(first.body, {
+      accounts: rows.slice(0, 4).map((row, index) => ({
+        id: row.id, email: row.email, fullName: names[index], eligibility: ['member', 'pending', 'eligible', 'eligible'][index],
+      })),
+      page: 1,
+      pageCount: 2,
+    });
+    const next = await search(owner, prefix, 2).expect(200);
+    assert.deepEqual(next.body.accounts.map((row: { email: string }) => row.email), [rows[4]?.email]);
+    const byName = await search(owner, `DANA ${prefix.toUpperCase()}`).expect(200);
+    assert.deepEqual(byName.body.accounts.map((row: { id: string }) => row.id), [knownMember.id, pending.id]);
+    const other = await search(outsider, prefix, 1, otherShopId).expect(200);
+    assert.ok(other.body.accounts.every((row: { eligibility: string }) => row.eligibility === 'eligible'));
+    for (const special of ['%', '_', '\\']) {
+      const literal = await search(owner, `${prefix}${special}`).expect(200);
+      assert.deepEqual(literal.body.accounts, []);
+    }
+    assert.ok(events.some((event) => event.route === searchPath && event.statusCode === 200));
+    assert.ok(!JSON.stringify(events).includes(prefix));
+    assert.ok(!JSON.stringify(events).includes(prefix.toUpperCase()));
+  } finally {
+    await app.close();
     await connection.end();
   }
 });

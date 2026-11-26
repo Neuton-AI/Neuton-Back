@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { shopInvitations, shopMembers, shops, users } from '../../db/schema/index.js';
 import { recordAudit } from '../../lib/audit.js';
@@ -7,11 +7,12 @@ import { conflict, forbidden, notFound } from '../../lib/errors.js';
 import { requireActorRole } from '../identity/authorization.js';
 import type { ActorContext } from '../identity/contracts.js';
 import type { SessionActor } from '../identity/session.guard.js';
-import type { OutgoingShopInvitation, SendShopInvitation } from './shop-team.contracts.js';
+import type { OutgoingShopInvitation, SearchShopAccounts, SendShopInvitation, ShopAccountMatch } from './shop-team.contracts.js';
 import { SHOPS_DATABASE } from './shops.persistence.js';
 
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 type RecipientDecision = 'accepted' | 'declined';
+const accountSearchPageSize = 4;
 
 const invitationColumns = {
   id: shopInvitations.id,
@@ -60,6 +61,38 @@ async function resolvePending(
 @Injectable()
 export class ShopTeamService {
   constructor(@Inject(SHOPS_DATABASE) private readonly database: Database) {}
+
+  async searchAccounts(actor: ActorContext, { query, page }: SearchShopAccounts) {
+    requireActorRole(actor, ['owner']);
+    const shopId = actor.shop.id;
+    const rows = await this.database.select({
+      id: users.id,
+      fullName: users.fullName,
+      email: users.email,
+      membershipId: shopMembers.id,
+      pendingId: shopInvitations.id,
+      total: sql`count(*) over ()`.mapWith(Number),
+    }).from(users)
+      .leftJoin(shopMembers, and(eq(shopMembers.userId, users.id), eq(shopMembers.shopId, shopId)))
+      .leftJoin(shopInvitations, and(
+        eq(shopInvitations.recipientId, users.id), eq(shopInvitations.shopId, shopId), eq(shopInvitations.status, 'pending'),
+      ))
+      .where(or(
+        sql`strpos(lower(${users.fullName}), lower(${query})) > 0`,
+        sql`strpos(lower(${users.email}), lower(${query})) > 0`,
+      ))
+      .orderBy(users.email)
+      .limit(accountSearchPageSize)
+      .offset((page - 1) * accountSearchPageSize);
+
+    const accounts = rows.map(({ id, fullName, email, membershipId, pendingId }): ShopAccountMatch => {
+      let eligibility: ShopAccountMatch['eligibility'] = 'eligible';
+      if (membershipId) eligibility = 'member';
+      else if (pendingId) eligibility = 'pending';
+      return { id, fullName, email, eligibility };
+    });
+    return { accounts, page, pageCount: Math.ceil((rows[0]?.total ?? 0) / accountSearchPageSize) };
+  }
 
   async outgoing(actor: ActorContext) {
     requireActorRole(actor, ['owner']);
