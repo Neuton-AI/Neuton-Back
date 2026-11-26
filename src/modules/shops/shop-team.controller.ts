@@ -11,6 +11,12 @@ import { ShopTeamService } from './shop-team.service.js';
 export class ShopTeamController {
   constructor(@Inject(ShopTeamService) private readonly team: ShopTeamService) {}
 
+  @Get('members')
+  @Header('Cache-Control', 'no-store')
+  roster(@CurrentActor() actor: ActorContext) {
+    return this.team.roster(actor);
+  }
+
   @Post('accounts/search')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')

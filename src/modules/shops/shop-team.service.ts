@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { shopInvitations, shopMembers, shops, users } from '../../db/schema/index.js';
+import { INVITABLE_SHOP_ROLES } from '../../db/schema/shop-invitations.js';
 import { recordAudit } from '../../lib/audit.js';
 import { conflict, forbidden, notFound } from '../../lib/errors.js';
 import { requireActorRole } from '../identity/authorization.js';
@@ -61,6 +62,17 @@ async function resolvePending(
 @Injectable()
 export class ShopTeamService {
   constructor(@Inject(SHOPS_DATABASE) private readonly database: Database) {}
+
+  async roster(actor: ActorContext) {
+    requireActorRole(actor, ['owner']);
+    const members = await this.database.select({
+      id: shopMembers.id, fullName: users.fullName, email: users.email, role: shopMembers.role,
+    }).from(shopMembers)
+      .innerJoin(users, eq(users.id, shopMembers.userId))
+      .where(and(eq(shopMembers.shopId, actor.shop.id), inArray(shopMembers.role, [...INVITABLE_SHOP_ROLES])))
+      .orderBy(shopMembers.role, users.email);
+    return { members };
+  }
 
   async searchAccounts(actor: ActorContext, { query, page }: SearchShopAccounts) {
     requireActorRole(actor, ['owner']);

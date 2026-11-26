@@ -4,6 +4,7 @@ Owner routes use the cookie session and the `X-Shop-Id` header to select the sho
 
 | Method and path | Behavior |
 | --- | --- |
+| `GET /api/v1/shop/team/members` | Returns `{ members }` for the selected shop. Each Member or Admin row has a membership `id`, nullable `fullName`, `email`, and `role`. |
 | `POST /api/v1/shop/team/accounts/search` | Accepts `{ query, page }` and returns `200` with `{ accounts, page, pageCount }`. A trimmed nonblank query matches literal parts of full names and emails case-insensitively. `page` defaults to 1. Results are ordered by email with up to four accounts per page. |
 | `GET /api/v1/shop/team/invitations` | Returns `{ invitations }` containing only pending invitations for the selected shop, newest first. |
 | `POST /api/v1/shop/team/invitations` | Accepts `{ recipientId, offeredRole }` and returns `201` with `{ invitation }`. The recipient must be an existing account. The offered role is `member` or `admin`. |

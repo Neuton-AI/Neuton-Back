@@ -12,6 +12,7 @@ process.env.APP_ORIGIN = origin;
 const outgoingPath = '/api/v1/shop/team/invitations';
 const inboxPath = '/api/v1/shop-invitations';
 const searchPath = '/api/v1/shop/team/accounts/search';
+const rosterPath = '/api/v1/shop/team/members';
 
 function cookieFrom(response: request.Response, name: string) {
   const cookies = response.headers['set-cookie'] as unknown as string[];
@@ -103,6 +104,43 @@ test('the invitation migration preserves memberships and enforces the new storag
       await tx`DROP SCHEMA invitation_migration_rehearsal CASCADE`;
     });
   } finally {
+    await connection.end();
+  }
+});
+
+test('only the active shop owner can see its Admin and Member roster', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 30000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Roster Owner');
+    const admin = await account('Alex Admin');
+    const member = await account('Maya Member');
+    const otherOwner = await account('Other Shop Owner');
+    const otherMember = await account('Other Shop Member');
+    const shopId = await shop(owner, 'Roster Shop');
+    const otherShopId = await shop(otherOwner, 'Other Roster Shop');
+    await connection`INSERT INTO shop_members (shop_id, user_id, role) VALUES
+      (${shopId}, ${admin.id}, 'admin'), (${shopId}, ${member.id}, 'member'),
+      (${otherShopId}, ${otherMember.id}, 'member')`;
+    const roster = (actor: typeof owner, scope = shopId) =>
+      api.get(rosterPath).set({ ...actor.headers, 'X-Shop-Id': scope });
+    await api.get(rosterPath).set('X-Shop-Id', shopId).expect(401);
+    await roster(admin).expect(403);
+    await roster(member).expect(403);
+    await roster(owner, otherShopId).expect(403);
+    const response = await roster(owner).expect('Cache-Control', 'no-store').expect(200);
+    const memberships = await connection<{ id: string; user_id: string }[]>`
+      SELECT id, user_id FROM shop_members WHERE shop_id = ${shopId}
+    `;
+    assert.deepEqual(response.body, { members: [
+      { id: memberships.find((row) => row.user_id === admin.id)?.id, fullName: 'Alex Admin', email: admin.email, role: 'admin' },
+      { id: memberships.find((row) => row.user_id === member.id)?.id, fullName: 'Maya Member', email: member.email, role: 'member' },
+    ] });
+  } finally {
+    await app.close();
     await connection.end();
   }
 });
