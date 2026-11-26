@@ -1,8 +1,51 @@
 import { skipWithoutDisposableDatabase, testDatabaseUrl } from './support/testEnv.js';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import postgres from 'postgres';
+import request from 'supertest';
+
+const origin = 'https://app.example.test';
+process.env.APP_ORIGIN = origin;
+const outgoingPath = '/api/v1/shop/team/invitations';
+
+function cookieFrom(response: request.Response, name: string) {
+  const cookies = response.headers['set-cookie'] as unknown as string[];
+  const cookie = cookies?.find((value) => value.startsWith(`${name}=`));
+  assert.ok(cookie, `Expected ${name} cookie`);
+  return cookie.split(';')[0]!;
+}
+
+async function invitationFixture() {
+  const { AppModule } = await import('../src/app.js');
+  const { testApplication } = await import('./support/httpClient.js');
+  const app = await testApplication(AppModule, [], { origins: [origin] });
+  await app.listen(0, '127.0.0.1');
+  const api = request(app.getHttpServer());
+  const getProof = (cookie = '') => api.post('/api/v1/auth/csrf').set({ Origin: origin, Cookie: cookie }).expect(200);
+  async function account(name: string) {
+    const email = `${randomUUID()}@example.test`;
+    const context = await getProof();
+    const created = await api.post('/api/v1/auth/signup').set({
+      Origin: origin,
+      Cookie: cookieFrom(context, '__Host-neuton-context'),
+      'X-CSRF-Token': context.body.token as string,
+    }).send({ email, password: 'testpass10', fullName: name }).expect(201);
+    const Cookie = cookieFrom(created, '__Host-neuton-session');
+    const proof = await getProof(Cookie);
+    return {
+      id: created.body.user.id as string,
+      email,
+      headers: { Origin: origin, Cookie, 'X-CSRF-Token': proof.body.token as string },
+    };
+  }
+  async function shop(owner: Awaited<ReturnType<typeof account>>, name: string) {
+    const result = await api.post('/api/v1/shops').set(owner.headers).send({ name }).expect(201);
+    return result.body.shop.id as string;
+  }
+  return { app, api, account, shop };
+}
 
 test('the invitation migration preserves memberships and enforces the new storage rules', {
   skip: skipWithoutDisposableDatabase,
@@ -57,6 +100,65 @@ test('the invitation migration preserves memberships and enforces the new storag
       await tx`DROP SCHEMA invitation_migration_rehearsal CASCADE`;
     });
   } finally {
+    await connection.end();
+  }
+});
+
+test('owner can send and list pending invites only in the selected shop', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 30000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Shop Owner');
+    const admin = await account('Existing Admin');
+    const member = await account('Existing Member');
+    const recipient = await account('Invite Recipient');
+    const foreignOwner = await account('Foreign Owner');
+    const shopId = await shop(owner, 'Inviting Shop');
+    const otherShopId = await shop(foreignOwner, 'Other Inviting Shop');
+    await connection`INSERT INTO shop_members (shop_id, user_id, role) VALUES
+      (${shopId}, ${admin.id}, 'admin'), (${shopId}, ${member.id}, 'member')`;
+
+    const send = (actor: typeof owner, recipientId: string, offeredRole: string, scope = shopId) =>
+      api.post(outgoingPath).set({ ...actor.headers, 'X-Shop-Id': scope }).send({ recipientId, offeredRole });
+    const list = (actor: typeof owner, scope = shopId) =>
+      api.get(outgoingPath).set({ ...actor.headers, 'X-Shop-Id': scope });
+
+    await api.get(outgoingPath).set('X-Shop-Id', shopId).expect(401);
+    await api.post(outgoingPath).set({ Origin: origin, Cookie: owner.headers.Cookie, 'X-Shop-Id': shopId })
+      .send({ recipientId: recipient.id, offeredRole: 'admin' }).expect(403);
+    for (const nonOwner of [admin, member, foreignOwner]) {
+      await send(nonOwner, recipient.id, 'member').expect(403);
+      await list(nonOwner).expect(403);
+    }
+    await list(owner, otherShopId).expect(403);
+    await send(owner, recipient.id, 'admin', otherShopId).expect(403);
+    await send(owner, member.id, 'admin').expect(409);
+    await send(owner, recipient.id, 'owner').expect(400);
+    await send(owner, randomUUID(), 'member').expect(404);
+
+    const payload = { recipientId: recipient.id, offeredRole: 'admin' };
+    const attempts = await Promise.all([send(owner, recipient.id, 'admin'), send(owner, recipient.id, 'admin')]);
+    assert.deepEqual(attempts.map((response) => response.status).sort(), [201, 409]);
+    const created = attempts.find((response) => response.status === 201);
+    const roster = await list(owner).expect('Cache-Control', 'no-store').expect(200);
+    const invite = roster.body.invitations[0];
+    assert.equal(roster.body.invitations.length, 1);
+    assert.deepEqual(invite, {
+      id: created?.body.invitation.id,
+      ...payload,
+      fullName: 'Invite Recipient',
+      email: recipient.email,
+      createdAt: created?.body.invitation.createdAt,
+    });
+    await send(foreignOwner, recipient.id, 'member', otherShopId).expect(201);
+    const otherList = await list(foreignOwner, otherShopId).expect(200);
+    assert.deepEqual(otherList.body.invitations.map((row: { offeredRole: string }) => row.offeredRole), ['member']);
+    assert.equal((await connection`SELECT id FROM shop_members WHERE user_id = ${recipient.id}`).length, 0);
+  } finally {
+    await app.close();
     await connection.end();
   }
 });
