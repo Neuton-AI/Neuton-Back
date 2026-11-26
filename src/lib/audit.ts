@@ -4,6 +4,9 @@ import { auditLogs } from '../db/schema/index.js';
 export type AuditEvent =
   | 'SHOP_CREATED'
   | 'SHOP_UPDATED'
+  | 'SHOP_INVITATION_ACCEPTED'
+  | 'SHOP_MEMBER_ROLE_CHANGED'
+  | 'SHOP_MEMBER_REMOVED'
   | 'RECEIPT_UPLOAD'
   | 'RECEIPT_PROCESSED'
   | 'RECEIPT_UPDATED'
