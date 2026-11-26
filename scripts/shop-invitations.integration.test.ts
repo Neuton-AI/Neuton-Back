@@ -146,6 +146,63 @@ test('only the active shop owner can see its Admin and Member roster', {
   }
 });
 
+test('only the selected shop owner can change teammate roles, and existing sessions use the new permissions', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 45000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Role Shop Owner');
+    const member = await account('Role Shop Member');
+    const admin = await account('Role Shop Admin');
+    const shopId = await shop(owner, 'Role Shop');
+    const otherShopId = await shop(owner, 'Independent Role Shop');
+    const memberships = await connection<{ id: string; shop_id: string; user_id: string }[]>`
+      INSERT INTO shop_members (shop_id, user_id, role) VALUES
+        (${shopId}, ${member.id}, 'member'), (${shopId}, ${admin.id}, 'admin'),
+        (${otherShopId}, ${member.id}, 'member')
+      RETURNING id, shop_id, user_id
+    `;
+    const target = memberships.find((item) => item.shop_id === shopId && item.user_id === member.id)!;
+    const [ownerMembership] = await connection<{ id: string }[]>`
+      SELECT id FROM shop_members WHERE shop_id = ${shopId} AND user_id = ${owner.id}
+    `;
+    const endpoint = (id = target.id) => `${rosterPath}/${id}`;
+    const change = (actor: typeof owner, role: string, scope = shopId, id = target.id) =>
+      api.patch(endpoint(id)).set({ ...actor.headers, 'X-Shop-Id': scope }).send({ role });
+    const editSettings = (scope = shopId) => api.patch('/api/v1/shop')
+      .set({ ...member.headers, 'X-Shop-Id': scope }).send({ targetProfitMargin: 42 });
+
+    await api.patch(endpoint()).set('X-Shop-Id', shopId).send({ role: 'admin' }).expect(401);
+    await api.patch(endpoint()).set({ Origin: origin, Cookie: owner.headers.Cookie, 'X-Shop-Id': shopId })
+      .send({ role: 'admin' }).expect(403);
+    await change(admin, 'admin').expect(403);
+    await change(member, 'admin').expect(403);
+    await change(owner, 'owner').expect(400);
+    await change(owner, 'admin', shopId, ownerMembership!.id).expect(404);
+    await change(owner, 'admin', otherShopId).expect(404);
+    await editSettings().expect(403);
+
+    await change(owner, 'admin').expect(204);
+    await change(owner, 'admin').expect(204);
+    await editSettings().expect(200);
+    await editSettings(otherShopId).expect(403);
+    await change(owner, 'member').expect(204);
+    await editSettings().expect(403);
+    await api.get('/api/v1/orders').set({ ...member.headers, 'X-Shop-Id': shopId }).expect(200);
+    const roleEvents = await connection<{ metadata: { previousRole: string; role: string } }[]>`
+      SELECT metadata FROM audit_logs WHERE shop_id = ${shopId} AND resource_id = ${target.id}
+        AND event_type = 'SHOP_MEMBER_ROLE_CHANGED'
+    `;
+    assert.deepEqual(roleEvents.map(({ metadata }) => [metadata.previousRole, metadata.role]).sort(),
+      [['admin', 'member'], ['member', 'admin']]);
+  } finally {
+    await app.close();
+    await connection.end();
+  }
+});
+
 test('shop owners can search literal name or email fragments with scoped eligibility and pagination', {
   skip: skipWithoutDisposableDatabase,
   timeout: 30000,

@@ -8,7 +8,7 @@ import { conflict, forbidden, notFound } from '../../lib/errors.js';
 import { requireActorRole } from '../identity/authorization.js';
 import type { ActorContext } from '../identity/contracts.js';
 import type { SessionActor } from '../identity/session.guard.js';
-import type { OutgoingShopInvitation, SearchShopAccounts, SendShopInvitation, ShopAccountMatch } from './shop-team.contracts.js';
+import type { OutgoingShopInvitation, SearchShopAccounts, SendShopInvitation, ShopAccountMatch, ShopTeamRole } from './shop-team.contracts.js';
 import { SHOPS_DATABASE } from './shops.persistence.js';
 
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -37,7 +37,21 @@ async function lockOwnedShop(tx: Transaction, actor: ActorContext) {
   const [owner] = await tx.select({ id: shopMembers.id }).from(shopMembers)
     .where(and(eq(shopMembers.shopId, shop.id), eq(shopMembers.userId, actor.user.id), eq(shopMembers.role, 'owner')))
     .for('share');
-  if (!owner) throw forbidden('Only the shop owner can manage invitations');
+  if (!owner) throw forbidden('Only the shop owner can manage the team');
+}
+
+async function lockManagedMember(tx: Transaction, actor: ActorContext, membershipId: string) {
+  await lockOwnedShop(tx, actor);
+  const [member] = await tx.select({ id: shopMembers.id, userId: shopMembers.userId, role: shopMembers.role })
+    .from(shopMembers)
+    .where(and(
+      eq(shopMembers.id, membershipId),
+      eq(shopMembers.shopId, actor.shop.id),
+      inArray(shopMembers.role, [...INVITABLE_SHOP_ROLES]),
+    ))
+    .for('update');
+  if (!member) throw notFound('Team member not found');
+  return member;
 }
 
 async function resolvePending(
@@ -72,6 +86,24 @@ export class ShopTeamService {
       .where(and(eq(shopMembers.shopId, actor.shop.id), inArray(shopMembers.role, [...INVITABLE_SHOP_ROLES])))
       .orderBy(shopMembers.role, users.email);
     return { members };
+  }
+
+  async changeRole(actor: ActorContext, membershipId: string, role: ShopTeamRole) {
+    requireActorRole(actor, ['owner']);
+    await this.database.transaction(async (tx) => {
+      const member = await lockManagedMember(tx, actor, membershipId);
+      if (member.role === role) return;
+
+      await tx.update(shopMembers).set({ role }).where(eq(shopMembers.id, member.id));
+      await recordAudit({
+        shopId: actor.shop.id,
+        userId: actor.user.id,
+        eventType: 'SHOP_MEMBER_ROLE_CHANGED',
+        resourceId: member.id,
+        ipAddress: actor.ipAddress,
+        metadata: { memberUserId: member.userId, previousRole: member.role, role },
+      }, tx);
+    });
   }
 
   async searchAccounts(actor: ActorContext, { query, page }: SearchShopAccounts) {

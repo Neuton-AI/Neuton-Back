@@ -1,9 +1,12 @@
-import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, HttpCode, Inject, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import type { ActorContext } from '../identity/contracts.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentSession, SessionGuard, type SessionActor } from '../identity/session.guard.js';
-import { readShopInvitationsSchema, searchShopAccountsSchema, sendShopInvitationSchema, shopInvitationIdSchema } from './shop-team.contracts.js';
+import {
+  changeShopTeamRoleSchema, readShopInvitationsSchema, searchShopAccountsSchema, sendShopInvitationSchema,
+  shopInvitationIdSchema, shopTeamMembershipIdSchema,
+} from './shop-team.contracts.js';
 import { ShopTeamService } from './shop-team.service.js';
 
 @Controller('api/v1/shop/team')
@@ -15,6 +18,14 @@ export class ShopTeamController {
   @Header('Cache-Control', 'no-store')
   roster(@CurrentActor() actor: ActorContext) {
     return this.team.roster(actor);
+  }
+
+  @Patch('members/:membershipId')
+  @HttpCode(204)
+  @Header('Cache-Control', 'no-store')
+  changeRole(@CurrentActor() actor: ActorContext, @Param('membershipId') membershipId: string, @Body() body: unknown) {
+    const { role } = changeShopTeamRoleSchema.parse(body);
+    return this.team.changeRole(actor, shopTeamMembershipIdSchema.parse(membershipId), role);
   }
 
   @Post('accounts/search')

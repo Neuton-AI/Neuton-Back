@@ -8,6 +8,11 @@ export const sendShopInvitationSchema = z.object({
 
 export type SendShopInvitation = z.infer<typeof sendShopInvitationSchema>;
 export const shopInvitationIdSchema = z.string().uuid();
+export const shopTeamMembershipIdSchema = z.string().uuid();
+export const changeShopTeamRoleSchema = z.object({
+  role: z.enum(INVITABLE_SHOP_ROLES),
+}).strict();
+export type ShopTeamRole = z.infer<typeof changeShopTeamRoleSchema>['role'];
 export const readShopInvitationsSchema = z.object({
   invitationIds: z.array(shopInvitationIdSchema).min(1).max(100),
 }).strict();
