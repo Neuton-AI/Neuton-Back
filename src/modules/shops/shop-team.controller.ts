@@ -3,7 +3,7 @@ import type { ActorContext } from '../identity/contracts.js';
 import { CurrentActor } from '../identity/current-actor.js';
 import { ShopGuard } from '../identity/shop.guard.js';
 import { CurrentSession, SessionGuard, type SessionActor } from '../identity/session.guard.js';
-import { searchShopAccountsSchema, sendShopInvitationSchema, shopInvitationIdSchema } from './shop-team.contracts.js';
+import { readShopInvitationsSchema, searchShopAccountsSchema, sendShopInvitationSchema, shopInvitationIdSchema } from './shop-team.contracts.js';
 import { ShopTeamService } from './shop-team.service.js';
 
 @Controller('api/v1/shop/team')
@@ -53,6 +53,14 @@ export class ShopInvitationsController {
   @Header('Cache-Control', 'no-store')
   incoming(@CurrentSession() actor: SessionActor) {
     return this.team.incoming(actor.user.id);
+  }
+
+  @Post('read')
+  @HttpCode(204)
+  @Header('Cache-Control', 'no-store')
+  markRead(@CurrentSession() actor: SessionActor, @Body() body: unknown) {
+    const { invitationIds } = readShopInvitationsSchema.parse(body);
+    return this.team.markRead(actor.user.id, invitationIds);
   }
 
   @Post(':invitationId/accept')

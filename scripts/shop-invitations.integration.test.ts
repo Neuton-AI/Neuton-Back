@@ -11,6 +11,7 @@ const origin = 'https://app.example.test';
 process.env.APP_ORIGIN = origin;
 const outgoingPath = '/api/v1/shop/team/invitations';
 const inboxPath = '/api/v1/shop-invitations';
+const readPath = `${inboxPath}/read`;
 const searchPath = '/api/v1/shop/team/accounts/search';
 const rosterPath = '/api/v1/shop/team/members';
 
@@ -260,6 +261,62 @@ test('owner can send and list pending invites only in the selected shop', {
     const otherList = await list(foreignOwner, otherShopId).expect(200);
     assert.deepEqual(otherList.body.invitations.map((row: { offeredRole: string }) => row.offeredRole), ['member']);
     assert.equal((await connection`SELECT id FROM shop_members WHERE user_id = ${recipient.id}`).length, 0);
+  } finally {
+    await app.close();
+    await connection.end();
+  }
+});
+
+test('reading displayed invitations affects only the signed-in recipient and preserves the first read time', {
+  skip: skipWithoutDisposableDatabase,
+  timeout: 45000,
+}, async () => {
+  const { app, api, account, shop } = await invitationFixture();
+  const connection = postgres(testDatabaseUrl!);
+  try {
+    const owner = await account('Read State Owner');
+    const recipient = await account('Zero Shop Reader');
+    const unrelated = await account('Other Recipient');
+    const firstShopId = await shop(owner, 'First Shop');
+    const secondShopId = await shop(owner, 'Second Shop');
+    const send = async (shopId: string, recipientId: string) => {
+      const result = await api.post(outgoingPath).set({ ...owner.headers, 'X-Shop-Id': shopId })
+        .send({ recipientId, offeredRole: 'member' }).expect(201);
+      return result.body.invitation.id as string;
+    };
+    const firstId = await send(firstShopId, recipient.id);
+    const foreignId = await send(firstShopId, unrelated.id);
+    const read = (invitationIds: string[]) => api.post(readPath).set(recipient.headers).send({ invitationIds });
+    const inbox = () => api.get(inboxPath).set(recipient.headers).expect(200);
+    const [displayed] = (await inbox()).body.invitations;
+    assert.equal(displayed.id, firstId);
+    assert.equal(displayed.readAt, null);
+    const lateId = await send(secondShopId, recipient.id);
+
+    await api.post(readPath).send({ invitationIds: [firstId] }).expect(401);
+    await api.post(readPath).set({ Origin: origin, Cookie: recipient.headers.Cookie })
+      .send({ invitationIds: [firstId] }).expect(403);
+    await read([]).expect(400);
+    await read(['invalid']).expect(400);
+    await read(Array.from({ length: 101 }, () => firstId)).expect(400);
+    await read([firstId, foreignId, randomUUID()]).expect('Cache-Control', 'no-store').expect(204);
+    const afterRead = (await inbox()).body.invitations as { id: string; readAt: string | null }[];
+    const firstReadAt = afterRead.find((item) => item.id === firstId)?.readAt;
+    assert.ok(firstReadAt && Number.isFinite(Date.parse(firstReadAt)));
+    assert.equal(afterRead.find((item) => item.id === lateId)?.readAt, null);
+    assert.equal((await api.get(inboxPath).set(unrelated.headers).expect(200)).body.invitations[0].readAt, null);
+
+    await read([firstId, firstId]).expect(204);
+    const repeated = (await inbox()).body.invitations as typeof afterRead;
+    assert.equal(repeated.find((item) => item.id === firstId)?.readAt, firstReadAt);
+
+    await api.delete(`${outgoingPath}/${lateId}`).set({ ...owner.headers, 'X-Shop-Id': secondShopId }).expect(204);
+    await read([lateId]).expect(204);
+    const [closed] = await connection<{ status: string; read_at: Date | null }[]>`
+      SELECT status, read_at FROM shop_invitations WHERE id = ${lateId}
+    `;
+    assert.deepEqual(closed, { status: 'canceled', read_at: null });
+    assert.deepEqual((await api.get('/api/v1/session').set(recipient.headers).expect(200)).body.memberships, []);
   } finally {
     await app.close();
     await connection.end();

@@ -8,6 +8,9 @@ export const sendShopInvitationSchema = z.object({
 
 export type SendShopInvitation = z.infer<typeof sendShopInvitationSchema>;
 export const shopInvitationIdSchema = z.string().uuid();
+export const readShopInvitationsSchema = z.object({
+  invitationIds: z.array(shopInvitationIdSchema).min(1).max(100),
+}).strict();
 
 export const searchShopAccountsSchema = z.object({
   query: z.string().trim().min(1).max(320).refine((query) => !query.includes('\0')),

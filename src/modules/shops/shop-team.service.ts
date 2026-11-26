@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { shopInvitations, shopMembers, shops, users } from '../../db/schema/index.js';
 import { INVITABLE_SHOP_ROLES } from '../../db/schema/shop-invitations.js';
@@ -165,6 +165,16 @@ export class ShopTeamService {
       await lockOwnedShop(tx, actor);
       await resolvePending(tx, { invitationId, shopId: actor.shop.id }, 'canceled');
     });
+  }
+
+  async markRead(recipientId: string, invitationIds: string[]) {
+    await this.database.update(shopInvitations).set({ readAt: sql`now()` })
+      .where(and(
+        eq(shopInvitations.recipientId, recipientId),
+        eq(shopInvitations.status, 'pending'),
+        isNull(shopInvitations.readAt),
+        inArray(shopInvitations.id, invitationIds),
+      ));
   }
 
   async respond(actor: SessionActor, invitationId: string, decision: RecipientDecision) {

@@ -19,6 +19,7 @@ Inbox routes use the cookie session and work for accounts with zero shops. Write
 | Method and path | Behavior |
 | --- | --- |
 | `GET /api/v1/shop-invitations` | Returns `{ invitations }` with the signed-in account's pending invitations, newest first. Each entry contains `id`, `shopId`, `shopName`, `offeredRole`, ISO `createdAt`, and nullable ISO `readAt`. |
+| `POST /api/v1/shop-invitations/read` | Accepts `{ invitationIds }` with 1–100 displayed invitation IDs. Stamps currently unread pending invitations belonging to the signed-in account. Returns `204` for any valid batch, including repeated, resolved, unknown, or out-of-scope IDs. |
 | `POST /api/v1/shop-invitations/:invitationId/accept` | Grants the stored role and returns `200` with `{ membership: { shopId, role } }`. |
 | `POST /api/v1/shop-invitations/:invitationId/decline` | Declines the invitation and returns `204`. |
 
